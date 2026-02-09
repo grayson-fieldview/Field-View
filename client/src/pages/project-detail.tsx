@@ -153,6 +153,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects"], exact: true });
       toast({ title: "Uploaded", description: "Photos added to the project." });
     },
     onError: (error: Error) => {
