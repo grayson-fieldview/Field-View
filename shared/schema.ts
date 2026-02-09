@@ -9,6 +9,8 @@ import { users } from "./models/auth";
 export const projectStatusEnum = pgEnum("project_status", ["active", "completed", "on_hold", "archived"]);
 export const taskStatusEnum = pgEnum("task_status", ["todo", "in_progress", "done"]);
 export const taskPriorityEnum = pgEnum("task_priority", ["low", "medium", "high"]);
+export const checklistStatusEnum = pgEnum("checklist_status", ["not_started", "in_progress", "completed"]);
+export const reportStatusEnum = pgEnum("report_status", ["draft", "submitted", "approved"]);
 
 export const projects = pgTable("projects", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
@@ -61,10 +63,47 @@ export const tasks = pgTable("tasks", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+export const checklists = pgTable("checklists", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }).notNull(),
+  title: text("title").notNull(),
+  description: text("description"),
+  status: checklistStatusEnum("status").default("not_started").notNull(),
+  assignedToId: varchar("assigned_to_id").references(() => users.id),
+  createdById: varchar("created_by_id").references(() => users.id),
+  dueDate: timestamp("due_date"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const checklistItems = pgTable("checklist_items", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  checklistId: integer("checklist_id").references(() => checklists.id, { onDelete: "cascade" }).notNull(),
+  label: text("label").notNull(),
+  checked: boolean("checked").default(false).notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
+});
+
+export const reports = pgTable("reports", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }).notNull(),
+  title: text("title").notNull(),
+  type: text("type").default("inspection").notNull(),
+  status: reportStatusEnum("status").default("draft").notNull(),
+  content: text("content"),
+  findings: text("findings"),
+  recommendations: text("recommendations"),
+  createdById: varchar("created_by_id").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 export const projectsRelations = relations(projects, ({ one, many }) => ({
   createdBy: one(users, { fields: [projects.createdById], references: [users.id] }),
   media: many(media),
   tasks: many(tasks),
+  checklists: many(checklists),
+  reports: many(reports),
 }));
 
 export const mediaRelations = relations(media, ({ one, many }) => ({
@@ -82,6 +121,22 @@ export const tasksRelations = relations(tasks, ({ one }) => ({
   project: one(projects, { fields: [tasks.projectId], references: [projects.id] }),
   assignedTo: one(users, { fields: [tasks.assignedToId], references: [users.id] }),
   createdBy: one(users, { fields: [tasks.createdById], references: [users.id] }),
+}));
+
+export const checklistsRelations = relations(checklists, ({ one, many }) => ({
+  project: one(projects, { fields: [checklists.projectId], references: [projects.id] }),
+  assignedTo: one(users, { fields: [checklists.assignedToId], references: [users.id] }),
+  createdBy: one(users, { fields: [checklists.createdById], references: [users.id] }),
+  items: many(checklistItems),
+}));
+
+export const checklistItemsRelations = relations(checklistItems, ({ one }) => ({
+  checklist: one(checklists, { fields: [checklistItems.checklistId], references: [checklists.id] }),
+}));
+
+export const reportsRelations = relations(reports, ({ one }) => ({
+  project: one(projects, { fields: [reports.projectId], references: [projects.id] }),
+  createdBy: one(users, { fields: [reports.createdById], references: [users.id] }),
 }));
 
 export const insertProjectSchema = createInsertSchema(projects).omit({
@@ -106,6 +161,22 @@ export const insertTaskSchema = createInsertSchema(tasks).omit({
   updatedAt: true,
 });
 
+export const insertChecklistSchema = createInsertSchema(checklists).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertChecklistItemSchema = createInsertSchema(checklistItems).omit({
+  id: true,
+});
+
+export const insertReportSchema = createInsertSchema(reports).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
 export type InsertProject = z.infer<typeof insertProjectSchema>;
 export type Project = typeof projects.$inferSelect;
 export type InsertMedia = z.infer<typeof insertMediaSchema>;
@@ -114,3 +185,9 @@ export type InsertComment = z.infer<typeof insertCommentSchema>;
 export type Comment = typeof comments.$inferSelect;
 export type InsertTask = z.infer<typeof insertTaskSchema>;
 export type Task = typeof tasks.$inferSelect;
+export type InsertChecklist = z.infer<typeof insertChecklistSchema>;
+export type Checklist = typeof checklists.$inferSelect;
+export type InsertChecklistItem = z.infer<typeof insertChecklistItemSchema>;
+export type ChecklistItem = typeof checklistItems.$inferSelect;
+export type InsertReport = z.infer<typeof insertReportSchema>;
+export type Report = typeof reports.$inferSelect;

@@ -17,6 +17,8 @@ import PhotosPage from "@/pages/photos";
 import MapPage from "@/pages/map";
 import TeamPage from "@/pages/team";
 import SettingsPage from "@/pages/settings";
+import ChecklistsPage from "@/pages/checklists";
+import ReportsPage from "@/pages/reports";
 
 function AuthenticatedLayout() {
   const style = {
@@ -36,6 +38,8 @@ function AuthenticatedLayout() {
                 {(params) => <ProjectDetailPage id={params.id} />}
               </Route>
               <Route path="/photos" component={PhotosPage} />
+              <Route path="/checklists" component={ChecklistsPage} />
+              <Route path="/reports" component={ReportsPage} />
               <Route path="/map" component={MapPage} />
               <Route path="/team" component={TeamPage} />
               <Route path="/settings" component={SettingsPage} />

@@ -22,6 +22,8 @@ import {
   Eye,
   Search,
   Bell,
+  ClipboardCheck,
+  FileBarChart,
 } from "lucide-react";
 import { useLocation, Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -29,6 +31,8 @@ import { useAuth } from "@/hooks/use-auth";
 const navItems = [
   { title: "Projects", url: "/", icon: FolderKanban },
   { title: "Photos", url: "/photos", icon: Camera },
+  { title: "Checklists", url: "/checklists", icon: ClipboardCheck },
+  { title: "Reports", url: "/reports", icon: FileBarChart },
   { title: "Map", url: "/map", icon: MapPin },
   { title: "Team", url: "/team", icon: Users },
   { title: "Settings", url: "/settings", icon: Settings },
@@ -54,7 +58,7 @@ export function AppSidebar() {
             </div>
           </Link>
           <div className="flex items-center gap-1">
-            <Button size="icon" variant="ghost" className="h-8 w-8 text-sidebar-foreground/70" data-testid="button-notifications">
+            <Button size="icon" variant="ghost" data-testid="button-notifications">
               <Bell className="h-4 w-4" />
             </Button>
             <Avatar className="h-7 w-7">

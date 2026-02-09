@@ -3,6 +3,9 @@ import {
   media,
   comments,
   tasks,
+  checklists,
+  checklistItems,
+  reports,
   type Project,
   type InsertProject,
   type Media,
@@ -11,10 +14,16 @@ import {
   type InsertComment,
   type Task,
   type InsertTask,
+  type Checklist,
+  type InsertChecklist,
+  type ChecklistItem,
+  type InsertChecklistItem,
+  type Report,
+  type InsertReport,
 } from "@shared/schema";
 import { users, type User } from "@shared/models/auth";
 import { db } from "./db";
-import { eq, desc, sql } from "drizzle-orm";
+import { eq, desc, sql, asc } from "drizzle-orm";
 
 export interface ProjectWithDetails extends Project {
   photoCount: number;
@@ -43,6 +52,25 @@ export interface IStorage {
   createTask(task: InsertTask): Promise<Task>;
   updateTask(id: number, data: Partial<InsertTask>): Promise<Task | undefined>;
 
+  getChecklistsByProject(projectId: number): Promise<(Checklist & { assignedTo?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }; itemCount: number; checkedCount: number })[]>;
+  getAllChecklists(): Promise<(Checklist & { project?: { name: string }; assignedTo?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }; itemCount: number; checkedCount: number })[]>;
+  getChecklist(id: number): Promise<Checklist | undefined>;
+  createChecklist(checklist: InsertChecklist): Promise<Checklist>;
+  updateChecklist(id: number, data: Partial<InsertChecklist>): Promise<Checklist | undefined>;
+  deleteChecklist(id: number): Promise<void>;
+
+  getChecklistItems(checklistId: number): Promise<ChecklistItem[]>;
+  createChecklistItem(item: InsertChecklistItem): Promise<ChecklistItem>;
+  updateChecklistItem(id: number, data: Partial<InsertChecklistItem>): Promise<ChecklistItem | undefined>;
+  deleteChecklistItem(id: number): Promise<void>;
+
+  getReportsByProject(projectId: number): Promise<(Report & { createdBy?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } })[]>;
+  getAllReports(): Promise<(Report & { project?: { name: string }; createdBy?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } })[]>;
+  getReport(id: number): Promise<Report | undefined>;
+  createReport(report: InsertReport): Promise<Report>;
+  updateReport(id: number, data: Partial<InsertReport>): Promise<Report | undefined>;
+  deleteReport(id: number): Promise<void>;
+
   getUsers(): Promise<User[]>;
 }
 
@@ -69,7 +97,8 @@ export class DatabaseStorage implements IStorage {
       const photoCount = projectMedia.length;
       const recentPhotos = projectMedia.slice(0, 4).map(m => ({ id: m.id, url: m.url }));
 
-      const uniqueUploaderIds = [...new Set(projectMedia.map(m => m.uploadedById).filter(Boolean))] as string[];
+      const uploaderIds = new Set(projectMedia.map(m => m.uploadedById).filter(Boolean));
+      const uniqueUploaderIds = Array.from(uploaderIds) as string[];
       const recentUsers: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }[] = [];
       for (const uid of uniqueUploaderIds.slice(0, 3)) {
         const [u] = await db.select({
@@ -231,6 +260,178 @@ export class DatabaseStorage implements IStorage {
       .where(eq(tasks.id, id))
       .returning();
     return updated;
+  }
+
+  async getChecklistsByProject(projectId: number) {
+    const rows = await db
+      .select({
+        checklist: checklists,
+        assignedTo: {
+          firstName: users.firstName,
+          lastName: users.lastName,
+          profileImageUrl: users.profileImageUrl,
+        },
+      })
+      .from(checklists)
+      .leftJoin(users, eq(checklists.assignedToId, users.id))
+      .where(eq(checklists.projectId, projectId))
+      .orderBy(desc(checklists.createdAt));
+
+    const result = [];
+    for (const r of rows) {
+      const items = await db.select().from(checklistItems).where(eq(checklistItems.checklistId, r.checklist.id));
+      result.push({
+        ...r.checklist,
+        assignedTo: r.assignedTo?.firstName ? r.assignedTo : undefined,
+        itemCount: items.length,
+        checkedCount: items.filter(i => i.checked).length,
+      });
+    }
+    return result;
+  }
+
+  async getAllChecklists() {
+    const rows = await db
+      .select({
+        checklist: checklists,
+        project: { name: projects.name },
+        assignedTo: {
+          firstName: users.firstName,
+          lastName: users.lastName,
+          profileImageUrl: users.profileImageUrl,
+        },
+      })
+      .from(checklists)
+      .leftJoin(projects, eq(checklists.projectId, projects.id))
+      .leftJoin(users, eq(checklists.assignedToId, users.id))
+      .orderBy(desc(checklists.createdAt));
+
+    const result = [];
+    for (const r of rows) {
+      const items = await db.select().from(checklistItems).where(eq(checklistItems.checklistId, r.checklist.id));
+      result.push({
+        ...r.checklist,
+        project: r.project?.name ? r.project : undefined,
+        assignedTo: r.assignedTo?.firstName ? r.assignedTo : undefined,
+        itemCount: items.length,
+        checkedCount: items.filter(i => i.checked).length,
+      });
+    }
+    return result;
+  }
+
+  async getChecklist(id: number): Promise<Checklist | undefined> {
+    const [item] = await db.select().from(checklists).where(eq(checklists.id, id));
+    return item;
+  }
+
+  async createChecklist(checklist: InsertChecklist): Promise<Checklist> {
+    const [created] = await db.insert(checklists).values(checklist).returning();
+    return created;
+  }
+
+  async updateChecklist(id: number, data: Partial<InsertChecklist>): Promise<Checklist | undefined> {
+    const [updated] = await db
+      .update(checklists)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(checklists.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteChecklist(id: number): Promise<void> {
+    await db.delete(checklists).where(eq(checklists.id, id));
+  }
+
+  async getChecklistItems(checklistId: number): Promise<ChecklistItem[]> {
+    return db.select().from(checklistItems)
+      .where(eq(checklistItems.checklistId, checklistId))
+      .orderBy(asc(checklistItems.sortOrder));
+  }
+
+  async createChecklistItem(item: InsertChecklistItem): Promise<ChecklistItem> {
+    const [created] = await db.insert(checklistItems).values(item).returning();
+    return created;
+  }
+
+  async updateChecklistItem(id: number, data: Partial<InsertChecklistItem>): Promise<ChecklistItem | undefined> {
+    const [updated] = await db
+      .update(checklistItems)
+      .set(data)
+      .where(eq(checklistItems.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteChecklistItem(id: number): Promise<void> {
+    await db.delete(checklistItems).where(eq(checklistItems.id, id));
+  }
+
+  async getReportsByProject(projectId: number) {
+    const rows = await db
+      .select({
+        report: reports,
+        createdBy: {
+          firstName: users.firstName,
+          lastName: users.lastName,
+          profileImageUrl: users.profileImageUrl,
+        },
+      })
+      .from(reports)
+      .leftJoin(users, eq(reports.createdById, users.id))
+      .where(eq(reports.projectId, projectId))
+      .orderBy(desc(reports.createdAt));
+
+    return rows.map(r => ({
+      ...r.report,
+      createdBy: r.createdBy?.firstName ? r.createdBy : undefined,
+    }));
+  }
+
+  async getAllReports() {
+    const rows = await db
+      .select({
+        report: reports,
+        project: { name: projects.name },
+        createdBy: {
+          firstName: users.firstName,
+          lastName: users.lastName,
+          profileImageUrl: users.profileImageUrl,
+        },
+      })
+      .from(reports)
+      .leftJoin(projects, eq(reports.projectId, projects.id))
+      .leftJoin(users, eq(reports.createdById, users.id))
+      .orderBy(desc(reports.createdAt));
+
+    return rows.map(r => ({
+      ...r.report,
+      project: r.project?.name ? r.project : undefined,
+      createdBy: r.createdBy?.firstName ? r.createdBy : undefined,
+    }));
+  }
+
+  async getReport(id: number): Promise<Report | undefined> {
+    const [item] = await db.select().from(reports).where(eq(reports.id, id));
+    return item;
+  }
+
+  async createReport(report: InsertReport): Promise<Report> {
+    const [created] = await db.insert(reports).values(report).returning();
+    return created;
+  }
+
+  async updateReport(id: number, data: Partial<InsertReport>): Promise<Report | undefined> {
+    const [updated] = await db
+      .update(reports)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(reports.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteReport(id: number): Promise<void> {
+    await db.delete(reports).where(eq(reports.id, id));
   }
 
   async getUsers(): Promise<User[]> {
