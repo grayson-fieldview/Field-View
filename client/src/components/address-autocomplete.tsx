@@ -27,9 +27,22 @@ export function AddressAutocomplete({
 }: AddressAutocompleteProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const autocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
+  const onChangeRef = useRef(onChange);
+  const onTextChangeRef = useRef(onTextChange);
   const [scriptLoaded, setScriptLoaded] = useState(false);
   const [scriptLoading, setScriptLoading] = useState(false);
   const [scriptError, setScriptError] = useState(false);
+  const [internalValue, setInternalValue] = useState(value);
+  const isSelectingRef = useRef(false);
+
+  onChangeRef.current = onChange;
+  onTextChangeRef.current = onTextChange;
+
+  useEffect(() => {
+    if (!isSelectingRef.current) {
+      setInternalValue(value);
+    }
+  }, [value]);
 
   const { data: config, isError: configError } = useQuery<{ apiKey: string }>({
     queryKey: ["/api/config/maps"],
@@ -47,16 +60,22 @@ export function AddressAutocomplete({
     autocomplete.addListener("place_changed", () => {
       const place = autocomplete.getPlace();
       if (place.formatted_address && place.geometry?.location) {
-        onChange({
-          address: place.formatted_address,
+        isSelectingRef.current = true;
+        const address = place.formatted_address;
+        setInternalValue(address);
+        onChangeRef.current({
+          address,
           latitude: place.geometry.location.lat(),
           longitude: place.geometry.location.lng(),
         });
+        setTimeout(() => {
+          isSelectingRef.current = false;
+        }, 100);
       }
     });
 
     autocompleteRef.current = autocomplete;
-  }, [onChange]);
+  }, []);
 
   useEffect(() => {
     if (!config?.apiKey || scriptLoaded || scriptLoading) return;
@@ -107,6 +126,12 @@ export function AddressAutocomplete({
     };
   }, []);
 
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const text = e.target.value;
+    setInternalValue(text);
+    onTextChangeRef.current(text);
+  };
+
   const showFallback = configError || scriptError;
 
   return (
@@ -114,8 +139,8 @@ export function AddressAutocomplete({
       <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
       <Input
         ref={inputRef}
-        value={value}
-        onChange={(e) => onTextChange(e.target.value)}
+        value={internalValue}
+        onChange={handleInputChange}
         placeholder={showFallback ? "Enter address manually" : placeholder}
         className="pl-10"
         data-testid={testId}
