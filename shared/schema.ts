@@ -98,6 +98,25 @@ export const reports = pgTable("reports", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+export const sharedGalleries = pgTable("shared_galleries", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  token: varchar("token", { length: 32 }).notNull().unique(),
+  projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }).notNull(),
+  mediaIds: integer("media_ids").array().notNull(),
+  includeMetadata: boolean("include_metadata").default(false).notNull(),
+  includeDescriptions: boolean("include_descriptions").default(false).notNull(),
+  createdById: varchar("created_by_id").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertSharedGallerySchema = createInsertSchema(sharedGalleries).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertSharedGallery = z.infer<typeof insertSharedGallerySchema>;
+export type SharedGallery = typeof sharedGalleries.$inferSelect;
+
 export const projectsRelations = relations(projects, ({ one, many }) => ({
   createdBy: one(users, { fields: [projects.createdById], references: [users.id] }),
   media: many(media),

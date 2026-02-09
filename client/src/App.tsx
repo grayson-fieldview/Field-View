@@ -19,6 +19,7 @@ import TeamPage from "@/pages/team";
 import SettingsPage from "@/pages/settings";
 import ChecklistsPage from "@/pages/checklists";
 import ReportsPage from "@/pages/reports";
+import GalleryPage from "@/pages/gallery";
 
 function AuthenticatedLayout() {
   const style = {
@@ -80,7 +81,14 @@ function App() {
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <Toaster />
-          <AppContent />
+          <Switch>
+            <Route path="/gallery/:token">
+              {(params) => <GalleryPage token={params.token} />}
+            </Route>
+            <Route>
+              <AppContent />
+            </Route>
+          </Switch>
         </TooltipProvider>
       </QueryClientProvider>
     </ThemeProvider>

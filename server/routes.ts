@@ -1,5 +1,6 @@
 import express, { type Express } from "express";
 import { createServer, type Server } from "http";
+import crypto from "crypto";
 import { storage } from "./storage";
 import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
 import multer from "multer";
@@ -416,6 +417,61 @@ export async function registerRoutes(
       res.json(usersList);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch users" });
+    }
+  });
+
+  app.post("/api/galleries", isAuthenticated, async (req, res) => {
+    try {
+      const { projectId, mediaIds, includeMetadata, includeDescriptions } = req.body;
+      if (!projectId || !Array.isArray(mediaIds) || mediaIds.length === 0) {
+        return res.status(400).json({ message: "projectId and mediaIds are required" });
+      }
+      const token = crypto.randomBytes(12).toString("base64url");
+      const gallery = await storage.createSharedGallery({
+        token,
+        projectId,
+        mediaIds,
+        includeMetadata: includeMetadata || false,
+        includeDescriptions: includeDescriptions || false,
+        createdById: req.user!.id,
+      });
+      res.status(201).json(gallery);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create gallery" });
+    }
+  });
+
+  app.get("/api/galleries/:token", async (req, res) => {
+    try {
+      const gallery = await storage.getSharedGalleryByToken(req.params.token);
+      if (!gallery) {
+        return res.status(404).json({ message: "Gallery not found" });
+      }
+      const project = await storage.getProject(gallery.projectId);
+      const allMedia = await storage.getMediaByProject(gallery.projectId);
+      const galleryMedia = allMedia.filter(m => gallery.mediaIds.includes(m.id));
+      res.json({
+        token: gallery.token,
+        projectName: project?.name || "Project",
+        projectAddress: project?.address || "",
+        includeMetadata: gallery.includeMetadata,
+        includeDescriptions: gallery.includeDescriptions,
+        createdAt: gallery.createdAt,
+        photos: galleryMedia.map(m => ({
+          id: m.id,
+          url: m.url,
+          caption: gallery.includeDescriptions ? m.caption : null,
+          createdAt: gallery.includeMetadata ? m.createdAt : null,
+          uploadedBy: gallery.includeMetadata && m.uploadedBy ? {
+            firstName: m.uploadedBy.firstName,
+            lastName: m.uploadedBy.lastName,
+          } : null,
+          latitude: gallery.includeMetadata ? m.latitude : null,
+          longitude: gallery.includeMetadata ? m.longitude : null,
+        })),
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch gallery" });
     }
   });
 

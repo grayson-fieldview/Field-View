@@ -6,6 +6,7 @@ import {
   checklists,
   checklistItems,
   reports,
+  sharedGalleries,
   type Project,
   type InsertProject,
   type Media,
@@ -20,6 +21,8 @@ import {
   type InsertChecklistItem,
   type Report,
   type InsertReport,
+  type SharedGallery,
+  type InsertSharedGallery,
 } from "@shared/schema";
 import { users, type User } from "@shared/models/auth";
 import { db } from "./db";
@@ -72,6 +75,9 @@ export interface IStorage {
   deleteReport(id: number): Promise<void>;
 
   getUsers(): Promise<User[]>;
+
+  createSharedGallery(gallery: InsertSharedGallery): Promise<SharedGallery>;
+  getSharedGalleryByToken(token: string): Promise<SharedGallery | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -436,6 +442,16 @@ export class DatabaseStorage implements IStorage {
 
   async getUsers(): Promise<User[]> {
     return db.select().from(users).orderBy(desc(users.createdAt));
+  }
+
+  async createSharedGallery(gallery: InsertSharedGallery): Promise<SharedGallery> {
+    const [created] = await db.insert(sharedGalleries).values(gallery as any).returning();
+    return created;
+  }
+
+  async getSharedGalleryByToken(token: string): Promise<SharedGallery | undefined> {
+    const [gallery] = await db.select().from(sharedGalleries).where(eq(sharedGalleries.token, token));
+    return gallery;
   }
 }
 

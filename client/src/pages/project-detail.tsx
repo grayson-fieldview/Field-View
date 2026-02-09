@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -24,7 +24,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   AlertDialog,
-
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -32,6 +31,13 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/auth-utils";
 import { useAuth } from "@/hooks/use-auth";
@@ -62,6 +68,11 @@ import {
   Trash2,
   Send,
   X,
+  Link2,
+  Copy,
+  Check,
+  Mail,
+  Eye,
 } from "lucide-react";
 import { useLocation } from "wouter";
 import type { Project, Media, Comment, Task, Checklist, ChecklistItem, Report } from "@shared/schema";
@@ -133,6 +144,14 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const [newReportType, setNewReportType] = useState("inspection");
   const [expandedChecklist, setExpandedChecklist] = useState<number | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [showShareDialog, setShowShareDialog] = useState(false);
+  const [shareStep, setShareStep] = useState<"options" | "link">("options");
+  const [shareIncludeMetadata, setShareIncludeMetadata] = useState(false);
+  const [shareIncludeDescriptions, setShareIncludeDescriptions] = useState(false);
+  const [shareLink, setShareLink] = useState("");
+  const [linkCopied, setLinkCopied] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data, isLoading } = useQuery<ProjectDetailData>({
@@ -278,6 +297,75 @@ export default function ProjectDetailPage({ id }: { id: string }) {
       toast({ title: "Error", description: error.message, variant: "destructive" });
     },
   });
+
+  const createGallery = useMutation({
+    mutationFn: async (params: { mediaIds: number[]; includeMetadata: boolean; includeDescriptions: boolean }) => {
+      const res = await apiRequest("POST", "/api/galleries", {
+        projectId: Number(id),
+        mediaIds: params.mediaIds,
+        includeMetadata: params.includeMetadata,
+        includeDescriptions: params.includeDescriptions,
+      });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      const url = `${window.location.origin}/gallery/${data.token}`;
+      setShareLink(url);
+      setShareStep("link");
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const toggleSelection = useCallback((mediaId: number) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(mediaId)) next.delete(mediaId);
+      else next.add(mediaId);
+      return next;
+    });
+  }, []);
+
+  const toggleSelectAll = useCallback((allMedia: { id: number }[]) => {
+    if (selectedIds.size === allMedia.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(allMedia.map(m => m.id)));
+    }
+  }, [selectedIds.size]);
+
+  const exitSelectionMode = useCallback(() => {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+  }, []);
+
+  const openShareDialog = useCallback(() => {
+    setShareStep("options");
+    setShareIncludeMetadata(false);
+    setShareIncludeDescriptions(false);
+    setShareLink("");
+    setLinkCopied(false);
+    setShowShareDialog(true);
+  }, []);
+
+  const handleGetLink = useCallback(() => {
+    createGallery.mutate({
+      mediaIds: Array.from(selectedIds),
+      includeMetadata: shareIncludeMetadata,
+      includeDescriptions: shareIncludeDescriptions,
+    });
+  }, [selectedIds, shareIncludeMetadata, shareIncludeDescriptions, createGallery]);
+
+  const handleCopyLink = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(shareLink);
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+    } catch {
+      toast({ title: "Failed to copy", variant: "destructive" });
+    }
+  }, [shareLink, toast]);
 
   const getInitials = (firstName: string | null, lastName: string | null) => {
     return `${(firstName || "")[0] || ""}${(lastName || "")[0] || ""}`.toUpperCase() || "U";
@@ -452,6 +540,32 @@ export default function ProjectDetailPage({ id }: { id: string }) {
 
           {activeTab === "photos" && (
             <div className="px-4 sm:px-6 py-4 space-y-6">
+              {selectionMode && (
+                <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-md bg-primary/10 border border-primary/20">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Button variant="ghost" size="icon" onClick={exitSelectionMode} data-testid="button-exit-selection">
+                      <X className="h-4 w-4" />
+                    </Button>
+                    <span className="text-sm font-medium" data-testid="text-selected-count">
+                      {selectedIds.size} Selected
+                    </span>
+                    <Button variant="outline" size="sm" onClick={() => toggleSelectAll(projectMedia)} data-testid="button-select-all">
+                      {selectedIds.size === projectMedia.length ? "Deselect All" : "Select All"}
+                    </Button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      onClick={openShareDialog}
+                      disabled={selectedIds.size === 0}
+                      data-testid="button-share-selected"
+                    >
+                      <Share2 className="h-4 w-4 mr-2" />
+                      Share
+                    </Button>
+                  </div>
+                </div>
+              )}
+
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <Button variant="outline" size="sm" data-testid="button-filter-start-date">
@@ -468,6 +582,16 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                   </Button>
                 </div>
                 <div className="flex items-center gap-2">
+                  {!selectionMode && projectMedia.length > 0 && (
+                    <Button
+                      variant="outline"
+                      onClick={() => setSelectionMode(true)}
+                      data-testid="button-enter-selection"
+                    >
+                      <Check className="h-4 w-4 mr-2" />
+                      Select
+                    </Button>
+                  )}
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -511,42 +635,58 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                         <h3 className="text-sm font-semibold" data-testid={`text-date-group-${date}`}>{date}</h3>
                       </div>
                       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
-                        {items.map((item) => (
-                          <div
-                            key={item.id}
-                            className="cursor-pointer group"
-                            onClick={() => setSelectedMedia(item)}
-                            data-testid={`card-media-${item.id}`}
-                          >
-                            <div className="aspect-[4/3] rounded-md overflow-hidden bg-muted relative">
-                              <img
-                                src={item.url}
-                                alt={item.caption || item.originalName}
-                                className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-                              />
-                              {item.uploadedBy && (
-                                <div className="absolute bottom-2 right-2">
-                                  <Avatar className="h-7 w-7 border-2 border-white">
-                                    <AvatarImage src={item.uploadedBy.profileImageUrl || undefined} />
-                                    <AvatarFallback className="text-[9px] bg-primary text-primary-foreground">
-                                      {getInitials(item.uploadedBy.firstName, item.uploadedBy.lastName)}
-                                    </AvatarFallback>
-                                  </Avatar>
-                                </div>
-                              )}
-                            </div>
-                            <div className="mt-1.5 space-y-0.5">
-                              <p className="text-xs text-muted-foreground">
-                                {formatPhotoTime(item.createdAt)}
-                                {item.uploadedBy && (
-                                  <span>
-                                    {" "}&middot; {item.uploadedBy.firstName} {item.uploadedBy.lastName}
-                                  </span>
+                        {items.map((item) => {
+                          const isSelected = selectedIds.has(item.id);
+                          return (
+                            <div
+                              key={item.id}
+                              className="cursor-pointer group"
+                              onClick={() => {
+                                if (selectionMode) {
+                                  toggleSelection(item.id);
+                                } else {
+                                  setSelectedMedia(item);
+                                }
+                              }}
+                              data-testid={`card-media-${item.id}`}
+                            >
+                              <div className={`aspect-[4/3] rounded-md overflow-hidden bg-muted relative ${selectionMode && isSelected ? "ring-2 ring-primary ring-offset-2" : ""}`}>
+                                <img
+                                  src={item.url}
+                                  alt={item.caption || item.originalName}
+                                  className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                                />
+                                {selectionMode && (
+                                  <div className="absolute top-2 left-2">
+                                    <div className={`h-6 w-6 rounded-md border-2 flex items-center justify-center transition-colors ${isSelected ? "bg-primary border-primary" : "bg-black/30 border-white/70"}`} data-testid={`checkbox-media-${item.id}`}>
+                                      {isSelected && <Check className="h-4 w-4 text-primary-foreground" />}
+                                    </div>
+                                  </div>
                                 )}
-                              </p>
+                                {item.uploadedBy && !selectionMode && (
+                                  <div className="absolute bottom-2 right-2">
+                                    <Avatar className="h-7 w-7 border-2 border-white">
+                                      <AvatarImage src={item.uploadedBy.profileImageUrl || undefined} />
+                                      <AvatarFallback className="text-[9px] bg-primary text-primary-foreground">
+                                        {getInitials(item.uploadedBy.firstName, item.uploadedBy.lastName)}
+                                      </AvatarFallback>
+                                    </Avatar>
+                                  </div>
+                                )}
+                              </div>
+                              <div className="mt-1.5 space-y-0.5">
+                                <p className="text-xs text-muted-foreground">
+                                  {formatPhotoTime(item.createdAt)}
+                                  {item.uploadedBy && (
+                                    <span>
+                                      {" "}&middot; {item.uploadedBy.firstName} {item.uploadedBy.lastName}
+                                    </span>
+                                  )}
+                                </p>
+                              </div>
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   ))}
@@ -1096,6 +1236,91 @@ export default function ProjectDetailPage({ id }: { id: string }) {
           onNavigate={(m) => setSelectedMedia(m)}
         />
       )}
+
+      <Dialog open={showShareDialog} onOpenChange={setShowShareDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Share Gallery of Selected Photos</DialogTitle>
+            <DialogDescription>
+              {shareStep === "options"
+                ? `Share ${selectedIds.size} selected photo${selectedIds.size !== 1 ? "s" : ""} as a gallery link.`
+                : "Your gallery link is ready to share."}
+            </DialogDescription>
+          </DialogHeader>
+
+          {shareStep === "options" ? (
+            <div className="space-y-4">
+              <label className="flex items-center gap-3 cursor-pointer" data-testid="toggle-include-metadata">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={shareIncludeMetadata}
+                  onClick={() => setShareIncludeMetadata(!shareIncludeMetadata)}
+                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${shareIncludeMetadata ? "bg-primary" : "bg-muted"}`}
+                >
+                  <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-background shadow-lg transition-transform ${shareIncludeMetadata ? "translate-x-4" : "translate-x-0"}`} />
+                </button>
+                <span className="text-sm">Include who, when, and where the photo was taken</span>
+              </label>
+              <label className="flex items-center gap-3 cursor-pointer" data-testid="toggle-include-descriptions">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={shareIncludeDescriptions}
+                  onClick={() => setShareIncludeDescriptions(!shareIncludeDescriptions)}
+                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${shareIncludeDescriptions ? "bg-primary" : "bg-muted"}`}
+                >
+                  <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-background shadow-lg transition-transform ${shareIncludeDescriptions ? "translate-x-4" : "translate-x-0"}`} />
+                </button>
+                <span className="text-sm">Include photo descriptions</span>
+              </label>
+              <div className="flex justify-end pt-2">
+                <Button
+                  onClick={handleGetLink}
+                  disabled={createGallery.isPending}
+                  data-testid="button-get-link"
+                >
+                  <Link2 className="h-4 w-4 mr-2" />
+                  {createGallery.isPending ? "Creating..." : "Get Link"}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 p-2 rounded-md border bg-muted/50">
+                <Link2 className="h-4 w-4 text-muted-foreground shrink-0" />
+                <span className="text-sm truncate flex-1" data-testid="text-share-link">{shareLink}</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCopyLink}
+                  data-testid="button-copy-link"
+                >
+                  {linkCopied ? <Check className="h-4 w-4 mr-1" /> : <Copy className="h-4 w-4 mr-1" />}
+                  {linkCopied ? "Copied" : "Copy Link"}
+                </Button>
+              </div>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => window.open(`mailto:?subject=Photo Gallery - ${project.name}&body=View the photo gallery: ${encodeURIComponent(shareLink)}`, "_blank")}
+                  data-testid="button-share-email"
+                >
+                  <Mail className="h-4 w-4 mr-2" />
+                  Email
+                </Button>
+                <Button
+                  onClick={() => window.open(shareLink, "_blank")}
+                  data-testid="button-view-gallery"
+                >
+                  <Eye className="h-4 w-4 mr-2" />
+                  View Gallery
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <AlertDialogContent>
