@@ -264,9 +264,10 @@ export default function ProjectDetailPage({ id }: { id: string }) {
       await apiRequest("DELETE", `/api/projects/${id}`);
     },
     onSuccess: () => {
+      setShowDeleteDialog(false);
       queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
       toast({ title: "Project deleted", description: "The project has been removed." });
-      navigate("/");
+      setTimeout(() => navigate("/"), 100);
     },
     onError: (error: Error) => {
       if (isUnauthorizedError(error)) {
