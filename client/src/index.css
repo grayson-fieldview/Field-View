@@ -2,6 +2,10 @@
 @tailwind components;
 @tailwind utilities;
 
+.pac-container {
+  z-index: 10000 !important;
+}
+
 /* LIGHT MODE */
 :root {
   --button-outline: rgba(0,0,0, .10);
