@@ -1,18 +1,116 @@
-import { sql } from "drizzle-orm";
-import { pgTable, text, varchar } from "drizzle-orm/pg-core";
+import { sql, relations } from "drizzle-orm";
+import { pgTable, text, varchar, integer, timestamp, boolean, real, pgEnum } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-export const users = pgTable("users", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  username: text("username").notNull().unique(),
-  password: text("password").notNull(),
+export * from "./models/auth";
+import { users } from "./models/auth";
+
+export const projectStatusEnum = pgEnum("project_status", ["active", "completed", "on_hold", "archived"]);
+export const taskStatusEnum = pgEnum("task_status", ["todo", "in_progress", "done"]);
+export const taskPriorityEnum = pgEnum("task_priority", ["low", "medium", "high"]);
+
+export const projects = pgTable("projects", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  name: text("name").notNull(),
+  description: text("description"),
+  status: projectStatusEnum("status").default("active").notNull(),
+  address: text("address"),
+  latitude: real("latitude"),
+  longitude: real("longitude"),
+  color: text("color").default("#3B82F6"),
+  createdById: varchar("created_by_id").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const insertUserSchema = createInsertSchema(users).pick({
-  username: true,
-  password: true,
+export const media = pgTable("media", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }).notNull(),
+  uploadedById: varchar("uploaded_by_id").references(() => users.id),
+  filename: text("filename").notNull(),
+  originalName: text("original_name").notNull(),
+  mimeType: text("mime_type").notNull(),
+  url: text("url").notNull(),
+  caption: text("caption"),
+  latitude: real("latitude"),
+  longitude: real("longitude"),
+  tags: text("tags").array().default(sql`'{}'::text[]`),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
-export type InsertUser = z.infer<typeof insertUserSchema>;
-export type User = typeof users.$inferSelect;
+export const comments = pgTable("comments", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  mediaId: integer("media_id").references(() => media.id, { onDelete: "cascade" }).notNull(),
+  userId: varchar("user_id").references(() => users.id),
+  content: text("content").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const tasks = pgTable("tasks", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }).notNull(),
+  title: text("title").notNull(),
+  description: text("description"),
+  status: taskStatusEnum("status").default("todo").notNull(),
+  priority: taskPriorityEnum("priority").default("medium").notNull(),
+  assignedToId: varchar("assigned_to_id").references(() => users.id),
+  createdById: varchar("created_by_id").references(() => users.id),
+  dueDate: timestamp("due_date"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const projectsRelations = relations(projects, ({ one, many }) => ({
+  createdBy: one(users, { fields: [projects.createdById], references: [users.id] }),
+  media: many(media),
+  tasks: many(tasks),
+}));
+
+export const mediaRelations = relations(media, ({ one, many }) => ({
+  project: one(projects, { fields: [media.projectId], references: [projects.id] }),
+  uploadedBy: one(users, { fields: [media.uploadedById], references: [users.id] }),
+  comments: many(comments),
+}));
+
+export const commentsRelations = relations(comments, ({ one }) => ({
+  media: one(media, { fields: [comments.mediaId], references: [media.id] }),
+  user: one(users, { fields: [comments.userId], references: [users.id] }),
+}));
+
+export const tasksRelations = relations(tasks, ({ one }) => ({
+  project: one(projects, { fields: [tasks.projectId], references: [projects.id] }),
+  assignedTo: one(users, { fields: [tasks.assignedToId], references: [users.id] }),
+  createdBy: one(users, { fields: [tasks.createdById], references: [users.id] }),
+}));
+
+export const insertProjectSchema = createInsertSchema(projects).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertMediaSchema = createInsertSchema(media).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertCommentSchema = createInsertSchema(comments).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertTaskSchema = createInsertSchema(tasks).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type InsertProject = z.infer<typeof insertProjectSchema>;
+export type Project = typeof projects.$inferSelect;
+export type InsertMedia = z.infer<typeof insertMediaSchema>;
+export type Media = typeof media.$inferSelect;
+export type InsertComment = z.infer<typeof insertCommentSchema>;
+export type Comment = typeof comments.$inferSelect;
+export type InsertTask = z.infer<typeof insertTaskSchema>;
+export type Task = typeof tasks.$inferSelect;
