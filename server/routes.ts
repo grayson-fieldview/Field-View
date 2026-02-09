@@ -44,7 +44,7 @@ export async function registerRoutes(
 
   app.get("/api/projects", isAuthenticated, async (_req, res) => {
     try {
-      const projects = await storage.getProjects();
+      const projects = await storage.getProjectsWithDetails();
       res.json(projects);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch projects" });

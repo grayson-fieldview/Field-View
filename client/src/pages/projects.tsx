@@ -1,12 +1,11 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   Dialog,
   DialogContent,
@@ -14,13 +13,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
@@ -38,41 +30,32 @@ import {
   Plus,
   Search,
   FolderKanban,
-  MapPin,
-  Calendar,
-  Camera,
-  ClipboardList,
+  Image as ImageIcon,
 } from "lucide-react";
 import type { Project } from "@shared/schema";
 import { insertProjectSchema } from "@shared/schema";
 import { z } from "zod";
 
+interface ProjectWithDetails extends Project {
+  photoCount: number;
+  recentPhotos: { id: number; url: string }[];
+  recentUsers: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }[];
+}
+
 const createProjectSchema = insertProjectSchema.extend({
   name: z.string().min(1, "Project name is required"),
 });
 
-const statusColors: Record<string, string> = {
-  active: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
-  completed: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
-  on_hold: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
-  archived: "bg-gray-100 text-gray-600 dark:bg-gray-800/30 dark:text-gray-400",
-};
-
-const statusLabels: Record<string, string> = {
-  active: "Active",
-  completed: "Completed",
-  on_hold: "On Hold",
-  archived: "Archived",
-};
+type FilterTab = "all" | "active" | "completed" | "archived";
 
 export default function ProjectsPage() {
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [activeTab, setActiveTab] = useState<FilterTab>("all");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [, navigate] = useLocation();
   const { toast } = useToast();
 
-  const { data: projects, isLoading } = useQuery<Project[]>({
+  const { data: projects, isLoading } = useQuery<ProjectWithDetails[]>({
     queryKey: ["/api/projects"],
   });
 
@@ -114,28 +97,35 @@ export default function ProjectsPage() {
     const matchesSearch = p.name.toLowerCase().includes(search.toLowerCase()) ||
       (p.description || "").toLowerCase().includes(search.toLowerCase()) ||
       (p.address || "").toLowerCase().includes(search.toLowerCase());
-    const matchesStatus = statusFilter === "all" || p.status === statusFilter;
-    return matchesSearch && matchesStatus;
+    const matchesTab = activeTab === "all" || p.status === activeTab;
+    return matchesSearch && matchesTab;
   });
 
-  const stats = {
-    total: projects?.length || 0,
-    active: projects?.filter((p) => p.status === "active").length || 0,
-    completed: projects?.filter((p) => p.status === "completed").length || 0,
+  const getInitials = (firstName: string | null, lastName: string | null) => {
+    return `${(firstName || "")[0] || ""}${(lastName || "")[0] || ""}`.toUpperCase() || "U";
   };
 
+  const formatDate = (date: string | Date) => {
+    const d = new Date(date);
+    return `Last updated ${d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}, ${d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`;
+  };
+
+  const tabs: { key: FilterTab; label: string }[] = [
+    { key: "all", label: "All" },
+    { key: "active", label: "Active" },
+    { key: "completed", label: "Completed" },
+    { key: "archived", label: "Archived" },
+  ];
+
   return (
-    <div className="p-4 sm:p-6 space-y-6 max-w-7xl mx-auto">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight" data-testid="text-projects-title">Projects</h1>
-          <p className="text-sm text-muted-foreground mt-1">Manage your field projects and job sites</p>
-        </div>
+    <div className="p-4 sm:p-6 space-y-5 max-w-7xl mx-auto">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <h1 className="text-2xl font-bold tracking-tight" data-testid="text-projects-title">Projects</h1>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
-            <Button data-testid="button-new-project">
+            <Button className="bg-green-600 hover:bg-green-700 text-white border-green-700" data-testid="button-new-project">
               <Plus className="h-4 w-4 mr-2" />
-              New Project
+              Create
             </Button>
           </DialogTrigger>
           <DialogContent className="sm:max-w-lg">
@@ -183,7 +173,7 @@ export default function ProjectsPage() {
                       <FormLabel>Address</FormLabel>
                       <FormControl>
                         <Input
-                          placeholder="123 Main St, City, State"
+                          placeholder="123 Main St, City, State ZIP"
                           {...field}
                           value={field.value || ""}
                           data-testid="input-project-address"
@@ -268,139 +258,145 @@ export default function ProjectsPage() {
         </Dialog>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <Card className="p-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-md bg-primary/10 text-primary">
-              <FolderKanban className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="text-2xl font-bold" data-testid="text-stat-total">{stats.total}</p>
-              <p className="text-xs text-muted-foreground">Total Projects</p>
-            </div>
-          </div>
-        </Card>
-        <Card className="p-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-md bg-green-500/10 text-green-600 dark:text-green-400">
-              <Camera className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="text-2xl font-bold" data-testid="text-stat-active">{stats.active}</p>
-              <p className="text-xs text-muted-foreground">Active Projects</p>
-            </div>
-          </div>
-        </Card>
-        <Card className="p-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-md bg-blue-500/10 text-blue-600 dark:text-blue-400">
-              <ClipboardList className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="text-2xl font-bold" data-testid="text-stat-completed">{stats.completed}</p>
-              <p className="text-xs text-muted-foreground">Completed</p>
-            </div>
-          </div>
-        </Card>
-      </div>
-
       <div className="flex flex-wrap items-center gap-3">
         <div className="relative flex-1 min-w-[200px] max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             type="search"
-            placeholder="Search projects..."
+            placeholder="Find a project..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="pl-10"
             data-testid="input-search-projects"
           />
         </div>
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-[140px]" data-testid="select-status-filter">
-            <SelectValue placeholder="All Status" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Status</SelectItem>
-            <SelectItem value="active">Active</SelectItem>
-            <SelectItem value="completed">Completed</SelectItem>
-            <SelectItem value="on_hold">On Hold</SelectItem>
-            <SelectItem value="archived">Archived</SelectItem>
-          </SelectContent>
-        </Select>
+      </div>
+
+      <div className="flex items-center gap-1">
+        {tabs.map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+              activeTab === tab.key
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover-elevate"
+            }`}
+            data-testid={`tab-filter-${tab.key}`}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
       {isLoading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="space-y-3">
           {[1, 2, 3].map((i) => (
-            <Card key={i} className="p-5">
-              <div className="space-y-3">
-                <Skeleton className="h-5 w-3/4" />
-                <Skeleton className="h-4 w-full" />
-                <Skeleton className="h-4 w-1/2" />
-                <div className="flex gap-2 pt-2">
-                  <Skeleton className="h-6 w-16" />
-                  <Skeleton className="h-6 w-20" />
-                </div>
+            <div key={i} className="flex items-center gap-4 p-4 border rounded-md">
+              <Skeleton className="h-16 w-16 rounded-md shrink-0" />
+              <div className="flex-1 space-y-2">
+                <Skeleton className="h-5 w-48" />
+                <Skeleton className="h-4 w-72" />
               </div>
-            </Card>
+              <div className="hidden md:flex gap-2">
+                <Skeleton className="h-16 w-20 rounded-md" />
+                <Skeleton className="h-16 w-20 rounded-md" />
+                <Skeleton className="h-16 w-20 rounded-md" />
+              </div>
+            </div>
           ))}
         </div>
       ) : filtered.length === 0 ? (
-        <Card className="p-12">
+        <div className="border rounded-md p-12">
           <div className="text-center space-y-3">
             <div className="flex h-12 w-12 items-center justify-center rounded-md bg-muted mx-auto">
               <FolderKanban className="h-6 w-6 text-muted-foreground" />
             </div>
             <h3 className="text-lg font-semibold" data-testid="text-no-projects">No projects found</h3>
             <p className="text-sm text-muted-foreground max-w-sm mx-auto">
-              {search || statusFilter !== "all"
+              {search || activeTab !== "all"
                 ? "Try adjusting your search or filter criteria."
                 : "Create your first project to start documenting your field work."}
             </p>
           </div>
-        </Card>
+        </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="space-y-1">
           {filtered.map((project) => (
-            <Card
+            <div
               key={project.id}
-              className="p-5 cursor-pointer hover-elevate transition-all duration-200"
+              className="flex items-center gap-4 p-3 sm:p-4 border rounded-md cursor-pointer hover-elevate transition-all bg-card"
               onClick={() => navigate(`/projects/${project.id}`)}
               data-testid={`card-project-${project.id}`}
             >
-              <div className="space-y-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <div
-                      className="h-3 w-3 rounded-full shrink-0"
-                      style={{ backgroundColor: project.color || "#3B82F6" }}
-                    />
-                    <h3 className="font-semibold truncate">{project.name}</h3>
-                  </div>
-                  <Badge variant="secondary" className={`shrink-0 text-xs no-default-hover-elevate no-default-active-elevate ${statusColors[project.status]}`}>
-                    {statusLabels[project.status]}
-                  </Badge>
+              <div className="h-14 w-14 sm:h-16 sm:w-16 rounded-md overflow-hidden shrink-0 bg-muted flex items-center justify-center">
+                {project.recentPhotos.length > 0 ? (
+                  <img
+                    src={project.recentPhotos[0].url}
+                    alt={project.name}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <ImageIcon className="h-6 w-6 text-muted-foreground" />
+                )}
+              </div>
+
+              <div className="flex-1 min-w-0 space-y-0.5">
+                <h3 className="font-semibold text-sm sm:text-base truncate" data-testid={`text-project-name-${project.id}`}>
+                  {project.name}
+                </h3>
+                <p className="text-xs sm:text-sm text-muted-foreground truncate">
+                  {project.address || "No address"}
+                </p>
+                <p className="text-xs text-muted-foreground/70">
+                  {formatDate(project.updatedAt)}
+                </p>
+              </div>
+
+              <div className="hidden sm:flex items-center gap-6 shrink-0">
+                <div className="text-center min-w-[50px]">
+                  <p className="text-xs text-muted-foreground">Photos</p>
+                  <p className="text-lg font-bold" data-testid={`text-photo-count-${project.id}`}>
+                    {project.photoCount}
+                  </p>
                 </div>
 
-                {project.description && (
-                  <p className="text-sm text-muted-foreground line-clamp-2">{project.description}</p>
-                )}
-
-                <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground pt-1">
-                  {project.address && (
-                    <span className="flex items-center gap-1">
-                      <MapPin className="h-3 w-3" />
-                      <span className="truncate max-w-[150px]">{project.address}</span>
-                    </span>
-                  )}
-                  <span className="flex items-center gap-1">
-                    <Calendar className="h-3 w-3" />
-                    {new Date(project.createdAt).toLocaleDateString()}
-                  </span>
+                <div className="text-center min-w-[70px]">
+                  <p className="text-xs text-muted-foreground mb-1">Recent Users</p>
+                  <div className="flex items-center justify-center gap-0.5">
+                    {project.recentUsers.length > 0 ? (
+                      project.recentUsers.map((u, i) => (
+                        <Avatar key={i} className="h-6 w-6 border-2 border-card">
+                          <AvatarImage src={u.profileImageUrl || undefined} />
+                          <AvatarFallback className="text-[9px] bg-primary/10 text-primary">
+                            {getInitials(u.firstName, u.lastName)}
+                          </AvatarFallback>
+                        </Avatar>
+                      ))
+                    ) : (
+                      <span className="text-xs text-muted-foreground/50">--</span>
+                    )}
+                  </div>
                 </div>
               </div>
-            </Card>
+
+              <div className="hidden lg:flex items-center gap-1.5 shrink-0">
+                {project.recentPhotos.slice(0, 4).map((photo) => (
+                  <div key={photo.id} className="h-16 w-20 rounded-md overflow-hidden bg-muted">
+                    <img
+                      src={photo.url}
+                      alt=""
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                ))}
+                {project.recentPhotos.length === 0 && (
+                  <div className="h-16 w-20 rounded-md bg-muted flex items-center justify-center">
+                    <ImageIcon className="h-4 w-4 text-muted-foreground/40" />
+                  </div>
+                )}
+              </div>
+            </div>
           ))}
         </div>
       )}

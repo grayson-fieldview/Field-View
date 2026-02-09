@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   Dialog,
   DialogContent,
@@ -38,8 +38,16 @@ import {
   CheckCircle2,
   Clock,
   AlertCircle,
-  X,
   Image as ImageIcon,
+  FileText,
+  ChevronLeft,
+  Star,
+  Share2,
+  MoreHorizontal,
+  PlusCircle,
+  Tags,
+  Users,
+  Info,
 } from "lucide-react";
 import { useLocation } from "wouter";
 import type { Project, Media, Comment, Task } from "@shared/schema";
@@ -62,14 +70,16 @@ const taskStatusIcons: Record<string, typeof CheckCircle2> = {
   done: CheckCircle2,
 };
 
+type DetailTab = "photos" | "tasks" | "files";
+
 export default function ProjectDetailPage({ id }: { id: string }) {
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const { user } = useAuth();
+  const [activeTab, setActiveTab] = useState<DetailTab>("photos");
   const [selectedMedia, setSelectedMedia] = useState<(Media & { comments?: (Comment & { user?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } })[] }) | null>(null);
   const [newComment, setNewComment] = useState("");
-  const [uploadTags, setUploadTags] = useState("");
-  const [uploadCaption, setUploadCaption] = useState("");
+  const [projectComment, setProjectComment] = useState("");
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [newTaskPriority, setNewTaskPriority] = useState<string>("medium");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -87,8 +97,6 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     mutationFn: async (files: FileList) => {
       const formData = new FormData();
       Array.from(files).forEach((f) => formData.append("files", f));
-      if (uploadCaption) formData.append("caption", uploadCaption);
-      if (uploadTags) formData.append("tags", uploadTags);
       const res = await fetch(`/api/projects/${id}/media`, {
         method: "POST",
         body: formData,
@@ -99,8 +107,6 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
-      setUploadCaption("");
-      setUploadTags("");
       toast({ title: "Uploaded", description: "Photos added to the project." });
     },
     onError: (error: Error) => {
@@ -167,14 +173,44 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     },
   });
 
+  const getInitials = (firstName: string | null, lastName: string | null) => {
+    return `${(firstName || "")[0] || ""}${(lastName || "")[0] || ""}`.toUpperCase() || "U";
+  };
+
+  const groupMediaByDate = (mediaItems: ProjectDetailData["media"]) => {
+    const groups: Record<string, ProjectDetailData["media"]> = {};
+    for (const item of mediaItems) {
+      const date = new Date(item.createdAt);
+      const key = date.toLocaleDateString("en-US", {
+        weekday: "long",
+        month: "long",
+        day: "numeric",
+        year: "numeric",
+      });
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(item);
+    }
+    return Object.entries(groups);
+  };
+
+  const formatPhotoTime = (date: string | Date) => {
+    return new Date(date).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  };
+
   if (isLoading) {
     return (
-      <div className="p-4 sm:p-6 space-y-6 max-w-6xl mx-auto">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-4 w-96" />
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {[1, 2, 3, 4].map((i) => (
-            <Skeleton key={i} className="h-48 rounded-md" />
+      <div className="p-4 sm:p-6 space-y-6 max-w-full">
+        <Skeleton className="h-6 w-32" />
+        <div className="flex gap-4">
+          <Skeleton className="h-20 w-20 rounded-md" />
+          <div className="space-y-2">
+            <Skeleton className="h-7 w-48" />
+            <Skeleton className="h-4 w-64" />
+          </div>
+        </div>
+        <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <Skeleton key={i} className="aspect-square rounded-md" />
           ))}
         </div>
       </div>
@@ -184,10 +220,14 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   if (!data) {
     return (
       <div className="p-6">
-        <Button variant="ghost" onClick={() => navigate("/")} data-testid="button-back">
-          <ArrowLeft className="h-4 w-4 mr-2" />
-          Back to Projects
-        </Button>
+        <button
+          onClick={() => navigate("/")}
+          className="flex items-center gap-1 text-sm text-muted-foreground hover-elevate px-2 py-1 rounded-md"
+          data-testid="button-back"
+        >
+          <ChevronLeft className="h-4 w-4" />
+          Projects
+        </button>
         <div className="text-center mt-12">
           <h2 className="text-xl font-semibold">Project not found</h2>
         </div>
@@ -196,222 +236,426 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   }
 
   const { project, media: projectMedia, tasks: projectTasks } = data;
+  const groupedMedia = groupMediaByDate(projectMedia);
+
+  const uniqueUsers = new Map<string, { firstName: string | null; lastName: string | null; profileImageUrl: string | null }>();
+  projectMedia.forEach((m) => {
+    if (m.uploadedBy && m.uploadedById) {
+      uniqueUsers.set(m.uploadedById, m.uploadedBy);
+    }
+  });
+  const projectUsers = Array.from(uniqueUsers.values());
+
+  const tabs: { key: DetailTab; label: string; count: number }[] = [
+    { key: "photos", label: "Photos", count: projectMedia.length },
+    { key: "tasks", label: "Tasks", count: projectTasks.length },
+    { key: "files", label: "Files", count: 0 },
+  ];
 
   return (
-    <div className="p-4 sm:p-6 space-y-6 max-w-6xl mx-auto">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="flex items-start gap-3">
-          <Button variant="ghost" size="icon" onClick={() => navigate("/")} data-testid="button-back">
-            <ArrowLeft className="h-4 w-4" />
+    <div className="h-full flex flex-col">
+      <div className="flex items-center justify-between gap-4 px-4 sm:px-6 py-3 border-b shrink-0">
+        <button
+          onClick={() => navigate("/")}
+          className="flex items-center gap-1 text-sm text-muted-foreground hover-elevate px-2 py-1 rounded-md"
+          data-testid="button-back"
+        >
+          <ChevronLeft className="h-4 w-4" />
+          Projects
+        </button>
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="icon" data-testid="button-star">
+            <Star className="h-4 w-4" />
           </Button>
-          <div>
-            <div className="flex items-center gap-2">
-              <div className="h-3 w-3 rounded-full" style={{ backgroundColor: project.color || "#3B82F6" }} />
-              <h1 className="text-2xl font-bold tracking-tight" data-testid="text-project-name">{project.name}</h1>
+          <Button variant="ghost" size="sm" data-testid="button-share">
+            <Share2 className="h-4 w-4 mr-1.5" />
+            Share
+          </Button>
+          <Button variant="ghost" size="icon" data-testid="button-more">
+            <MoreHorizontal className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-auto">
+        <div className="flex flex-col lg:flex-row">
+          <div className="flex-1 min-w-0">
+            <div className="px-4 sm:px-6 py-5">
+              <div className="flex items-start gap-4">
+                <div className="h-16 w-16 sm:h-20 sm:w-20 rounded-md overflow-hidden shrink-0 bg-muted flex items-center justify-center">
+                  {projectMedia.length > 0 ? (
+                    <img
+                      src={projectMedia[0].url}
+                      alt={project.name}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <ImageIcon className="h-8 w-8 text-muted-foreground" />
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <h1 className="text-xl sm:text-2xl font-bold tracking-tight" data-testid="text-project-name">
+                    {project.name}
+                  </h1>
+                  <p className="text-sm text-muted-foreground mt-0.5" data-testid="text-project-address">
+                    {project.address || "No address set"}
+                  </p>
+                  <button className="flex items-center gap-1 text-sm text-primary mt-1" data-testid="button-add-labels">
+                    <Tags className="h-3.5 w-3.5" />
+                    Add Labels
+                  </button>
+                </div>
+              </div>
             </div>
-            {project.description && (
-              <p className="text-sm text-muted-foreground mt-1 max-w-2xl">{project.description}</p>
+
+            <div className="border-b px-4 sm:px-6">
+              <div className="flex items-center gap-0">
+                {tabs.map((tab) => (
+                  <button
+                    key={tab.key}
+                    onClick={() => setActiveTab(tab.key)}
+                    className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+                      activeTab === tab.key
+                        ? "border-primary text-foreground"
+                        : "border-transparent text-muted-foreground"
+                    }`}
+                    data-testid={`tab-${tab.key}`}
+                  >
+                    {tab.label} ({tab.count})
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {activeTab === "photos" && (
+              <div className="px-4 sm:px-6 py-4 space-y-6">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button variant="outline" size="sm" data-testid="button-filter-start-date">
+                      Start Date
+                    </Button>
+                    <Button variant="outline" size="sm" data-testid="button-filter-end-date">
+                      End Date
+                    </Button>
+                    <Button variant="outline" size="sm" data-testid="button-filter-users">
+                      Users
+                    </Button>
+                    <Button variant="outline" size="sm" data-testid="button-filter-groups">
+                      Groups
+                    </Button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      multiple
+                      accept="image/*,video/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        if (e.target.files?.length) uploadMedia.mutate(e.target.files);
+                      }}
+                      data-testid="input-file-upload"
+                    />
+                    <Button
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploadMedia.isPending}
+                      data-testid="button-upload-photos"
+                    >
+                      <Upload className="h-4 w-4 mr-2" />
+                      {uploadMedia.isPending ? "Uploading..." : "Upload Photos"}
+                    </Button>
+                  </div>
+                </div>
+
+                {projectMedia.length === 0 ? (
+                  <div className="border rounded-md p-12">
+                    <div className="text-center space-y-3">
+                      <div className="flex h-12 w-12 items-center justify-center rounded-md bg-muted mx-auto">
+                        <ImageIcon className="h-6 w-6 text-muted-foreground" />
+                      </div>
+                      <h3 className="text-lg font-semibold">No photos yet</h3>
+                      <p className="text-sm text-muted-foreground max-w-sm mx-auto">
+                        Upload your first photos to start documenting this project.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-6">
+                    {groupedMedia.map(([date, items]) => (
+                      <div key={date}>
+                        <div className="flex items-center gap-2 mb-3">
+                          <input type="checkbox" className="h-4 w-4 rounded border-muted-foreground/30" />
+                          <h3 className="text-sm font-semibold" data-testid={`text-date-group-${date}`}>{date}</h3>
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+                          {items.map((item) => (
+                            <div
+                              key={item.id}
+                              className="cursor-pointer group"
+                              onClick={() => setSelectedMedia(item)}
+                              data-testid={`card-media-${item.id}`}
+                            >
+                              <div className="aspect-[4/3] rounded-md overflow-hidden bg-muted relative">
+                                <img
+                                  src={item.url}
+                                  alt={item.caption || item.originalName}
+                                  className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                                />
+                                {item.uploadedBy && (
+                                  <div className="absolute bottom-2 right-2">
+                                    <Avatar className="h-7 w-7 border-2 border-white">
+                                      <AvatarImage src={item.uploadedBy.profileImageUrl || undefined} />
+                                      <AvatarFallback className="text-[9px] bg-primary text-primary-foreground">
+                                        {getInitials(item.uploadedBy.firstName, item.uploadedBy.lastName)}
+                                      </AvatarFallback>
+                                    </Avatar>
+                                  </div>
+                                )}
+                              </div>
+                              <div className="mt-1.5 space-y-0.5">
+                                <p className="text-xs text-muted-foreground">
+                                  {formatPhotoTime(item.createdAt)}
+                                  {item.uploadedBy && (
+                                    <span>
+                                      {" "}&middot; {item.uploadedBy.firstName} {item.uploadedBy.lastName}
+                                    </span>
+                                  )}
+                                </p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                    {projectMedia.length > 0 && (
+                      <p className="text-center text-sm text-muted-foreground py-4">
+                        No more photos to load!
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
             )}
-            <div className="flex flex-wrap items-center gap-3 mt-2 text-xs text-muted-foreground">
-              {project.address && (
-                <span className="flex items-center gap-1">
-                  <MapPin className="h-3 w-3" />
-                  {project.address}
-                </span>
-              )}
-              <span className="flex items-center gap-1">
-                <Calendar className="h-3 w-3" />
-                Created {new Date(project.createdAt).toLocaleDateString()}
-              </span>
+
+            {activeTab === "tasks" && (
+              <div className="px-4 sm:px-6 py-4 space-y-4">
+                <div className="flex flex-wrap items-center gap-3">
+                  <Input
+                    placeholder="Add a new task..."
+                    value={newTaskTitle}
+                    onChange={(e) => setNewTaskTitle(e.target.value)}
+                    className="flex-1 min-w-[200px]"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && newTaskTitle.trim()) addTask.mutate();
+                    }}
+                    data-testid="input-new-task"
+                  />
+                  <Select value={newTaskPriority} onValueChange={setNewTaskPriority}>
+                    <SelectTrigger className="w-[120px]" data-testid="select-task-priority">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="low">Low</SelectItem>
+                      <SelectItem value="medium">Medium</SelectItem>
+                      <SelectItem value="high">High</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    onClick={() => { if (newTaskTitle.trim()) addTask.mutate(); }}
+                    disabled={addTask.isPending || !newTaskTitle.trim()}
+                    data-testid="button-add-task"
+                  >
+                    <Plus className="h-4 w-4 mr-2" />
+                    Add Task
+                  </Button>
+                </div>
+
+                {projectTasks.length === 0 ? (
+                  <div className="border rounded-md p-12">
+                    <div className="text-center space-y-3">
+                      <div className="flex h-12 w-12 items-center justify-center rounded-md bg-muted mx-auto">
+                        <ClipboardList className="h-6 w-6 text-muted-foreground" />
+                      </div>
+                      <h3 className="text-lg font-semibold">No tasks yet</h3>
+                      <p className="text-sm text-muted-foreground max-w-sm mx-auto">
+                        Add tasks to track work items for this project.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {projectTasks.map((task) => {
+                      const StatusIcon = taskStatusIcons[task.status] || AlertCircle;
+                      return (
+                        <div key={task.id} className="flex items-center gap-3 p-3 border rounded-md bg-card" data-testid={`card-task-${task.id}`}>
+                          <Select
+                            value={task.status}
+                            onValueChange={(status) => updateTaskStatus.mutate({ taskId: task.id, status })}
+                          >
+                            <SelectTrigger className="w-auto border-0 p-0 h-auto shadow-none" data-testid={`select-task-status-${task.id}`}>
+                              <StatusIcon className={`h-5 w-5 ${task.status === "done" ? "text-green-500" : task.status === "in_progress" ? "text-amber-500" : "text-muted-foreground"}`} />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="todo">To Do</SelectItem>
+                              <SelectItem value="in_progress">In Progress</SelectItem>
+                              <SelectItem value="done">Done</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <div className="flex-1 min-w-0">
+                            <p className={`text-sm font-medium ${task.status === "done" ? "line-through text-muted-foreground" : ""}`}>
+                              {task.title}
+                            </p>
+                          </div>
+                          <Badge variant="secondary" className={`text-xs shrink-0 no-default-hover-elevate no-default-active-elevate ${taskPriorityColors[task.priority]}`}>
+                            {task.priority}
+                          </Badge>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activeTab === "files" && (
+              <div className="px-4 sm:px-6 py-4">
+                <div className="border rounded-md p-12">
+                  <div className="text-center space-y-3">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-md bg-muted mx-auto">
+                      <FileText className="h-6 w-6 text-muted-foreground" />
+                    </div>
+                    <h3 className="text-lg font-semibold">No files yet</h3>
+                    <p className="text-sm text-muted-foreground max-w-sm mx-auto">
+                      Files and documents for this project will appear here.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="w-full lg:w-80 xl:w-96 shrink-0 border-l bg-card/50">
+            <div className="p-4 space-y-5">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-sm font-semibold flex items-center gap-1.5">
+                    <Info className="h-3.5 w-3.5" />
+                    Contact Info
+                  </h3>
+                  <Button variant="ghost" size="icon" className="h-6 w-6" data-testid="button-add-contact">
+                    <PlusCircle className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+                {project.address && (
+                  <p className="text-sm text-muted-foreground flex items-start gap-1.5">
+                    <MapPin className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                    {project.address}
+                  </p>
+                )}
+              </div>
+
+              <div className="border-t pt-4 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-sm font-semibold flex items-center gap-1.5">
+                    <Users className="h-3.5 w-3.5" />
+                    Project Users ({projectUsers.length})
+                  </h3>
+                  <Button variant="ghost" size="icon" className="h-6 w-6" data-testid="button-edit-users">
+                    <PlusCircle className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {projectUsers.length > 0 ? (
+                    projectUsers.map((u, i) => (
+                      <Avatar key={i} className="h-7 w-7">
+                        <AvatarImage src={u.profileImageUrl || undefined} />
+                        <AvatarFallback className="text-[9px] bg-primary/10 text-primary">
+                          {getInitials(u.firstName, u.lastName)}
+                        </AvatarFallback>
+                      </Avatar>
+                    ))
+                  ) : (
+                    <p className="text-xs text-muted-foreground">No users yet</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="border-t pt-4 space-y-3">
+                <h3 className="text-sm font-semibold">Description</h3>
+                <p className="text-sm text-muted-foreground">
+                  {project.description || "No description added."}
+                </p>
+              </div>
+
+              <div className="border-t pt-4 space-y-3">
+                <h3 className="text-sm font-semibold flex items-center gap-1.5">
+                  <ClipboardList className="h-3.5 w-3.5" />
+                  Tasks
+                </h3>
+                {projectTasks.length > 0 ? (
+                  <div className="space-y-1.5">
+                    {projectTasks.slice(0, 3).map((task) => {
+                      const StatusIcon = taskStatusIcons[task.status] || AlertCircle;
+                      return (
+                        <div key={task.id} className="flex items-center gap-2 text-sm">
+                          <StatusIcon className={`h-4 w-4 shrink-0 ${task.status === "done" ? "text-green-500" : task.status === "in_progress" ? "text-amber-500" : "text-muted-foreground"}`} />
+                          <span className={`truncate ${task.status === "done" ? "line-through text-muted-foreground" : ""}`}>
+                            {task.title}
+                          </span>
+                        </div>
+                      );
+                    })}
+                    {projectTasks.length > 3 && (
+                      <button
+                        onClick={() => setActiveTab("tasks")}
+                        className="text-xs text-primary"
+                        data-testid="button-view-all-tasks"
+                      >
+                        View all {projectTasks.length} tasks
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setActiveTab("tasks")}
+                    className="flex items-center gap-1 text-sm text-primary"
+                    data-testid="button-new-task-sidebar"
+                  >
+                    <PlusCircle className="h-3.5 w-3.5" />
+                    New Task
+                  </button>
+                )}
+              </div>
+
+              <div className="border-t pt-4 space-y-3">
+                <h3 className="text-sm font-semibold flex items-center gap-1.5">
+                  <MessageSquare className="h-3.5 w-3.5" />
+                  Project Conversation
+                </h3>
+                <div className="space-y-2">
+                  <Textarea
+                    placeholder="Add a comment..."
+                    value={projectComment}
+                    onChange={(e) => setProjectComment(e.target.value)}
+                    className="text-sm min-h-[60px] resize-none"
+                    data-testid="input-project-comment"
+                  />
+                  <div className="flex justify-end">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={!projectComment.trim()}
+                      data-testid="button-post-comment"
+                    >
+                      Post
+                    </Button>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </div>
-
-      <Tabs defaultValue="photos" className="space-y-4">
-        <TabsList data-testid="tabs-project-detail">
-          <TabsTrigger value="photos" data-testid="tab-photos">
-            <Camera className="h-4 w-4 mr-1.5" />
-            Photos ({projectMedia.length})
-          </TabsTrigger>
-          <TabsTrigger value="tasks" data-testid="tab-tasks">
-            <ClipboardList className="h-4 w-4 mr-1.5" />
-            Tasks ({projectTasks.length})
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="photos" className="space-y-4">
-          <Card className="p-4">
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-center gap-3">
-                <Input
-                  placeholder="Add a caption..."
-                  value={uploadCaption}
-                  onChange={(e) => setUploadCaption(e.target.value)}
-                  className="flex-1 min-w-[200px]"
-                  data-testid="input-upload-caption"
-                />
-                <Input
-                  placeholder="Tags (comma separated)"
-                  value={uploadTags}
-                  onChange={(e) => setUploadTags(e.target.value)}
-                  className="w-[200px]"
-                  data-testid="input-upload-tags"
-                />
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  accept="image/*,video/*"
-                  className="hidden"
-                  onChange={(e) => {
-                    if (e.target.files?.length) uploadMedia.mutate(e.target.files);
-                  }}
-                  data-testid="input-file-upload"
-                />
-                <Button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={uploadMedia.isPending}
-                  data-testid="button-upload-photos"
-                >
-                  <Upload className="h-4 w-4 mr-2" />
-                  {uploadMedia.isPending ? "Uploading..." : "Upload Photos"}
-                </Button>
-              </div>
-            </div>
-          </Card>
-
-          {projectMedia.length === 0 ? (
-            <Card className="p-12">
-              <div className="text-center space-y-3">
-                <div className="flex h-12 w-12 items-center justify-center rounded-md bg-muted mx-auto">
-                  <ImageIcon className="h-6 w-6 text-muted-foreground" />
-                </div>
-                <h3 className="text-lg font-semibold">No photos yet</h3>
-                <p className="text-sm text-muted-foreground max-w-sm mx-auto">
-                  Upload your first photos to start documenting this project.
-                </p>
-              </div>
-            </Card>
-          ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-              {projectMedia.map((item) => (
-                <Card
-                  key={item.id}
-                  className="overflow-visible cursor-pointer hover-elevate group"
-                  onClick={() => setSelectedMedia(item)}
-                  data-testid={`card-media-${item.id}`}
-                >
-                  <div className="aspect-square overflow-hidden rounded-t-md">
-                    <img
-                      src={item.url}
-                      alt={item.caption || item.originalName}
-                      className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-                    />
-                  </div>
-                  <div className="p-2.5 space-y-1">
-                    {item.caption && (
-                      <p className="text-xs font-medium truncate">{item.caption}</p>
-                    )}
-                    <div className="flex flex-wrap items-center gap-1">
-                      {item.tags && item.tags.slice(0, 2).map((tag) => (
-                        <Badge key={tag} variant="secondary" className="text-[10px] px-1.5 py-0">
-                          {tag}
-                        </Badge>
-                      ))}
-                    </div>
-                    <p className="text-[10px] text-muted-foreground">
-                      {new Date(item.createdAt).toLocaleDateString()}
-                    </p>
-                  </div>
-                </Card>
-              ))}
-            </div>
-          )}
-        </TabsContent>
-
-        <TabsContent value="tasks" className="space-y-4">
-          <Card className="p-4">
-            <div className="flex flex-wrap items-center gap-3">
-              <Input
-                placeholder="Add a new task..."
-                value={newTaskTitle}
-                onChange={(e) => setNewTaskTitle(e.target.value)}
-                className="flex-1 min-w-[200px]"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && newTaskTitle.trim()) addTask.mutate();
-                }}
-                data-testid="input-new-task"
-              />
-              <Select value={newTaskPriority} onValueChange={setNewTaskPriority}>
-                <SelectTrigger className="w-[120px]" data-testid="select-task-priority">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="low">Low</SelectItem>
-                  <SelectItem value="medium">Medium</SelectItem>
-                  <SelectItem value="high">High</SelectItem>
-                </SelectContent>
-              </Select>
-              <Button
-                onClick={() => { if (newTaskTitle.trim()) addTask.mutate(); }}
-                disabled={addTask.isPending || !newTaskTitle.trim()}
-                data-testid="button-add-task"
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                Add Task
-              </Button>
-            </div>
-          </Card>
-
-          {projectTasks.length === 0 ? (
-            <Card className="p-12">
-              <div className="text-center space-y-3">
-                <div className="flex h-12 w-12 items-center justify-center rounded-md bg-muted mx-auto">
-                  <ClipboardList className="h-6 w-6 text-muted-foreground" />
-                </div>
-                <h3 className="text-lg font-semibold">No tasks yet</h3>
-                <p className="text-sm text-muted-foreground max-w-sm mx-auto">
-                  Add tasks to track work items for this project.
-                </p>
-              </div>
-            </Card>
-          ) : (
-            <div className="space-y-2">
-              {projectTasks.map((task) => {
-                const StatusIcon = taskStatusIcons[task.status] || AlertCircle;
-                return (
-                  <Card key={task.id} className="p-4" data-testid={`card-task-${task.id}`}>
-                    <div className="flex items-center gap-3">
-                      <Select
-                        value={task.status}
-                        onValueChange={(status) => updateTaskStatus.mutate({ taskId: task.id, status })}
-                      >
-                        <SelectTrigger className="w-auto border-0 p-0 h-auto shadow-none" data-testid={`select-task-status-${task.id}`}>
-                          <StatusIcon className={`h-5 w-5 ${task.status === "done" ? "text-green-500" : task.status === "in_progress" ? "text-amber-500" : "text-muted-foreground"}`} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="todo">To Do</SelectItem>
-                          <SelectItem value="in_progress">In Progress</SelectItem>
-                          <SelectItem value="done">Done</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <div className="flex-1 min-w-0">
-                        <p className={`text-sm font-medium ${task.status === "done" ? "line-through text-muted-foreground" : ""}`}>
-                          {task.title}
-                        </p>
-                      </div>
-                      <Badge variant="secondary" className={`text-xs shrink-0 no-default-hover-elevate no-default-active-elevate ${taskPriorityColors[task.priority]}`}>
-                        {task.priority}
-                      </Badge>
-                    </div>
-                  </Card>
-                );
-              })}
-            </div>
-          )}
-        </TabsContent>
-      </Tabs>
 
       <Dialog open={!!selectedMedia} onOpenChange={(open) => !open && setSelectedMedia(null)}>
         <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto">
@@ -464,9 +708,12 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                   ) : (
                     (mediaComments || []).map((comment) => (
                       <div key={comment.id} className="flex gap-2 text-sm" data-testid={`comment-${comment.id}`}>
-                        <div className="shrink-0 h-6 w-6 rounded-full bg-muted flex items-center justify-center text-xs font-medium">
-                          {(comment.user?.firstName || "U")[0]}
-                        </div>
+                        <Avatar className="h-6 w-6 shrink-0">
+                          <AvatarImage src={comment.user?.profileImageUrl || undefined} />
+                          <AvatarFallback className="text-[9px]">
+                            {(comment.user?.firstName || "U")[0]}
+                          </AvatarFallback>
+                        </Avatar>
                         <div>
                           <span className="font-medium">
                             {comment.user?.firstName} {comment.user?.lastName}

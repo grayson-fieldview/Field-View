@@ -29,10 +29,6 @@ function AuthenticatedLayout() {
       <div className="flex h-screen w-full">
         <AppSidebar />
         <div className="flex flex-col flex-1 min-w-0">
-          <header className="flex items-center justify-between gap-4 p-2 border-b h-14 shrink-0 sticky top-0 z-40 bg-background/80 backdrop-blur-sm">
-            <SidebarTrigger data-testid="button-sidebar-toggle" />
-            <ThemeToggle />
-          </header>
           <main className="flex-1 overflow-auto">
             <Switch>
               <Route path="/" component={ProjectsPage} />

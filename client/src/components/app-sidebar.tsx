@@ -3,7 +3,6 @@ import {
   SidebarContent,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -12,6 +11,7 @@ import {
 } from "@/components/ui/sidebar";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   FolderKanban,
   Camera,
@@ -20,6 +20,8 @@ import {
   Settings,
   LogOut,
   Eye,
+  Search,
+  Bell,
 } from "lucide-react";
 import { useLocation, Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -42,23 +44,43 @@ export function AppSidebar() {
 
   return (
     <Sidebar>
-      <SidebarHeader className="p-4">
-        <Link href="/" data-testid="link-home">
-          <div className="flex items-center gap-2">
-            <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary text-primary-foreground">
-              <Eye className="h-5 w-5" />
+      <SidebarHeader className="p-3 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <Link href="/" data-testid="link-home">
+            <div className="flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground">
+                <Eye className="h-4 w-4" />
+              </div>
             </div>
-            <div>
-              <h2 className="text-sm font-semibold tracking-tight" data-testid="text-app-name">Field View</h2>
-              <p className="text-xs text-muted-foreground">Photo Documentation</p>
-            </div>
+          </Link>
+          <div className="flex items-center gap-1">
+            <Button size="icon" variant="ghost" className="h-8 w-8 text-sidebar-foreground/70" data-testid="button-notifications">
+              <Bell className="h-4 w-4" />
+            </Button>
+            <Avatar className="h-7 w-7">
+              <AvatarImage src={user?.profileImageUrl || undefined} alt={user?.firstName || "User"} />
+              <AvatarFallback className="text-[10px] bg-sidebar-accent text-sidebar-accent-foreground">{initials}</AvatarFallback>
+            </Avatar>
           </div>
-        </Link>
+        </div>
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-sidebar-foreground/50" />
+          <Input
+            type="search"
+            placeholder="Search"
+            className="h-8 pl-8 text-sm bg-sidebar-accent border-sidebar-border text-sidebar-foreground placeholder:text-sidebar-foreground/50"
+            data-testid="input-sidebar-search"
+          />
+        </div>
       </SidebarHeader>
 
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Navigation</SidebarGroupLabel>
+          <div className="px-3 py-1">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-sidebar-foreground/50" data-testid="text-org-name">
+              {user?.firstName ? `${user.firstName}'s Team` : "My Team"}
+            </p>
+          </div>
           <SidebarGroupContent>
             <SidebarMenu>
               {navItems.map((item) => {
@@ -89,13 +111,13 @@ export function AppSidebar() {
         <div className="flex items-center gap-3">
           <Avatar className="h-8 w-8">
             <AvatarImage src={user?.profileImageUrl || undefined} alt={user?.firstName || "User"} />
-            <AvatarFallback className="text-xs">{initials}</AvatarFallback>
+            <AvatarFallback className="text-xs bg-sidebar-accent text-sidebar-accent-foreground">{initials}</AvatarFallback>
           </Avatar>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium truncate" data-testid="text-user-name">
+            <p className="text-sm font-medium truncate text-sidebar-foreground" data-testid="text-user-name">
               {user?.firstName} {user?.lastName}
             </p>
-            <p className="text-xs text-muted-foreground truncate" data-testid="text-user-email">
+            <p className="text-xs truncate text-sidebar-foreground/60" data-testid="text-user-email">
               {user?.email}
             </p>
           </div>
@@ -103,6 +125,7 @@ export function AppSidebar() {
             size="icon"
             variant="ghost"
             onClick={() => logout()}
+            className="text-sidebar-foreground/70"
             data-testid="button-logout"
           >
             <LogOut className="h-4 w-4" />

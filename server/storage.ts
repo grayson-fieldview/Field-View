@@ -16,8 +16,15 @@ import { users, type User } from "@shared/models/auth";
 import { db } from "./db";
 import { eq, desc, sql } from "drizzle-orm";
 
+export interface ProjectWithDetails extends Project {
+  photoCount: number;
+  recentPhotos: { id: number; url: string }[];
+  recentUsers: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }[];
+}
+
 export interface IStorage {
   getProjects(): Promise<Project[]>;
+  getProjectsWithDetails(): Promise<ProjectWithDetails[]>;
   getProject(id: number): Promise<Project | undefined>;
   createProject(project: InsertProject): Promise<Project>;
   updateProject(id: number, data: Partial<InsertProject>): Promise<Project | undefined>;
@@ -42,6 +49,45 @@ export interface IStorage {
 export class DatabaseStorage implements IStorage {
   async getProjects(): Promise<Project[]> {
     return db.select().from(projects).orderBy(desc(projects.createdAt));
+  }
+
+  async getProjectsWithDetails(): Promise<ProjectWithDetails[]> {
+    const allProjects = await db.select().from(projects).orderBy(desc(projects.updatedAt));
+    
+    const result: ProjectWithDetails[] = [];
+    for (const project of allProjects) {
+      const projectMedia = await db
+        .select({
+          id: media.id,
+          url: media.url,
+          uploadedById: media.uploadedById,
+        })
+        .from(media)
+        .where(eq(media.projectId, project.id))
+        .orderBy(desc(media.createdAt));
+
+      const photoCount = projectMedia.length;
+      const recentPhotos = projectMedia.slice(0, 4).map(m => ({ id: m.id, url: m.url }));
+
+      const uniqueUploaderIds = [...new Set(projectMedia.map(m => m.uploadedById).filter(Boolean))] as string[];
+      const recentUsers: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }[] = [];
+      for (const uid of uniqueUploaderIds.slice(0, 3)) {
+        const [u] = await db.select({
+          firstName: users.firstName,
+          lastName: users.lastName,
+          profileImageUrl: users.profileImageUrl,
+        }).from(users).where(eq(users.id, uid));
+        if (u) recentUsers.push(u);
+      }
+
+      result.push({
+        ...project,
+        photoCount,
+        recentPhotos,
+        recentUsers,
+      });
+    }
+    return result;
   }
 
   async getProject(id: number): Promise<Project | undefined> {
