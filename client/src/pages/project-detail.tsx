@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   AlertDialog,
-  AlertDialogAction,
+
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -264,11 +264,9 @@ export default function ProjectDetailPage({ id }: { id: string }) {
       await apiRequest("DELETE", `/api/projects/${id}`);
     },
     onSuccess: () => {
-      setShowDeleteDialog(false);
       queryClient.removeQueries({ queryKey: ["/api/projects", id] });
-      navigate("/");
       queryClient.invalidateQueries({ queryKey: ["/api/projects"], exact: true });
-      toast({ title: "Project deleted", description: "The project has been removed." });
+      window.location.href = "/";
     },
     onError: (error: Error) => {
       if (isUnauthorizedError(error)) {
@@ -1108,14 +1106,14 @@ export default function ProjectDetailPage({ id }: { id: string }) {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel data-testid="button-cancel-delete">Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground"
+            <Button
+              variant="destructive"
               onClick={() => deleteProject.mutate()}
               disabled={deleteProject.isPending}
               data-testid="button-confirm-delete"
             >
               {deleteProject.isPending ? "Deleting..." : "Delete"}
-            </AlertDialogAction>
+            </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
