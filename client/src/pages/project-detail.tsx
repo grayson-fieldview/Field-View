@@ -191,6 +191,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/checklists"] });
       setNewChecklistTitle("");
       setNewChecklistItems([""]);
       toast({ title: "Checklist created" });
@@ -215,6 +216,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/reports"] });
       setNewReportTitle("");
       toast({ title: "Report created" });
     },
@@ -235,6 +237,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/reports"] });
     },
   });
 
