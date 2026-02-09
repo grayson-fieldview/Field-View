@@ -1,19 +1,12 @@
 import { useState, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -24,15 +17,12 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/auth-utils";
 import { useAuth } from "@/hooks/use-auth";
+import PhotoViewer from "@/components/photo-viewer";
 import {
-  ArrowLeft,
-  Camera,
   Upload,
   MapPin,
-  Calendar,
   Tag,
   MessageSquare,
-  Send,
   Plus,
   ClipboardList,
   CheckCircle2,
@@ -77,8 +67,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const { toast } = useToast();
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<DetailTab>("photos");
-  const [selectedMedia, setSelectedMedia] = useState<(Media & { comments?: (Comment & { user?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } })[] }) | null>(null);
-  const [newComment, setNewComment] = useState("");
+  const [selectedMedia, setSelectedMedia] = useState<(Media & { uploadedBy?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } }) | null>(null);
   const [projectComment, setProjectComment] = useState("");
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [newTaskPriority, setNewTaskPriority] = useState<string>("medium");
@@ -86,11 +75,6 @@ export default function ProjectDetailPage({ id }: { id: string }) {
 
   const { data, isLoading } = useQuery<ProjectDetailData>({
     queryKey: ["/api/projects", id],
-  });
-
-  const { data: mediaComments } = useQuery<(Comment & { user?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } })[]>({
-    queryKey: ["/api/media", selectedMedia?.id?.toString() || "", "comments"],
-    enabled: !!selectedMedia,
   });
 
   const uploadMedia = useMutation({
@@ -116,27 +100,6 @@ export default function ProjectDetailPage({ id }: { id: string }) {
         return;
       }
       toast({ title: "Upload failed", description: error.message, variant: "destructive" });
-    },
-  });
-
-  const addComment = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("POST", `/api/media/${selectedMedia!.id}/comments`, {
-        content: newComment,
-      });
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/media", selectedMedia?.id?.toString() || "", "comments"] });
-      setNewComment("");
-    },
-    onError: (error: Error) => {
-      if (isUnauthorizedError(error)) {
-        toast({ title: "Unauthorized", description: "Logging in again...", variant: "destructive" });
-        setTimeout(() => { window.location.href = "/api/login"; }, 500);
-        return;
-      }
-      toast({ title: "Error", description: error.message, variant: "destructive" });
     },
   });
 
@@ -657,100 +620,16 @@ export default function ProjectDetailPage({ id }: { id: string }) {
         </div>
       </div>
 
-      <Dialog open={!!selectedMedia} onOpenChange={(open) => !open && setSelectedMedia(null)}>
-        <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Camera className="h-4 w-4" />
-              {selectedMedia?.caption || selectedMedia?.originalName || "Photo Detail"}
-            </DialogTitle>
-          </DialogHeader>
-          {selectedMedia && (
-            <div className="space-y-4">
-              <div className="rounded-md overflow-hidden bg-muted">
-                <img
-                  src={selectedMedia.url}
-                  alt={selectedMedia.caption || ""}
-                  className="w-full h-auto max-h-[50vh] object-contain"
-                />
-              </div>
-
-              <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-                <span className="flex items-center gap-1">
-                  <Calendar className="h-3.5 w-3.5" />
-                  {new Date(selectedMedia.createdAt).toLocaleString()}
-                </span>
-                {selectedMedia.latitude && selectedMedia.longitude && (
-                  <span className="flex items-center gap-1">
-                    <MapPin className="h-3.5 w-3.5" />
-                    {selectedMedia.latitude.toFixed(4)}, {selectedMedia.longitude.toFixed(4)}
-                  </span>
-                )}
-              </div>
-
-              {selectedMedia.tags && selectedMedia.tags.length > 0 && (
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <Tag className="h-3.5 w-3.5 text-muted-foreground" />
-                  {selectedMedia.tags.map((tag) => (
-                    <Badge key={tag} variant="secondary" className="text-xs">{tag}</Badge>
-                  ))}
-                </div>
-              )}
-
-              <div className="border-t pt-4 space-y-3">
-                <h4 className="text-sm font-semibold flex items-center gap-1.5">
-                  <MessageSquare className="h-4 w-4" />
-                  Comments
-                </h4>
-                <div className="space-y-2 max-h-[200px] overflow-y-auto">
-                  {(mediaComments || []).length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No comments yet.</p>
-                  ) : (
-                    (mediaComments || []).map((comment) => (
-                      <div key={comment.id} className="flex gap-2 text-sm" data-testid={`comment-${comment.id}`}>
-                        <Avatar className="h-6 w-6 shrink-0">
-                          <AvatarImage src={comment.user?.profileImageUrl || undefined} />
-                          <AvatarFallback className="text-[9px]">
-                            {(comment.user?.firstName || "U")[0]}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div>
-                          <span className="font-medium">
-                            {comment.user?.firstName} {comment.user?.lastName}
-                          </span>
-                          <span className="text-muted-foreground ml-2 text-xs">
-                            {new Date(comment.createdAt).toLocaleString()}
-                          </span>
-                          <p className="text-muted-foreground mt-0.5">{comment.content}</p>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  <Input
-                    placeholder="Add a comment..."
-                    value={newComment}
-                    onChange={(e) => setNewComment(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && newComment.trim()) addComment.mutate();
-                    }}
-                    data-testid="input-new-comment"
-                  />
-                  <Button
-                    size="icon"
-                    onClick={() => { if (newComment.trim()) addComment.mutate(); }}
-                    disabled={addComment.isPending || !newComment.trim()}
-                    data-testid="button-send-comment"
-                  >
-                    <Send className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
+      {selectedMedia && (
+        <PhotoViewer
+          media={selectedMedia}
+          allMedia={projectMedia}
+          project={project}
+          tasks={projectTasks}
+          onClose={() => setSelectedMedia(null)}
+          onNavigate={(m) => setSelectedMedia(m)}
+        />
+      )}
     </div>
   );
 }
