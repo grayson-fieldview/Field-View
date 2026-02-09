@@ -265,9 +265,10 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     },
     onSuccess: () => {
       setShowDeleteDialog(false);
-      queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
+      queryClient.removeQueries({ queryKey: ["/api/projects", id] });
+      navigate("/");
+      queryClient.invalidateQueries({ queryKey: ["/api/projects"], exact: true });
       toast({ title: "Project deleted", description: "The project has been removed." });
-      setTimeout(() => navigate("/"), 100);
     },
     onError: (error: Error) => {
       if (isUnauthorizedError(error)) {
