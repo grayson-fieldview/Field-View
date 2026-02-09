@@ -1,0 +1,39 @@
+You are an expert coder tasked with building the base structure for a new web application called "Field View". This is a photo documentation and project management tool designed for field service teams, such as construction crews, inspectors, or maintenance workers. The app allows users to capture, organize, and share photos and videos from job sites, track project progress, collaborate with team members, and manage resources efficiently. Focus on creating an original, intuitive user interface and experience—do not copy designs from any existing apps; innovate with clean, modern layouts, responsive design, and user-friendly navigation.
+Use a full-stack approach:
+
+Backend: Node.js with Express for the server, MongoDB for the database (or another NoSQL DB if you prefer), and implement authentication with JWT.
+Frontend: React.js for the UI, with React Router for navigation. Use CSS-in-JS like styled-components or Tailwind CSS for styling to ensure originality.
+Additional: Integrate real-time features using Socket.io where appropriate (e.g., for live updates on project feeds). Make the app mobile-responsive so it works well on phones and tablets.
+Deployment: Structure the code so it can run in Replit, with separate folders for client and server.
+
+Key requirements:
+
+User authentication: Secure login/signup, role-based access (e.g., admin, team member).
+Core features to implement:
+Photo and video capture/upload: Allow users to upload media with automatic timestamps, GPS location (if available via browser), annotations (drawing/tools on images), and voice-to-text captions.
+Project organization: Projects as central entities, with timelines showing chronological media and updates.
+Collaboration: In-app commenting on media, @mentions for notifications, task assignments.
+Tagging and labeling: Add tags to media for easy searching and filtering.
+Reporting: Generate simple reports or summaries from project data (e.g., daily logs, photo galleries).
+Integrations: Basic hooks for future integrations (e.g., API endpoints for exporting data).
+AI-like enhancements: If possible with available libraries, add simple voice-to-text or auto-summarization (use browser APIs or lightweight libs).
+
+
+Required pages/screens (implement as React components with routes):
+
+Projects: Dashboard to create, list, view, and edit projects. Each project view shows a feed of media, comments, tasks, and progress timeline. Include search/filter by date, tag, or location.
+Photos: Global gallery of all uploaded photos/videos across projects. Support browsing, searching, bulk actions (e.g., download, tag), and filtering (e.g., by project, user, date).
+Users: Admin page to manage user accounts—add/remove users, view profiles, edit permissions.
+User Groups: Page to create and manage groups (e.g., teams or departments), assign users to groups, and set group-level permissions (e.g., access to specific projects).
+Map: Interactive map view (use a library like Leaflet or Google Maps API) showing project locations as pins/markers. Clicking a marker opens project details or media previews.
+Settings: User and app settings—profile editing, notification preferences, theme toggles, export options, and admin configs like API keys.
+
+Start by setting up the project structure in Replit:
+
+Initialize the backend server with routes for authentication, projects, media uploads, users, groups, etc.
+Build the frontend with a navbar for navigation between pages.
+Implement at least stub data and basic functionality for each page to form a working prototype.
+Ensure security best practices (e.g., input validation, secure file uploads).
+Add comments in code explaining your design choices for originality.
+
+Generate the initial code base now, and provide instructions for how to expand it iteratively.
