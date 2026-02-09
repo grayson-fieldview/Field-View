@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -35,6 +35,7 @@ import {
 import type { Project } from "@shared/schema";
 import { insertProjectSchema } from "@shared/schema";
 import { z } from "zod";
+import { AddressAutocomplete } from "@/components/address-autocomplete";
 
 interface ProjectWithDetails extends Project {
   photoCount: number;
@@ -71,6 +72,18 @@ export default function ProjectsPage() {
       color: "#3B82F6",
     },
   });
+
+  const handleAddressSelect = useCallback((result: { address: string; latitude: number; longitude: number }) => {
+    form.setValue("address", result.address);
+    form.setValue("latitude", result.latitude);
+    form.setValue("longitude", result.longitude);
+  }, [form]);
+
+  const handleAddressTextChange = useCallback((text: string) => {
+    form.setValue("address", text);
+    form.setValue("latitude", null);
+    form.setValue("longitude", null);
+  }, [form]);
 
   const createProject = useMutation({
     mutationFn: async (data: z.infer<typeof createProjectSchema>) => {
@@ -172,78 +185,13 @@ export default function ProjectsPage() {
                     <FormItem>
                       <FormLabel>Address</FormLabel>
                       <FormControl>
-                        <Input
-                          placeholder="123 Main St, City, State ZIP"
-                          {...field}
+                        <AddressAutocomplete
                           value={field.value || ""}
+                          onChange={handleAddressSelect}
+                          onTextChange={handleAddressTextChange}
+                          placeholder="Search for an address..."
                           data-testid="input-project-address"
                         />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <div className="grid grid-cols-2 gap-4">
-                  <FormField
-                    control={form.control}
-                    name="latitude"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Latitude</FormLabel>
-                        <FormControl>
-                          <Input
-                            type="number"
-                            step="any"
-                            placeholder="40.7128"
-                            {...field}
-                            value={field.value ?? ""}
-                            onChange={(e) => field.onChange(e.target.value ? parseFloat(e.target.value) : null)}
-                            data-testid="input-project-lat"
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <FormField
-                    control={form.control}
-                    name="longitude"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Longitude</FormLabel>
-                        <FormControl>
-                          <Input
-                            type="number"
-                            step="any"
-                            placeholder="-74.0060"
-                            {...field}
-                            value={field.value ?? ""}
-                            onChange={(e) => field.onChange(e.target.value ? parseFloat(e.target.value) : null)}
-                            data-testid="input-project-lng"
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                </div>
-                <FormField
-                  control={form.control}
-                  name="color"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Color</FormLabel>
-                      <FormControl>
-                        <div className="flex items-center gap-3">
-                          <input
-                            type="color"
-                            {...field}
-                            value={field.value || "#3B82F6"}
-                            className="h-9 w-12 rounded-md border cursor-pointer"
-                            data-testid="input-project-color"
-                          />
-                          <span className="text-sm text-muted-foreground">{field.value}</span>
-                        </div>
                       </FormControl>
                       <FormMessage />
                     </FormItem>

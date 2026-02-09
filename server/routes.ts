@@ -42,6 +42,14 @@ export async function registerRoutes(
     next();
   }, express.static(uploadDir));
 
+  app.get("/api/config/maps", isAuthenticated, (_req, res) => {
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ message: "Google Maps API key not configured" });
+    }
+    res.json({ apiKey });
+  });
+
   app.get("/api/projects", isAuthenticated, async (_req, res) => {
     try {
       const projects = await storage.getProjectsWithDetails();

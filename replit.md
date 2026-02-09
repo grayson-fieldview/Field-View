@@ -38,6 +38,7 @@ Field View is a photo documentation and project management tool designed for fie
 ## Key API Endpoints
 - `GET/POST /api/projects` - List/create projects
 - `GET /api/projects/:id` - Get project with media and tasks
+- `GET /api/config/maps` - Returns Google Maps API key for Places autocomplete
 - `POST /api/projects/:id/media` - Upload photos (multipart/form-data)
 - `POST /api/projects/:id/tasks` - Create task
 - `PATCH /api/tasks/:id` - Update task status
@@ -45,6 +46,12 @@ Field View is a photo documentation and project management tool designed for fie
 - `GET/POST /api/media/:id/comments` - Comments on media
 - `GET /api/users` - List team members
 - Auth: `/api/login`, `/api/logout`, `/api/auth/user`
+
+## Google Maps Integration
+- Address autocomplete uses Google Places API via `AddressAutocomplete` component
+- Google Maps JS script is loaded dynamically from the `GOOGLE_MAPS_API_KEY` secret
+- When an address is selected, latitude/longitude are auto-populated behind the scenes
+- Project creation form shows only Name, Description, and Address fields
 
 ## Pages
 1. **Landing** - Marketing page for unauthenticated users
