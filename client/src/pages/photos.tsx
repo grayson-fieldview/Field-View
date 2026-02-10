@@ -124,28 +124,29 @@ export default function PhotosPage() {
               onClick={() => setSelectedPhoto(item)}
               data-testid={`card-photo-${item.id}`}
             >
-              <div className="aspect-square overflow-hidden rounded-t-md">
+              <div className="aspect-square overflow-hidden rounded-t-md relative">
                 <img
                   src={item.url}
                   alt={item.caption || item.originalName}
                   className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
                 />
-              </div>
-              <div className="p-2 space-y-1">
-                {item.project && (
-                  <div className="flex items-center gap-1">
-                    <div
-                      className="h-2 w-2 rounded-full shrink-0"
-                      style={{ backgroundColor: item.project.color || "#F09000" }}
-                    />
-                    <span className="text-[10px] text-muted-foreground truncate">{item.project.name}</span>
+                {item.uploadedBy && (
+                  <div
+                    className="absolute top-2 left-2 h-7 w-7 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-[10px] font-bold shadow-md"
+                    data-testid={`avatar-uploader-${item.id}`}
+                  >
+                    {`${(item.uploadedBy.firstName || "")[0] || ""}${(item.uploadedBy.lastName || "")[0] || ""}`.toUpperCase() || "U"}
                   </div>
                 )}
-                {item.caption && (
-                  <p className="text-xs font-medium truncate">{item.caption}</p>
+              </div>
+              <div className="p-2 space-y-0.5">
+                {item.project && (
+                  <p className="text-xs font-medium truncate" data-testid={`text-photo-project-${item.id}`}>
+                    {item.project.name}
+                  </p>
                 )}
-                <p className="text-[10px] text-muted-foreground">
-                  {new Date(item.createdAt).toLocaleDateString()}
+                <p className="text-[10px] text-muted-foreground" data-testid={`text-photo-date-${item.id}`}>
+                  {new Date(item.createdAt).toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "numeric" })} | {new Date(item.createdAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
                 </p>
               </div>
             </Card>

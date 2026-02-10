@@ -21,6 +21,7 @@ import SettingsPage from "@/pages/settings";
 import ChecklistsPage from "@/pages/checklists";
 import ReportsPage from "@/pages/reports";
 import GalleryPage from "@/pages/gallery";
+import TasksPage from "@/pages/tasks";
 import AnalyticsPage from "@/pages/analytics";
 
 function AuthenticatedLayout() {
@@ -41,6 +42,7 @@ function AuthenticatedLayout() {
               <Route path="/projects/:id">
                 {(params) => <ProjectDetailPage id={params.id} />}
               </Route>
+              <Route path="/tasks" component={TasksPage} />
               <Route path="/photos" component={PhotosPage} />
               <Route path="/checklists" component={ChecklistsPage} />
               <Route path="/reports" component={ReportsPage} />

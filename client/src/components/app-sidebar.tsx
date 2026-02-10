@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import {
   LayoutDashboard,
   FolderKanban,
+  ClipboardList,
   Camera,
   MapPin,
   Users,
@@ -31,6 +32,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 const navItems = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
   { title: "Projects", url: "/projects", icon: FolderKanban },
+  { title: "Tasks", url: "/tasks", icon: ClipboardList },
   { title: "Photos", url: "/photos", icon: Camera },
   { title: "Checklists", url: "/checklists", icon: ClipboardCheck },
   { title: "Reports", url: "/reports", icon: FileBarChart },

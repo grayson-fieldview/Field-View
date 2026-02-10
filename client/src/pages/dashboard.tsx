@@ -169,7 +169,7 @@ export default function DashboardPage() {
   const kpiItems = [
     { label: "Active Projects", value: stats?.activeProjects, icon: FolderKanban, href: "/projects" },
     { label: "Total Photos", value: stats?.totalPhotos, icon: Camera, href: "/photos" },
-    { label: "Open Tasks", value: stats?.openTasks, icon: ClipboardList, href: "/projects" },
+    { label: "Open Tasks", value: stats?.openTasks, icon: ClipboardList, href: "/tasks" },
   ];
 
   return (

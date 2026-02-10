@@ -61,6 +61,7 @@ export interface IStorage {
   createComment(comment: InsertComment): Promise<Comment>;
 
   getTasksByProject(projectId: number): Promise<(Task & { assignedTo?: { firstName: string | null; lastName: string | null } })[]>;
+  getAllTasks(): Promise<(Task & { project?: { name: string }; assignedTo?: { firstName: string | null; lastName: string | null } })[]>;
   createTask(task: InsertTask): Promise<Task>;
   updateTask(id: number, data: Partial<InsertTask>): Promise<Task | undefined>;
 
@@ -271,6 +272,28 @@ export class DatabaseStorage implements IStorage {
 
     return rows.map((r) => ({
       ...r.task,
+      assignedTo: r.assignedTo?.firstName ? r.assignedTo : undefined,
+    }));
+  }
+
+  async getAllTasks() {
+    const rows = await db
+      .select({
+        task: tasks,
+        project: { name: projects.name },
+        assignedTo: {
+          firstName: users.firstName,
+          lastName: users.lastName,
+        },
+      })
+      .from(tasks)
+      .leftJoin(projects, eq(tasks.projectId, projects.id))
+      .leftJoin(users, eq(tasks.assignedToId, users.id))
+      .orderBy(desc(tasks.createdAt));
+
+    return rows.map((r) => ({
+      ...r.task,
+      project: r.project?.name ? r.project : undefined,
       assignedTo: r.assignedTo?.firstName ? r.assignedTo : undefined,
     }));
   }

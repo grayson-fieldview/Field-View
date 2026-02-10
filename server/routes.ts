@@ -159,6 +159,15 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/tasks", isAuthenticated, async (_req, res) => {
+    try {
+      const allTasks = await storage.getAllTasks();
+      res.json(allTasks);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch tasks" });
+    }
+  });
+
   app.get("/api/media", isAuthenticated, async (_req, res) => {
     try {
       const allMedia = await storage.getAllMedia();
