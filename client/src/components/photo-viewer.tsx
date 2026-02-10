@@ -21,6 +21,10 @@ import {
   Download,
   Undo2,
   Trash2,
+  ArrowUpRight,
+  Circle as CircleIcon,
+  Square,
+  Minus,
 } from "lucide-react";
 import type { Media, Comment, Task, Project } from "@shared/schema";
 
@@ -50,7 +54,24 @@ interface PhotoViewerProps {
 }
 
 type AnnotationPoint = { x: number; y: number };
-type AnnotationLine = { points: AnnotationPoint[]; color: string; width: number };
+type AnnotationTool = "freehand" | "arrow" | "circle" | "rectangle" | "line";
+type AnnotationShape =
+  | { type: "freehand"; points: AnnotationPoint[]; color: string; width: number }
+  | { type: "arrow"; start: AnnotationPoint; end: AnnotationPoint; color: string; width: number }
+  | { type: "circle"; center: AnnotationPoint; radius: AnnotationPoint; color: string; width: number }
+  | { type: "rectangle"; start: AnnotationPoint; end: AnnotationPoint; color: string; width: number }
+  | { type: "line"; start: AnnotationPoint; end: AnnotationPoint; color: string; width: number };
+
+const ANNOTATION_COLORS = [
+  { name: "Red", value: "#ff3b30" },
+  { name: "Green", value: "#34c759" },
+  { name: "Blue", value: "#007aff" },
+  { name: "Yellow", value: "#ffcc00" },
+  { name: "Orange", value: "#ff9500" },
+  { name: "Purple", value: "#af52de" },
+  { name: "White", value: "#ffffff" },
+  { name: "Black", value: "#000000" },
+];
 
 export default function PhotoViewer({
   media,
@@ -64,10 +85,17 @@ export default function PhotoViewer({
   const [photoOnlyMode, setPhotoOnlyMode] = useState(false);
   const [newComment, setNewComment] = useState("");
   const [isAnnotating, setIsAnnotating] = useState(false);
-  const [annotations, setAnnotations] = useState<AnnotationLine[]>([]);
-  const [currentLine, setCurrentLine] = useState<AnnotationLine | null>(null);
-  const [annotationColor] = useState("#ff3b30");
-  const [annotationWidth] = useState(3);
+  const [annotations, setAnnotations] = useState<AnnotationShape[]>([]);
+  const [currentShape, setCurrentShape] = useState<AnnotationShape | null>(null);
+  const [annotationColor, setAnnotationColor] = useState("#ff3b30");
+  const [annotationWidth, setAnnotationWidth] = useState(3);
+  const [annotationTool, setAnnotationToolRaw] = useState<AnnotationTool>("freehand");
+  const [drawStart, setDrawStart] = useState<AnnotationPoint | null>(null);
+  const setAnnotationTool = useCallback((tool: AnnotationTool) => {
+    setCurrentShape(null);
+    setDrawStart(null);
+    setAnnotationToolRaw(tool);
+  }, []);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
@@ -108,7 +136,8 @@ export default function PhotoViewer({
   const goToPrev = useCallback(() => {
     if (currentIndex > 0) {
       setAnnotations([]);
-      setCurrentLine(null);
+      setCurrentShape(null);
+      setDrawStart(null);
       onNavigate(allMedia[currentIndex - 1]);
     }
   }, [currentIndex, allMedia, onNavigate]);
@@ -116,7 +145,8 @@ export default function PhotoViewer({
   const goToNext = useCallback(() => {
     if (currentIndex < allMedia.length - 1) {
       setAnnotations([]);
-      setCurrentLine(null);
+      setCurrentShape(null);
+      setDrawStart(null);
       onNavigate(allMedia[currentIndex + 1]);
     }
   }, [currentIndex, allMedia, onNavigate]);
@@ -139,6 +169,56 @@ export default function PhotoViewer({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [onClose, photoOnlyMode, goToPrev, goToNext]);
 
+  const drawShape = useCallback((ctx: CanvasRenderingContext2D, shape: AnnotationShape, w: number, h: number) => {
+    ctx.strokeStyle = shape.color;
+    ctx.lineWidth = shape.width;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    if (shape.type === "freehand") {
+      if (shape.points.length < 2) return;
+      ctx.beginPath();
+      ctx.moveTo(shape.points[0].x * w, shape.points[0].y * h);
+      for (let i = 1; i < shape.points.length; i++) {
+        ctx.lineTo(shape.points[i].x * w, shape.points[i].y * h);
+      }
+      ctx.stroke();
+    } else if (shape.type === "line") {
+      ctx.beginPath();
+      ctx.moveTo(shape.start.x * w, shape.start.y * h);
+      ctx.lineTo(shape.end.x * w, shape.end.y * h);
+      ctx.stroke();
+    } else if (shape.type === "arrow") {
+      const sx = shape.start.x * w, sy = shape.start.y * h;
+      const ex = shape.end.x * w, ey = shape.end.y * h;
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(ex, ey);
+      ctx.stroke();
+      const angle = Math.atan2(ey - sy, ex - sx);
+      const headLen = Math.max(12, shape.width * 4);
+      ctx.beginPath();
+      ctx.moveTo(ex, ey);
+      ctx.lineTo(ex - headLen * Math.cos(angle - Math.PI / 6), ey - headLen * Math.sin(angle - Math.PI / 6));
+      ctx.moveTo(ex, ey);
+      ctx.lineTo(ex - headLen * Math.cos(angle + Math.PI / 6), ey - headLen * Math.sin(angle + Math.PI / 6));
+      ctx.stroke();
+    } else if (shape.type === "circle") {
+      const cx = shape.center.x * w, cy = shape.center.y * h;
+      const rx = shape.radius.x * w, ry = shape.radius.y * h;
+      const r = Math.sqrt((rx - cx) ** 2 + (ry - cy) ** 2);
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (shape.type === "rectangle") {
+      const x1 = shape.start.x * w, y1 = shape.start.y * h;
+      const x2 = shape.end.x * w, y2 = shape.end.y * h;
+      ctx.beginPath();
+      ctx.rect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
+      ctx.stroke();
+    }
+  }, []);
+
   const redrawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     const img = imageRef.current;
@@ -150,27 +230,11 @@ export default function PhotoViewer({
     canvas.height = img.clientHeight;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    const allLines = [...annotations, ...(currentLine ? [currentLine] : [])];
-    for (const line of allLines) {
-      if (line.points.length < 2) continue;
-      ctx.strokeStyle = line.color;
-      ctx.lineWidth = line.width;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.beginPath();
-      ctx.moveTo(
-        line.points[0].x * canvas.width,
-        line.points[0].y * canvas.height
-      );
-      for (let i = 1; i < line.points.length; i++) {
-        ctx.lineTo(
-          line.points[i].x * canvas.width,
-          line.points[i].y * canvas.height
-        );
-      }
-      ctx.stroke();
+    const allShapes = [...annotations, ...(currentShape ? [currentShape] : [])];
+    for (const shape of allShapes) {
+      drawShape(ctx, shape, canvas.width, canvas.height);
     }
-  }, [annotations, currentLine]);
+  }, [annotations, currentShape, drawShape]);
 
   useEffect(() => {
     redrawCanvas();
@@ -199,25 +263,56 @@ export default function PhotoViewer({
     e.preventDefault();
     const pos = getRelativePos(e);
     if (!pos) return;
-    setCurrentLine({ points: [pos], color: annotationColor, width: annotationWidth });
+
+    if (annotationTool === "freehand") {
+      setCurrentShape({ type: "freehand", points: [pos], color: annotationColor, width: annotationWidth });
+    } else {
+      setDrawStart(pos);
+      if (annotationTool === "arrow") {
+        setCurrentShape({ type: "arrow", start: pos, end: pos, color: annotationColor, width: annotationWidth });
+      } else if (annotationTool === "circle") {
+        setCurrentShape({ type: "circle", center: pos, radius: pos, color: annotationColor, width: annotationWidth });
+      } else if (annotationTool === "rectangle") {
+        setCurrentShape({ type: "rectangle", start: pos, end: pos, color: annotationColor, width: annotationWidth });
+      } else if (annotationTool === "line") {
+        setCurrentShape({ type: "line", start: pos, end: pos, color: annotationColor, width: annotationWidth });
+      }
+    }
   };
 
   const handlePointerMove = (e: React.MouseEvent | React.TouchEvent) => {
-    if (!isAnnotating || !currentLine) return;
+    if (!isAnnotating || !currentShape) return;
     e.preventDefault();
     const pos = getRelativePos(e);
     if (!pos) return;
-    setCurrentLine((prev) =>
-      prev ? { ...prev, points: [...prev.points, pos] } : null
-    );
+
+    if (currentShape.type === "freehand") {
+      setCurrentShape((prev) =>
+        prev && prev.type === "freehand" ? { ...prev, points: [...prev.points, pos] } : prev
+      );
+    } else if (drawStart) {
+      setCurrentShape((prev) => {
+        if (!prev) return prev;
+        if (prev.type === "arrow" || prev.type === "line" || prev.type === "rectangle") {
+          return { ...prev, end: pos };
+        } else if (prev.type === "circle") {
+          return { ...prev, radius: pos };
+        }
+        return prev;
+      });
+    }
   };
 
   const handlePointerUp = () => {
-    if (!isAnnotating || !currentLine) return;
-    if (currentLine.points.length > 1) {
-      setAnnotations((prev) => [...prev, currentLine]);
+    if (!isAnnotating || !currentShape) return;
+    const isValid = currentShape.type === "freehand"
+      ? currentShape.points.length > 1
+      : true;
+    if (isValid) {
+      setAnnotations((prev) => [...prev, currentShape]);
     }
-    setCurrentLine(null);
+    setCurrentShape(null);
+    setDrawStart(null);
   };
 
   const undoAnnotation = () => {
@@ -259,86 +354,182 @@ export default function PhotoViewer({
       </div>
 
       {currentIndex > 0 && (
-        <Button
-          variant="outline"
-          size="icon"
-          onClick={goToPrev}
-          className="absolute left-3 top-1/2 -translate-y-1/2 rounded-full bg-white/90 dark:bg-black/70 border-white/90 dark:border-black/70 shadow-md"
-          data-testid="button-photo-prev"
-        >
-          <ChevronLeft className="h-5 w-5" />
-        </Button>
+        <div className="absolute left-3 top-0 bottom-0 flex items-center pointer-events-none">
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={goToPrev}
+            className="pointer-events-auto rounded-full bg-white/90 dark:bg-black/70 border-white/90 dark:border-black/70 shadow-md"
+            data-testid="button-photo-prev"
+          >
+            <ChevronLeft className="h-5 w-5" />
+          </Button>
+        </div>
       )}
       {currentIndex < allMedia.length - 1 && (
-        <Button
-          variant="outline"
-          size="icon"
-          onClick={goToNext}
-          className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full bg-white/90 dark:bg-black/70 border-white/90 dark:border-black/70 shadow-md"
-          data-testid="button-photo-next"
-        >
-          <ChevronRight className="h-5 w-5" />
-        </Button>
+        <div className="absolute right-3 top-0 bottom-0 flex items-center pointer-events-none">
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={goToNext}
+            className="pointer-events-auto rounded-full bg-white/90 dark:bg-black/70 border-white/90 dark:border-black/70 shadow-md"
+            data-testid="button-photo-next"
+          >
+            <ChevronRight className="h-5 w-5" />
+          </Button>
+        </div>
       )}
 
-      <div className="absolute top-3 left-3 flex items-center gap-1 bg-white/90 dark:bg-black/70 rounded-md shadow-md p-1">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => setIsAnnotating(!isAnnotating)}
-          className={`rounded ${isAnnotating ? "bg-primary text-primary-foreground" : ""}`}
-          title="Annotate"
-          data-testid="button-annotate"
-        >
-          <Pencil className="h-4 w-4" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => setPhotoOnlyMode(!photoOnlyMode)}
-          title="Fullscreen"
-          data-testid="button-fullscreen"
-        >
-          <Maximize2 className="h-4 w-4" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => {
-            const link = document.createElement("a");
-            link.href = media.url;
-            link.download = media.originalName;
-            link.click();
-          }}
-          title="Download"
-          data-testid="button-download"
-        >
-          <Download className="h-4 w-4" />
-        </Button>
+      <div className="absolute top-3 left-3 flex flex-col gap-1.5" data-testid="annotation-toolbar">
+        <div className="flex items-center gap-1 bg-white/90 dark:bg-black/70 rounded-md shadow-md p-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setIsAnnotating(!isAnnotating)}
+            className={`rounded ${isAnnotating ? "bg-primary text-primary-foreground" : ""}`}
+            title="Annotate"
+            data-testid="button-annotate"
+          >
+            <Pencil className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setPhotoOnlyMode(!photoOnlyMode)}
+            title="Fullscreen"
+            data-testid="button-fullscreen"
+          >
+            <Maximize2 className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => {
+              const link = document.createElement("a");
+              link.href = media.url;
+              link.download = media.originalName;
+              link.click();
+            }}
+            title="Download"
+            data-testid="button-download"
+          >
+            <Download className="h-4 w-4" />
+          </Button>
+          {isAnnotating && (
+            <>
+              <div className="w-px h-6 bg-black/20 dark:bg-white/20 mx-0.5" />
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={undoAnnotation}
+                disabled={annotations.length === 0}
+                title="Undo"
+                data-testid="button-undo-annotation"
+              >
+                <Undo2 className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={clearAnnotations}
+                disabled={annotations.length === 0}
+                title="Clear all"
+                data-testid="button-clear-annotations"
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </>
+          )}
+        </div>
+
         {isAnnotating && (
-          <>
-            <div className="w-px h-6 bg-black/20 dark:bg-white/20 mx-0.5" />
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={undoAnnotation}
-              disabled={annotations.length === 0}
-              title="Undo"
-              data-testid="button-undo-annotation"
-            >
-              <Undo2 className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={clearAnnotations}
-              disabled={annotations.length === 0}
-              title="Clear all"
-              data-testid="button-clear-annotations"
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
-          </>
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center gap-1 bg-white/90 dark:bg-black/70 rounded-md shadow-md p-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setAnnotationTool("freehand")}
+                className={`rounded ${annotationTool === "freehand" ? "bg-primary text-primary-foreground" : ""}`}
+                title="Freehand"
+                data-testid="button-tool-freehand"
+              >
+                <Pencil className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setAnnotationTool("arrow")}
+                className={`rounded ${annotationTool === "arrow" ? "bg-primary text-primary-foreground" : ""}`}
+                title="Arrow"
+                data-testid="button-tool-arrow"
+              >
+                <ArrowUpRight className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setAnnotationTool("circle")}
+                className={`rounded ${annotationTool === "circle" ? "bg-primary text-primary-foreground" : ""}`}
+                title="Circle"
+                data-testid="button-tool-circle"
+              >
+                <CircleIcon className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setAnnotationTool("rectangle")}
+                className={`rounded ${annotationTool === "rectangle" ? "bg-primary text-primary-foreground" : ""}`}
+                title="Rectangle"
+                data-testid="button-tool-rectangle"
+              >
+                <Square className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setAnnotationTool("line")}
+                className={`rounded ${annotationTool === "line" ? "bg-primary text-primary-foreground" : ""}`}
+                title="Line"
+                data-testid="button-tool-line"
+              >
+                <Minus className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <div className="flex items-center gap-1 bg-white/90 dark:bg-black/70 rounded-md shadow-md p-1">
+              {ANNOTATION_COLORS.map((c) => (
+                <button
+                  key={c.value}
+                  onClick={() => setAnnotationColor(c.value)}
+                  className={`w-6 h-6 rounded-full border-2 shrink-0 transition-transform ${
+                    annotationColor === c.value ? "border-white scale-110 ring-1 ring-black/40" : "border-transparent"
+                  }`}
+                  style={{ backgroundColor: c.value }}
+                  title={c.name}
+                  data-testid={`button-color-${c.name.toLowerCase()}`}
+                />
+              ))}
+            </div>
+
+            <div className="flex items-center gap-2 bg-white/90 dark:bg-black/70 rounded-md shadow-md px-2 py-1">
+              <span className="text-[10px] font-medium text-black dark:text-white whitespace-nowrap">Size</span>
+              <input
+                type="range"
+                min={1}
+                max={8}
+                value={annotationWidth}
+                onChange={(e) => setAnnotationWidth(Number(e.target.value))}
+                className="w-20 h-1 accent-current"
+                style={{ color: annotationColor }}
+                data-testid="slider-stroke-width"
+              />
+              <div
+                className="rounded-full shrink-0"
+                style={{ width: annotationWidth * 2 + 4, height: annotationWidth * 2 + 4, backgroundColor: annotationColor }}
+              />
+            </div>
+          </div>
         )}
       </div>
 
