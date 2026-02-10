@@ -136,7 +136,7 @@ export default function PhotosPage() {
                   <div className="flex items-center gap-1">
                     <div
                       className="h-2 w-2 rounded-full shrink-0"
-                      style={{ backgroundColor: item.project.color || "#3B82F6" }}
+                      style={{ backgroundColor: item.project.color || "#E97316" }}
                     />
                     <span className="text-[10px] text-muted-foreground truncate">{item.project.name}</span>
                   </div>

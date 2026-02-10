@@ -182,7 +182,7 @@ export default function GalleryPage({ token }: { token: string }) {
       <footer className="border-t py-4">
         <div className="max-w-6xl mx-auto px-4 text-center">
           <p className="text-xs text-muted-foreground">
-            Shared via Field View
+            Shared via SiteSnap
           </p>
         </div>
       </footer>

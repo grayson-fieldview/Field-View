@@ -11,7 +11,6 @@ import {
 } from "@/components/ui/sidebar";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   FolderKanban,
   Camera,
@@ -19,14 +18,13 @@ import {
   Users,
   Settings,
   LogOut,
-  Eye,
-  Search,
-  Bell,
+  Aperture,
   ClipboardCheck,
   FileBarChart,
 } from "lucide-react";
 import { useLocation, Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 const navItems = [
   { title: "Projects", url: "/", icon: FolderKanban },
@@ -48,42 +46,22 @@ export function AppSidebar() {
 
   return (
     <Sidebar>
-      <SidebarHeader className="p-3 space-y-3">
-        <div className="flex items-center justify-between gap-2">
-          <Link href="/" data-testid="link-home">
-            <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground">
-                <Eye className="h-4 w-4" />
-              </div>
-              <span className="text-sm font-bold tracking-tight" data-testid="text-brand-name">FieldView</span>
+      <SidebarHeader className="p-4 pb-3">
+        <Link href="/" data-testid="link-home">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground">
+              <Aperture className="h-4 w-4" />
             </div>
-          </Link>
-          <div className="flex items-center gap-1">
-            <Button size="icon" variant="ghost" data-testid="button-notifications">
-              <Bell className="h-4 w-4" />
-            </Button>
-            <Avatar className="h-7 w-7">
-              <AvatarImage src={user?.profileImageUrl || undefined} alt={user?.firstName || "User"} />
-              <AvatarFallback className="text-[10px] bg-sidebar-accent text-sidebar-accent-foreground">{initials}</AvatarFallback>
-            </Avatar>
+            <span className="text-base font-bold tracking-tight" data-testid="text-brand-name">SiteSnap</span>
           </div>
-        </div>
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-sidebar-foreground/50" />
-          <Input
-            type="search"
-            placeholder="Search"
-            className="h-8 pl-8 text-sm bg-sidebar-accent border-sidebar-border text-sidebar-foreground placeholder:text-sidebar-foreground/50"
-            data-testid="input-sidebar-search"
-          />
-        </div>
+        </Link>
       </SidebarHeader>
 
       <SidebarContent>
         <SidebarGroup>
           <div className="px-3 py-1">
-            <p className="text-[11px] font-medium uppercase tracking-wider text-sidebar-foreground/50" data-testid="text-org-name">
-              {user?.firstName ? `${user.firstName}'s Team` : "My Team"}
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-sidebar-foreground/40" data-testid="text-org-name">
+              Workspace
             </p>
           </div>
           <SidebarGroupContent>
@@ -112,7 +90,7 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
 
-      <SidebarFooter className="p-3">
+      <SidebarFooter className="p-3 space-y-2">
         <div className="flex items-center gap-3">
           <Avatar className="h-8 w-8">
             <AvatarImage src={user?.profileImageUrl || undefined} alt={user?.firstName || "User"} />
@@ -122,19 +100,22 @@ export function AppSidebar() {
             <p className="text-sm font-medium truncate text-sidebar-foreground" data-testid="text-user-name">
               {user?.firstName} {user?.lastName}
             </p>
-            <p className="text-xs truncate text-sidebar-foreground/60" data-testid="text-user-email">
+            <p className="text-xs truncate text-sidebar-foreground/50" data-testid="text-user-email">
               {user?.email}
             </p>
           </div>
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={() => logout()}
-            className="text-sidebar-foreground/70"
-            data-testid="button-logout"
-          >
-            <LogOut className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-0.5">
+            <ThemeToggle />
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={() => logout()}
+              className="text-sidebar-foreground/60"
+              data-testid="button-logout"
+            >
+              <LogOut className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       </SidebarFooter>
     </Sidebar>

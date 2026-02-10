@@ -69,7 +69,7 @@ export default function ProjectsPage() {
       address: "",
       latitude: null as number | null,
       longitude: null as number | null,
-      color: "#3B82F6",
+      color: "#E97316",
     },
   });
 
@@ -136,7 +136,7 @@ export default function ProjectsPage() {
         <h1 className="text-2xl font-bold tracking-tight" data-testid="text-projects-title">Projects</h1>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
-            <Button className="bg-green-600 hover:bg-green-700 text-white border-green-700" data-testid="button-new-project">
+            <Button data-testid="button-new-project">
               <Plus className="h-4 w-4 mr-2" />
               Create
             </Button>
