@@ -132,6 +132,12 @@ export function AddressAutocomplete({
     onTextChangeRef.current(text);
   };
 
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+    }
+  };
+
   const showFallback = configError || scriptError;
 
   return (
@@ -141,6 +147,7 @@ export function AddressAutocomplete({
         ref={inputRef}
         value={internalValue}
         onChange={handleInputChange}
+        onKeyDown={handleKeyDown}
         placeholder={showFallback ? "Enter address manually" : placeholder}
         className="pl-10"
         data-testid={testId}
