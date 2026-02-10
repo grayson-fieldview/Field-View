@@ -74,6 +74,7 @@ import {
   Grid3X3,
   Grid2X2,
   Square,
+  Calendar,
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { LayoutTemplate } from "lucide-react";
@@ -636,30 +637,27 @@ export default function ProjectDetailPage({ id }: { id: string }) {
 
         <div className="px-4 sm:px-6 pb-4">
           <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="flex items-center gap-3 min-w-0">
-              <div
-                className="h-11 w-11 rounded-md flex items-center justify-center shrink-0 text-white font-bold text-lg"
-                style={{ backgroundColor: project.color || "#F09000" }}
-                data-testid="project-color-icon"
-              >
-                {project.name.charAt(0).toUpperCase()}
-              </div>
-              <div className="min-w-0">
-                <h1 className="text-xl sm:text-2xl font-bold tracking-tight truncate" data-testid="text-project-name">
-                  {project.name}
-                </h1>
+            <div className="min-w-0">
+              <h1 className="text-xl sm:text-2xl font-bold tracking-tight truncate" data-testid="text-project-name">
+                {project.name}
+              </h1>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1">
                 {project.address && (
                   <a
                     href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(project.address)}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-sm text-muted-foreground hover:text-primary flex items-center gap-1 mt-0.5 transition-colors"
+                    className="text-sm text-muted-foreground hover:text-primary flex items-center gap-1 transition-colors"
                     data-testid="link-project-address"
                   >
                     <MapPin className="h-3 w-3 shrink-0" />
-                    <span className="truncate underline-offset-2 hover:underline">{project.address}</span>
+                    <span className="underline-offset-2 hover:underline">{project.address}</span>
                   </a>
                 )}
+                <span className="text-sm text-muted-foreground flex items-center gap-1" data-testid="text-project-created">
+                  <Calendar className="h-3 w-3 shrink-0" />
+                  Created {new Date(project.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                </span>
               </div>
             </div>
 
@@ -1464,12 +1462,13 @@ export default function ProjectDetailPage({ id }: { id: string }) {
             </div>
           ) : (
             <div className="space-y-4">
-              <div className="flex items-center gap-2 p-2 rounded-md border bg-muted/50">
+              <div className="flex items-center gap-2 p-2 rounded-md border bg-muted/50 min-w-0 overflow-hidden">
                 <Link2 className="h-4 w-4 text-muted-foreground shrink-0" />
-                <span className="text-sm truncate flex-1" data-testid="text-share-link">{shareLink}</span>
+                <span className="text-sm truncate min-w-0 flex-1" data-testid="text-share-link">{shareLink}</span>
                 <Button
                   variant="outline"
                   size="sm"
+                  className="shrink-0"
                   onClick={handleCopyLink}
                   data-testid="button-copy-link"
                 >
