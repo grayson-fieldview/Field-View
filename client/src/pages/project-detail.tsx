@@ -935,7 +935,25 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                   {groupedMedia.map(([date, items]) => (
                     <div key={date}>
                       <div className="flex items-center gap-2 mb-3">
-                        <input type="checkbox" className="h-4 w-4 rounded border-muted-foreground/30" />
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-muted-foreground/30"
+                          checked={items.every(item => selectedIds.has(item.id))}
+                          onChange={() => {
+                            const allSelected = items.every(item => selectedIds.has(item.id));
+                            setSelectedIds(prev => {
+                              const next = new Set(prev);
+                              if (allSelected) {
+                                items.forEach(item => next.delete(item.id));
+                              } else {
+                                items.forEach(item => next.add(item.id));
+                              }
+                              return next;
+                            });
+                            if (!selectionMode) setSelectionMode(true);
+                          }}
+                          data-testid={`checkbox-date-group-${date}`}
+                        />
                         <h3 className="text-sm font-semibold" data-testid={`text-date-group-${date}`}>{date}</h3>
                       </div>
                       <div className={`grid gap-3 ${photoSize === "small" ? "grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8" : photoSize === "large" ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3" : "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6"}`}>
