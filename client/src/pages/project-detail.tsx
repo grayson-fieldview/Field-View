@@ -57,6 +57,7 @@ import {
   ChevronLeft,
   Star,
   Share2,
+  SplitSquareHorizontal,
   MoreHorizontal,
   PlusCircle,
   Tags,
@@ -128,7 +129,91 @@ const reportTypeLabels: Record<string, string> = {
   daily: "Daily",
 };
 
-type DetailTab = "photos" | "tasks" | "files" | "checklists" | "reports";
+type DetailTab = "photos" | "tasks" | "files" | "checklists" | "reports" | "daily-log";
+
+function BeforeAfterSlider({
+  beforeUrl,
+  afterUrl,
+  beforeLabel,
+  afterLabel,
+}: {
+  beforeUrl: string;
+  afterUrl: string;
+  beforeLabel: string;
+  afterLabel: string;
+}) {
+  const [sliderPos, setSliderPos] = useState(50);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const isDragging = useRef(false);
+
+  const handleMove = useCallback((clientX: number) => {
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const x = Math.max(0, Math.min(clientX - rect.left, rect.width));
+    setSliderPos((x / rect.width) * 100);
+  }, []);
+
+  const handleMouseDown = useCallback(() => {
+    isDragging.current = true;
+  }, []);
+
+  const handleMouseUp = useCallback(() => {
+    isDragging.current = false;
+  }, []);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (isDragging.current) handleMove(e.clientX);
+  }, [handleMove]);
+
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    handleMove(e.touches[0].clientX);
+  }, [handleMove]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="relative w-full aspect-[4/3] rounded-md overflow-hidden cursor-col-resize select-none bg-muted"
+      onMouseDown={handleMouseDown}
+      onMouseUp={handleMouseUp}
+      onMouseLeave={handleMouseUp}
+      onMouseMove={handleMouseMove}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleMouseUp}
+      onClick={(e) => handleMove(e.clientX)}
+      data-testid="before-after-slider"
+    >
+      <img src={afterUrl} alt="After" className="absolute inset-0 w-full h-full object-cover" />
+      <div
+        className="absolute inset-0 overflow-hidden"
+        style={{ width: `${sliderPos}%` }}
+      >
+        <img
+          src={beforeUrl}
+          alt="Before"
+          className="absolute top-0 left-0 h-full object-cover"
+          style={{ width: `${100 / (sliderPos / 100)}%`, maxWidth: "none" }}
+        />
+      </div>
+      <div
+        className="absolute top-0 bottom-0 w-0.5 bg-white shadow-lg z-10"
+        style={{ left: `${sliderPos}%` }}
+      >
+        <div className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-8 h-8 rounded-full bg-white shadow-md flex items-center justify-center">
+          <div className="flex items-center gap-0.5 text-muted-foreground">
+            <ChevronLeft className="h-3 w-3" />
+            <ChevronLeft className="h-3 w-3 rotate-180" />
+          </div>
+        </div>
+      </div>
+      <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-black/50 text-white text-xs font-medium z-10">
+        {beforeLabel}
+      </div>
+      <div className="absolute top-2 right-2 px-2 py-0.5 rounded-md bg-black/50 text-white text-xs font-medium z-10">
+        {afterLabel}
+      </div>
+    </div>
+  );
+}
 
 export default function ProjectDetailPage({ id }: { id: string }) {
   const [, navigate] = useLocation();
@@ -153,6 +238,9 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const [shareIncludeDescriptions, setShareIncludeDescriptions] = useState(false);
   const [shareLink, setShareLink] = useState("");
   const [linkCopied, setLinkCopied] = useState(false);
+  const [compareMode, setCompareMode] = useState(false);
+  const [comparePhotos, setComparePhotos] = useState<[number | null, number | null]>([null, null]);
+  const [showCompareDialog, setShowCompareDialog] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data, isLoading } = useQuery<ProjectDetailData>({
@@ -485,6 +573,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     { key: "checklists", label: "Checklists", count: projectChecklists.length },
     { key: "reports", label: "Reports", count: projectReports.length },
     { key: "files", label: "Files", count: 0 },
+    { key: "daily-log", label: "Daily Log", count: 0 },
   ];
 
   return (
@@ -604,6 +693,40 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                 </div>
               )}
 
+              {compareMode && (
+                <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-md bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Button variant="ghost" size="icon" onClick={() => { setCompareMode(false); setComparePhotos([null, null]); }} data-testid="button-exit-compare">
+                      <X className="h-4 w-4" />
+                    </Button>
+                    <SplitSquareHorizontal className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                    <span className="text-sm font-medium">
+                      {comparePhotos[0] === null
+                        ? "Select the BEFORE photo"
+                        : comparePhotos[1] === null
+                          ? "Now select the AFTER photo"
+                          : "Ready to compare"}
+                    </span>
+                    {comparePhotos[0] !== null && (
+                      <Badge variant="secondary">
+                        {comparePhotos[1] !== null ? "2" : "1"} of 2 selected
+                      </Badge>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {comparePhotos[0] !== null && comparePhotos[1] !== null && (
+                      <Button
+                        onClick={() => setShowCompareDialog(true)}
+                        data-testid="button-open-compare"
+                      >
+                        <SplitSquareHorizontal className="h-4 w-4 mr-2" />
+                        View Comparison
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              )}
+
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <Button variant="outline" size="sm" data-testid="button-filter-start-date">
@@ -620,6 +743,19 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                   </Button>
                 </div>
                 <div className="flex items-center gap-2">
+                  {!selectionMode && !compareMode && projectMedia.length >= 2 && (
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setCompareMode(true);
+                        setComparePhotos([null, null]);
+                      }}
+                      data-testid="button-enter-compare"
+                    >
+                      <SplitSquareHorizontal className="h-4 w-4 mr-2" />
+                      Compare
+                    </Button>
+                  )}
                   {!selectionMode && projectMedia.length > 0 && (
                     <Button
                       variant="outline"
@@ -680,7 +816,13 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                               key={item.id}
                               className="cursor-pointer group"
                               onClick={() => {
-                                if (selectionMode) {
+                                if (compareMode) {
+                                  if (comparePhotos[0] === null) {
+                                    setComparePhotos([item.id, null]);
+                                  } else if (comparePhotos[1] === null && item.id !== comparePhotos[0]) {
+                                    setComparePhotos([comparePhotos[0], item.id]);
+                                  }
+                                } else if (selectionMode) {
                                   toggleSelection(item.id);
                                 } else {
                                   setSelectedMedia(item);
@@ -688,7 +830,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                               }}
                               data-testid={`card-media-${item.id}`}
                             >
-                              <div className={`aspect-[4/3] rounded-md overflow-hidden bg-muted relative ${selectionMode && isSelected ? "ring-2 ring-primary ring-offset-2" : ""}`}>
+                              <div className={`aspect-[4/3] rounded-md overflow-hidden bg-muted relative ${selectionMode && isSelected ? "ring-2 ring-primary ring-offset-2" : ""} ${compareMode && (comparePhotos[0] === item.id || comparePhotos[1] === item.id) ? "ring-2 ring-blue-500 ring-offset-2" : ""}`}>
                                 <img
                                   src={item.url}
                                   alt={item.caption || item.originalName}
@@ -699,6 +841,16 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                                     <div className={`h-6 w-6 rounded-md border-2 flex items-center justify-center transition-colors ${isSelected ? "bg-primary border-primary" : "bg-black/30 border-white/70"}`} data-testid={`checkbox-media-${item.id}`}>
                                       {isSelected && <Check className="h-4 w-4 text-primary-foreground" />}
                                     </div>
+                                  </div>
+                                )}
+                                {compareMode && comparePhotos[0] === item.id && (
+                                  <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-blue-600 text-white text-xs font-semibold">
+                                    Before
+                                  </div>
+                                )}
+                                {compareMode && comparePhotos[1] === item.id && (
+                                  <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-blue-600 text-white text-xs font-semibold">
+                                    After
                                   </div>
                                 )}
                                 {item.uploadedBy && !selectionMode && (
@@ -1096,6 +1248,10 @@ export default function ProjectDetailPage({ id }: { id: string }) {
               </Card>
             </div>
           )}
+
+          {activeTab === "daily-log" && (
+            <DailyLogTab projectId={id} />
+          )}
         </div>
 
         <div className="w-full lg:w-80 xl:w-96 shrink-0 border-l bg-card/50 overflow-y-auto hidden lg:block" data-testid="project-sidebar">
@@ -1430,6 +1586,260 @@ export default function ProjectDetailPage({ id }: { id: string }) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={showCompareDialog} onOpenChange={setShowCompareDialog}>
+        <DialogContent className="sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <SplitSquareHorizontal className="h-5 w-5" />
+              Before / After Comparison
+            </DialogTitle>
+            <DialogDescription>
+              Drag the slider to compare the two photos
+            </DialogDescription>
+          </DialogHeader>
+          {comparePhotos[0] !== null && comparePhotos[1] !== null && (() => {
+            const beforePhoto = projectMedia.find((m) => m.id === comparePhotos[0]);
+            const afterPhoto = projectMedia.find((m) => m.id === comparePhotos[1]);
+            if (!beforePhoto || !afterPhoto) return null;
+            return (
+              <div className="space-y-4">
+                <BeforeAfterSlider
+                  beforeUrl={beforePhoto.url}
+                  afterUrl={afterPhoto.url}
+                  beforeLabel={`Before - ${new Date(beforePhoto.createdAt).toLocaleDateString()}`}
+                  afterLabel={`After - ${new Date(afterPhoto.createdAt).toLocaleDateString()}`}
+                />
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div className="space-y-1">
+                    <p className="font-medium">Before</p>
+                    <p className="text-muted-foreground">{beforePhoto.caption || beforePhoto.originalName}</p>
+                    <p className="text-xs text-muted-foreground">{new Date(beforePhoto.createdAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}</p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="font-medium">After</p>
+                    <p className="text-muted-foreground">{afterPhoto.caption || afterPhoto.originalName}</p>
+                    <p className="text-xs text-muted-foreground">{new Date(afterPhoto.createdAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}</p>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+interface DailyLogData {
+  date: string;
+  project: { id: number; name: string; address: string | null };
+  summary: {
+    photosUploaded: number;
+    tasksCompleted: number;
+    tasksInProgress: number;
+    tasksCreated: number;
+    commentsAdded: number;
+    activeTeamMembers: number;
+    teamMembers: string[];
+  };
+  photos: { id: number; url: string; caption: string | null; originalName: string; uploadedBy: string; time: string }[];
+  tasks: { id: number; title: string; status: string; priority: string; assignedTo: string | null }[];
+  comments: { id: number; content: string; by: string; time: string }[];
+}
+
+function DailyLogTab({ projectId }: { projectId: string }) {
+  const [logDate, setLogDate] = useState(new Date().toISOString().split("T")[0]);
+
+  const { data: log, isLoading } = useQuery<DailyLogData>({
+    queryKey: ["/api/projects", projectId, "daily-log", logDate],
+    queryFn: async () => {
+      const res = await fetch(`/api/projects/${projectId}/daily-log?date=${logDate}`);
+      if (!res.ok) throw new Error("Failed to fetch daily log");
+      return res.json();
+    },
+  });
+
+  const goDay = (offset: number) => {
+    const d = new Date(logDate);
+    d.setDate(d.getDate() + offset);
+    setLogDate(d.toISOString().split("T")[0]);
+  };
+
+  const formattedDate = new Date(logDate + "T12:00:00").toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+
+  const isToday = logDate === new Date().toISOString().split("T")[0];
+
+  const taskStatusLabel: Record<string, string> = { todo: "To Do", in_progress: "In Progress", done: "Done" };
+  const taskPriorityBadge: Record<string, string> = {
+    low: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
+    medium: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
+    high: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+  };
+
+  if (isLoading) {
+    return (
+      <div className="px-4 sm:px-6 py-4 space-y-4">
+        <Skeleton className="h-10 w-72" />
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-20" />)}
+        </div>
+        <Skeleton className="h-48" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="px-4 sm:px-6 py-4 space-y-6" data-testid="daily-log-tab">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="icon" onClick={() => goDay(-1)} data-testid="button-prev-day">
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          <div className="text-center min-w-[180px]">
+            <p className="text-sm font-semibold" data-testid="text-daily-log-date">{formattedDate}</p>
+            {isToday && <p className="text-xs text-primary font-medium">Today</p>}
+          </div>
+          <Button variant="outline" size="icon" onClick={() => goDay(1)} disabled={isToday} data-testid="button-next-day">
+            <ChevronLeft className="h-4 w-4 rotate-180" />
+          </Button>
+        </div>
+        <Input
+          type="date"
+          value={logDate}
+          onChange={(e) => setLogDate(e.target.value)}
+          className="w-[160px]"
+          data-testid="input-daily-log-date"
+        />
+      </div>
+
+      {log && (
+        <>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            <Card className="p-3 text-center" data-testid="stat-photos-uploaded">
+              <p className="text-xl font-bold">{log.summary.photosUploaded}</p>
+              <p className="text-xs text-muted-foreground">Photos</p>
+            </Card>
+            <Card className="p-3 text-center" data-testid="stat-tasks-completed">
+              <p className="text-xl font-bold text-green-600 dark:text-green-400">{log.summary.tasksCompleted}</p>
+              <p className="text-xs text-muted-foreground">Completed</p>
+            </Card>
+            <Card className="p-3 text-center" data-testid="stat-tasks-in-progress">
+              <p className="text-xl font-bold text-amber-600 dark:text-amber-400">{log.summary.tasksInProgress}</p>
+              <p className="text-xs text-muted-foreground">In Progress</p>
+            </Card>
+            <Card className="p-3 text-center" data-testid="stat-tasks-created">
+              <p className="text-xl font-bold">{log.summary.tasksCreated}</p>
+              <p className="text-xs text-muted-foreground">New Tasks</p>
+            </Card>
+            <Card className="p-3 text-center" data-testid="stat-comments-added">
+              <p className="text-xl font-bold">{log.summary.commentsAdded}</p>
+              <p className="text-xs text-muted-foreground">Comments</p>
+            </Card>
+            <Card className="p-3 text-center" data-testid="stat-team-members">
+              <p className="text-xl font-bold">{log.summary.activeTeamMembers}</p>
+              <p className="text-xs text-muted-foreground">Team Active</p>
+            </Card>
+          </div>
+
+          {log.summary.teamMembers.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground font-medium">Active team:</span>
+              {log.summary.teamMembers.map((name) => (
+                <Badge key={name} variant="secondary">{name}</Badge>
+              ))}
+            </div>
+          )}
+
+          {log.photos.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-semibold flex items-center gap-2">
+                <ImageIcon className="h-4 w-4 text-primary" />
+                Photos Uploaded ({log.photos.length})
+              </h3>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                {log.photos.map((photo) => (
+                  <div key={photo.id} className="space-y-1">
+                    <div className="aspect-[4/3] rounded-md overflow-hidden bg-muted">
+                      <img src={photo.url} alt={photo.caption || photo.originalName} className="w-full h-full object-cover" />
+                    </div>
+                    <div className="flex items-center justify-between gap-1">
+                      <p className="text-xs text-muted-foreground truncate">{photo.uploadedBy}</p>
+                      <p className="text-xs text-muted-foreground shrink-0">{photo.time}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {log.tasks.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-semibold flex items-center gap-2">
+                <ClipboardList className="h-4 w-4 text-primary" />
+                Task Activity ({log.tasks.length})
+              </h3>
+              <div className="space-y-2">
+                {log.tasks.map((task) => (
+                  <Card key={task.id} className="p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-sm truncate">{task.title}</span>
+                        <Badge variant="outline" className={taskPriorityBadge[task.priority] || ""}>
+                          {task.priority}
+                        </Badge>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {task.assignedTo && <span className="text-xs text-muted-foreground">{task.assignedTo}</span>}
+                        <Badge variant="secondary">{taskStatusLabel[task.status] || task.status}</Badge>
+                      </div>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {log.comments.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-semibold flex items-center gap-2">
+                <MessageSquare className="h-4 w-4 text-primary" />
+                Comments ({log.comments.length})
+              </h3>
+              <div className="space-y-2">
+                {log.comments.map((comment) => (
+                  <Card key={comment.id} className="p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium">{comment.by}</p>
+                        <p className="text-sm text-muted-foreground mt-0.5">{comment.content}</p>
+                      </div>
+                      <span className="text-xs text-muted-foreground shrink-0">{comment.time}</span>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {log.photos.length === 0 && log.tasks.length === 0 && log.comments.length === 0 && (
+            <Card className="p-8">
+              <div className="text-center space-y-2">
+                <div className="flex h-10 w-10 items-center justify-center rounded-md bg-muted mx-auto">
+                  <FileText className="h-5 w-5 text-muted-foreground" />
+                </div>
+                <h3 className="text-base font-semibold">No activity</h3>
+                <p className="text-sm text-muted-foreground">No photos, tasks, or comments were recorded on this day.</p>
+              </div>
+            </Card>
+          )}
+        </>
+      )}
     </div>
   );
 }

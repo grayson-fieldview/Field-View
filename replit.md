@@ -59,6 +59,8 @@ Field View is a photo documentation and project management tool designed for fie
 - `POST /api/galleries` - Create shareable gallery
 - `GET /api/galleries/:token` - Get public gallery by token
 - `GET /api/analytics?from=&to=` - Aggregated analytics (photos by user/project/day, task status, locations, counts)
+- `GET /api/activity?limit=` - Activity feed (recent photos, tasks, comments merged and sorted)
+- `GET /api/projects/:id/daily-log?date=` - Daily log for a project (photos, tasks, comments for a specific day)
 - Auth: `/api/login`, `/api/logout`, `/api/auth/user`
 
 ## Key Features
@@ -68,6 +70,9 @@ Field View is a photo documentation and project management tool designed for fie
 - Gallery sharing: Generate shareable photo gallery links with configurable metadata
 - Address autocomplete: Google Places API integration (Enter key blocked to prevent accidental form submission)
 - Analytics dashboard: 7 stat cards, bar chart (photos by user), line chart (photos over time), map (photo locations), bar chart (photos by project), pie chart (task status), time period filtering (7d/30d/90d/365d/all/custom)
+- Command Center Dashboard: KPI strip (active projects, total photos, open tasks), real-time activity feed, recent photos grid, quick actions, project list with search/filter
+- Before/After Photo Comparison: Drag slider to compare two project photos side-by-side (select before + after, view comparison in dialog)
+- Daily Log: Auto-generated daily activity summary per project with stats, photos, tasks, and comments for any date
 
 ## Google Maps Integration
 - Address autocomplete uses Google Places API via `AddressAutocomplete` component
@@ -77,8 +82,8 @@ Field View is a photo documentation and project management tool designed for fie
 
 ## Pages
 1. **Landing** - Procore-inspired marketing page with warm cream hero, charcoal CTA section
-2. **Projects Dashboard** - List, search, filter projects with stats
-3. **Project Detail** - Photos tab + Tasks tab + Checklists + Reports with upload and management
+2. **Dashboard (Home)** - Command center with KPI strip, activity feed, recent photos, quick actions, and project list with search/filter
+3. **Project Detail** - Photos tab (with before/after compare) + Tasks tab + Checklists + Reports + Daily Log with upload and management
 4. **Photos** - Global gallery with search and project filtering
 5. **Map** - Leaflet map with project location markers
 6. **Team** - Team member directory

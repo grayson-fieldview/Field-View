@@ -11,6 +11,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { Skeleton } from "@/components/ui/skeleton";
 import NotFound from "@/pages/not-found";
 import LandingPage from "@/pages/landing";
+import DashboardPage from "@/pages/dashboard";
 import ProjectsPage from "@/pages/projects";
 import ProjectDetailPage from "@/pages/project-detail";
 import PhotosPage from "@/pages/photos";
@@ -35,7 +36,7 @@ function AuthenticatedLayout() {
         <div className="flex flex-col flex-1 min-w-0">
           <main className="flex-1 overflow-auto">
             <Switch>
-              <Route path="/" component={ProjectsPage} />
+              <Route path="/" component={DashboardPage} />
               <Route path="/projects/:id">
                 {(params) => <ProjectDetailPage id={params.id} />}
               </Route>

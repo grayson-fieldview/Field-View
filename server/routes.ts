@@ -9,7 +9,7 @@ import fs from "fs";
 import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertReportSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertReportTemplateSchema, projects, media, comments, tasks, checklists, reports } from "@shared/schema";
 import { users } from "@shared/models/auth";
 import { db } from "./db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 const uploadDir = path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadDir)) {
@@ -574,6 +574,254 @@ export async function registerRoutes(
       });
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch gallery" });
+    }
+  });
+
+  app.get("/api/activity", isAuthenticated, async (req, res) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
+
+      const recentMedia = await db
+        .select({
+          id: media.id,
+          url: media.url,
+          caption: media.caption,
+          originalName: media.originalName,
+          projectId: media.projectId,
+          createdAt: media.createdAt,
+          uploaderFirst: users.firstName,
+          uploaderLast: users.lastName,
+          uploaderImage: users.profileImageUrl,
+          projectName: projects.name,
+        })
+        .from(media)
+        .leftJoin(users, eq(media.uploadedById, users.id))
+        .leftJoin(projects, eq(media.projectId, projects.id))
+        .orderBy(sql`${media.createdAt} DESC`)
+        .limit(limit);
+
+      const recentTasks = await db
+        .select({
+          id: tasks.id,
+          title: tasks.title,
+          status: tasks.status,
+          priority: tasks.priority,
+          projectId: tasks.projectId,
+          createdAt: tasks.createdAt,
+          updatedAt: tasks.updatedAt,
+          creatorFirst: users.firstName,
+          creatorLast: users.lastName,
+          creatorImage: users.profileImageUrl,
+          projectName: projects.name,
+        })
+        .from(tasks)
+        .leftJoin(users, eq(tasks.createdById, users.id))
+        .leftJoin(projects, eq(tasks.projectId, projects.id))
+        .orderBy(sql`${tasks.updatedAt} DESC`)
+        .limit(limit);
+
+      const recentComments = await db
+        .select({
+          id: comments.id,
+          content: comments.content,
+          mediaId: comments.mediaId,
+          createdAt: comments.createdAt,
+          userFirst: users.firstName,
+          userLast: users.lastName,
+          userImage: users.profileImageUrl,
+        })
+        .from(comments)
+        .leftJoin(users, eq(comments.userId, users.id))
+        .orderBy(sql`${comments.createdAt} DESC`)
+        .limit(limit);
+
+      type ActivityItem = {
+        type: "photo" | "task" | "comment";
+        id: number;
+        timestamp: string;
+        userName: string;
+        userImage: string | null;
+        projectName: string | null;
+        projectId: number | null;
+        detail: string;
+        extra?: Record<string, unknown>;
+      };
+
+      const activities: ActivityItem[] = [];
+
+      for (const m of recentMedia) {
+        activities.push({
+          type: "photo",
+          id: m.id,
+          timestamp: new Date(m.createdAt).toISOString(),
+          userName: [m.uploaderFirst, m.uploaderLast].filter(Boolean).join(" ") || "Unknown",
+          userImage: m.uploaderImage,
+          projectName: m.projectName,
+          projectId: m.projectId,
+          detail: m.caption || m.originalName,
+          extra: { url: m.url },
+        });
+      }
+
+      for (const t of recentTasks) {
+        activities.push({
+          type: "task",
+          id: t.id,
+          timestamp: new Date(t.updatedAt).toISOString(),
+          userName: [t.creatorFirst, t.creatorLast].filter(Boolean).join(" ") || "Unknown",
+          userImage: t.creatorImage,
+          projectName: t.projectName,
+          projectId: t.projectId,
+          detail: t.title,
+          extra: { status: t.status, priority: t.priority },
+        });
+      }
+
+      for (const c of recentComments) {
+        activities.push({
+          type: "comment",
+          id: c.id,
+          timestamp: new Date(c.createdAt).toISOString(),
+          userName: [c.userFirst, c.userLast].filter(Boolean).join(" ") || "Unknown",
+          userImage: c.userImage,
+          projectName: null,
+          projectId: null,
+          detail: c.content,
+          extra: { mediaId: c.mediaId },
+        });
+      }
+
+      activities.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+      const activeProjectCount = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(projects)
+        .where(eq(projects.status, "active"));
+      const weekAgo = new Date(Date.now() - 7 * 86400000);
+      const allMediaThisWeek = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(media);
+      const openTaskCount = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(tasks)
+        .where(sql`${tasks.status} != 'done'`);
+      const totalMediaCount = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(media);
+
+      res.json({
+        activities: activities.slice(0, limit),
+        stats: {
+          activeProjects: Number(activeProjectCount[0]?.count || 0),
+          totalPhotos: Number(totalMediaCount[0]?.count || 0),
+          openTasks: Number(openTaskCount[0]?.count || 0),
+        },
+      });
+    } catch (error) {
+      console.error("Activity feed error:", error);
+      res.status(500).json({ message: "Failed to fetch activity" });
+    }
+  });
+
+  app.get("/api/projects/:id/daily-log", isAuthenticated, async (req, res) => {
+    try {
+      const projectId = parseInt(req.params.id);
+      const dateStr = (req.query.date as string) || new Date().toISOString().split("T")[0];
+      const dayStart = new Date(dateStr + "T00:00:00.000Z");
+      const dayEnd = new Date(dateStr + "T23:59:59.999Z");
+
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+
+      const dayMedia = await db
+        .select({
+          id: media.id,
+          url: media.url,
+          caption: media.caption,
+          originalName: media.originalName,
+          createdAt: media.createdAt,
+          uploaderFirst: users.firstName,
+          uploaderLast: users.lastName,
+        })
+        .from(media)
+        .leftJoin(users, eq(media.uploadedById, users.id))
+        .where(sql`${media.projectId} = ${projectId} AND ${media.createdAt} >= ${dayStart} AND ${media.createdAt} <= ${dayEnd}`)
+        .orderBy(sql`${media.createdAt} ASC`);
+
+      const dayTasks = await db
+        .select({
+          id: tasks.id,
+          title: tasks.title,
+          status: tasks.status,
+          priority: tasks.priority,
+          updatedAt: tasks.updatedAt,
+          assigneeFirst: users.firstName,
+          assigneeLast: users.lastName,
+        })
+        .from(tasks)
+        .leftJoin(users, eq(tasks.assignedToId, users.id))
+        .where(sql`${tasks.projectId} = ${projectId} AND (${tasks.createdAt} >= ${dayStart} AND ${tasks.createdAt} <= ${dayEnd} OR ${tasks.updatedAt} >= ${dayStart} AND ${tasks.updatedAt} <= ${dayEnd})`);
+
+      const dayComments = await db
+        .select({
+          id: comments.id,
+          content: comments.content,
+          createdAt: comments.createdAt,
+          userFirst: users.firstName,
+          userLast: users.lastName,
+        })
+        .from(comments)
+        .leftJoin(users, eq(comments.userId, users.id))
+        .leftJoin(media, eq(comments.mediaId, media.id))
+        .where(sql`${media.projectId} = ${projectId} AND ${comments.createdAt} >= ${dayStart} AND ${comments.createdAt} <= ${dayEnd}`)
+        .orderBy(sql`${comments.createdAt} ASC`);
+
+      const uniqueUsers = new Set<string>();
+      dayMedia.forEach((m) => { if (m.uploaderFirst) uniqueUsers.add([m.uploaderFirst, m.uploaderLast].filter(Boolean).join(" ")); });
+      dayTasks.forEach((t) => { if (t.assigneeFirst) uniqueUsers.add([t.assigneeFirst, t.assigneeLast].filter(Boolean).join(" ")); });
+      dayComments.forEach((c) => { if (c.userFirst) uniqueUsers.add([c.userFirst, c.userLast].filter(Boolean).join(" ")); });
+
+      const completedTasks = dayTasks.filter((t) => t.status === "done");
+      const inProgressTasks = dayTasks.filter((t) => t.status === "in_progress");
+      const newTasks = dayTasks.filter((t) => t.status === "todo");
+
+      res.json({
+        date: dateStr,
+        project: { id: project.id, name: project.name, address: project.address },
+        summary: {
+          photosUploaded: dayMedia.length,
+          tasksCompleted: completedTasks.length,
+          tasksInProgress: inProgressTasks.length,
+          tasksCreated: newTasks.length,
+          commentsAdded: dayComments.length,
+          activeTeamMembers: uniqueUsers.size,
+          teamMembers: Array.from(uniqueUsers),
+        },
+        photos: dayMedia.map((m) => ({
+          id: m.id,
+          url: m.url,
+          caption: m.caption,
+          originalName: m.originalName,
+          uploadedBy: [m.uploaderFirst, m.uploaderLast].filter(Boolean).join(" "),
+          time: new Date(m.createdAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }),
+        })),
+        tasks: dayTasks.map((t) => ({
+          id: t.id,
+          title: t.title,
+          status: t.status,
+          priority: t.priority,
+          assignedTo: [t.assigneeFirst, t.assigneeLast].filter(Boolean).join(" ") || null,
+        })),
+        comments: dayComments.map((c) => ({
+          id: c.id,
+          content: c.content,
+          by: [c.userFirst, c.userLast].filter(Boolean).join(" "),
+          time: new Date(c.createdAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }),
+        })),
+      });
+    } catch (error) {
+      console.error("Daily log error:", error);
+      res.status(500).json({ message: "Failed to fetch daily log" });
     }
   });
 
