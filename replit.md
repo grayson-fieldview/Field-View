@@ -1,14 +1,15 @@
-# SiteSnap - Jobsite Photo Documentation & Project Management
+# Field View - Jobsite Photo Documentation & Project Management
 
 ## Overview
-SiteSnap is a photo documentation and project management tool designed for field service teams (construction crews, inspectors, maintenance workers). It allows users to capture, organize, and share photos from job sites, track project progress, collaborate with team members, and manage tasks.
+Field View is a photo documentation and project management tool designed for field service teams (construction crews, inspectors, maintenance workers). It allows users to capture, organize, and share photos from job sites, track project progress, collaborate with team members, and manage tasks.
 
 ## Brand & Design
-- **Name**: SiteSnap
-- **Icon**: Aperture (lucide-react)
-- **Color Scheme**: Warm amber/orange primary (#E97316), dark slate sidebar, warm off-white backgrounds
+- **Name**: Field View
+- **Icon**: Eye (lucide-react)
+- **Color Scheme**: Orange primary (#F09000), green accents (#267D32), charcoal sidebar (#1E1E1E), warm cream backgrounds (#F0EDEA)
+- **Design Inspiration**: Procore-style clean, professional construction management aesthetic
 - **Fonts**: Inter (sans), DM Serif Display (serif headings)
-- **Design Style**: Clean, warm, modern - distinct from competitor products
+- **Design Style**: Clean, professional, enterprise-grade construction industry look
 
 ## Tech Stack
 - **Frontend**: React 18 with TypeScript, Tailwind CSS, shadcn/ui components
@@ -73,7 +74,7 @@ SiteSnap is a photo documentation and project management tool designed for field
 - Project creation form shows only Name, Description, and Address fields
 
 ## Pages
-1. **Landing** - Marketing page for unauthenticated users
+1. **Landing** - Procore-inspired marketing page with warm cream hero, charcoal CTA section
 2. **Projects Dashboard** - List, search, filter projects with stats
 3. **Project Detail** - Photos tab + Tasks tab + Checklists + Reports with upload and management
 4. **Photos** - Global gallery with search and project filtering

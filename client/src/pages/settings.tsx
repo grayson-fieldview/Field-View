@@ -127,7 +127,7 @@ export default function SettingsPage() {
           <div className="flex items-center justify-between gap-4">
             <div>
               <p className="text-sm font-medium">Sign Out</p>
-              <p className="text-xs text-muted-foreground">Sign out of your SiteSnap account</p>
+              <p className="text-xs text-muted-foreground">Sign out of your Field View account</p>
             </div>
             <Button variant="outline" onClick={() => logout()} data-testid="button-settings-logout">
               <LogOut className="h-4 w-4 mr-2" />

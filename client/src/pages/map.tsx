@@ -72,7 +72,7 @@ export default function MapPage() {
       const lng = project.longitude!;
       bounds.push([lat, lng]);
 
-      const color = project.color || "#E97316";
+      const color = project.color || "#F09000";
       const icon = L.divIcon({
         className: "custom-marker",
         html: `<div style="background-color: ${color}; width: 32px; height: 32px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); border: 3px solid white; box-shadow: 0 2px 8px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center;"><div style="transform: rotate(45deg); color: white; font-size: 14px; font-weight: bold;">${project.name[0]}</div></div>`,
@@ -127,7 +127,7 @@ export default function MapPage() {
                 <div className="flex items-center gap-2 min-w-0">
                   <div
                     className="h-3 w-3 rounded-full shrink-0"
-                    style={{ backgroundColor: selectedProject.color || "#E97316" }}
+                    style={{ backgroundColor: selectedProject.color || "#F09000" }}
                   />
                   <h3 className="font-semibold truncate text-sm">{selectedProject.name}</h3>
                 </div>

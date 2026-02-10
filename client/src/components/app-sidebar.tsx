@@ -18,7 +18,7 @@ import {
   Users,
   Settings,
   LogOut,
-  Aperture,
+  Eye,
   ClipboardCheck,
   FileBarChart,
 } from "lucide-react";
@@ -50,9 +50,9 @@ export function AppSidebar() {
         <Link href="/" data-testid="link-home">
           <div className="flex items-center gap-2.5">
             <div className="flex h-8 w-8 items-center justify-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground">
-              <Aperture className="h-4 w-4" />
+              <Eye className="h-4 w-4" />
             </div>
-            <span className="text-base font-bold tracking-tight" data-testid="text-brand-name">SiteSnap</span>
+            <span className="text-base font-bold tracking-tight" data-testid="text-brand-name">Field View</span>
           </div>
         </Link>
       </SidebarHeader>

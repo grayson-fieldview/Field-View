@@ -69,7 +69,7 @@ export default function ProjectsPage() {
       address: "",
       latitude: null as number | null,
       longitude: null as number | null,
-      color: "#E97316",
+      color: "#F09000",
     },
   });
 
