@@ -12,6 +12,7 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
+  LayoutDashboard,
   FolderKanban,
   Camera,
   MapPin,
@@ -28,7 +29,8 @@ import { useAuth } from "@/hooks/use-auth";
 import { ThemeToggle } from "@/components/theme-toggle";
 
 const navItems = [
-  { title: "Projects", url: "/", icon: FolderKanban },
+  { title: "Dashboard", url: "/", icon: LayoutDashboard },
+  { title: "Projects", url: "/projects", icon: FolderKanban },
   { title: "Photos", url: "/photos", icon: Camera },
   { title: "Checklists", url: "/checklists", icon: ClipboardCheck },
   { title: "Reports", url: "/reports", icon: FileBarChart },

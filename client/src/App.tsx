@@ -37,6 +37,7 @@ function AuthenticatedLayout() {
           <main className="flex-1 overflow-auto">
             <Switch>
               <Route path="/" component={DashboardPage} />
+              <Route path="/projects" component={ProjectsPage} />
               <Route path="/projects/:id">
                 {(params) => <ProjectDetailPage id={params.id} />}
               </Route>

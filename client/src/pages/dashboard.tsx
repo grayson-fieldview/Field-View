@@ -11,7 +11,6 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -34,7 +33,6 @@ import {
   Camera,
   ClipboardList,
   MessageSquare,
-  Search,
   Plus,
   Image as ImageIcon,
   ArrowRight,
@@ -75,8 +73,6 @@ const createProjectSchema = insertProjectSchema.extend({
   name: z.string().min(1, "Project name is required"),
 });
 
-type FilterTab = "all" | "active" | "completed" | "archived";
-
 function relativeTime(dateStr: string): string {
   const now = Date.now();
   const then = new Date(dateStr).getTime();
@@ -91,10 +87,6 @@ function relativeTime(dateStr: string): string {
   if (diffDay < 30) return `${diffDay}d ago`;
   const diffMon = Math.floor(diffDay / 30);
   return `${diffMon}mo ago`;
-}
-
-function getInitials(firstName: string | null, lastName: string | null) {
-  return `${(firstName || "")[0] || ""}${(lastName || "")[0] || ""}`.toUpperCase() || "U";
 }
 
 function getInitialsFromName(name: string) {
@@ -113,8 +105,6 @@ export default function DashboardPage() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
 
-  const [search, setSearch] = useState("");
-  const [activeTab, setActiveTab] = useState<FilterTab>("all");
   const [dialogOpen, setDialogOpen] = useState(false);
 
   const { data: activityData, isLoading: activityLoading } = useQuery<ActivityResponse>({
@@ -175,26 +165,6 @@ export default function DashboardPage() {
   const stats = activityData?.stats;
   const activities = activityData?.activities || [];
   const recentPhotos = activities.filter((a) => a.type === "photo" && a.extra?.url).slice(0, 6);
-
-  const filtered = (projects || []).filter((p) => {
-    const matchesSearch = p.name.toLowerCase().includes(search.toLowerCase()) ||
-      (p.description || "").toLowerCase().includes(search.toLowerCase()) ||
-      (p.address || "").toLowerCase().includes(search.toLowerCase());
-    const matchesTab = activeTab === "all" || p.status === activeTab;
-    return matchesSearch && matchesTab;
-  });
-
-  const formatDate = (date: string | Date) => {
-    const d = new Date(date);
-    return `Last updated ${d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}, ${d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`;
-  };
-
-  const tabs: { key: FilterTab; label: string }[] = [
-    { key: "all", label: "All" },
-    { key: "active", label: "Active" },
-    { key: "completed", label: "Completed" },
-    { key: "archived", label: "Archived" },
-  ];
 
   const kpiItems = [
     { label: "Active Projects", value: stats?.activeProjects, icon: FolderKanban },
@@ -444,6 +414,15 @@ export default function DashboardPage() {
               <Button
                 className="w-full justify-start"
                 variant="outline"
+                onClick={() => navigate("/projects")}
+                data-testid="button-quick-view-projects"
+              >
+                <FolderKanban className="h-4 w-4 mr-2" />
+                View All Projects
+              </Button>
+              <Button
+                className="w-full justify-start"
+                variant="outline"
                 onClick={() => navigate("/photos")}
                 data-testid="button-quick-view-photos"
               >
@@ -455,154 +434,66 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div className="space-y-5">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <h2 className="text-xl font-bold tracking-tight" data-testid="text-projects-section-title">Projects</h2>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="relative flex-1 min-w-[200px] max-w-sm">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              type="search"
-              placeholder="Find a project..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="pl-10"
-              data-testid="input-search-projects"
-            />
-          </div>
-        </div>
-
-        <div className="flex items-center gap-1 flex-wrap">
-          {tabs.map((tab) => (
-            <button
-              key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
-              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                activeTab === tab.key
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover-elevate"
-              }`}
-              data-testid={`tab-filter-${tab.key}`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-
-        {projectsLoading ? (
-          <div className="space-y-3">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="flex items-center gap-4 p-4 border rounded-md">
-                <Skeleton className="h-16 w-16 rounded-md shrink-0" />
-                <div className="flex-1 space-y-2">
-                  <Skeleton className="h-5 w-48" />
-                  <Skeleton className="h-4 w-72" />
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-3">
+          <CardTitle className="text-lg">Recent Projects</CardTitle>
+          <Button variant="ghost" asChild data-testid="link-view-all-projects">
+            <Link href="/projects">
+              View All
+              <ArrowRight className="h-4 w-4 ml-1" />
+            </Link>
+          </Button>
+        </CardHeader>
+        <CardContent>
+          {projectsLoading ? (
+            <div className="space-y-3">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="flex items-center gap-3">
+                  <Skeleton className="h-10 w-10 rounded-md shrink-0" />
+                  <div className="flex-1 space-y-1.5">
+                    <Skeleton className="h-4 w-40" />
+                    <Skeleton className="h-3 w-24" />
+                  </div>
                 </div>
-                <div className="hidden md:flex gap-2">
-                  <Skeleton className="h-16 w-20 rounded-md" />
-                  <Skeleton className="h-16 w-20 rounded-md" />
-                  <Skeleton className="h-16 w-20 rounded-md" />
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="border rounded-md p-12">
-            <div className="text-center space-y-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-md bg-muted mx-auto">
-                <FolderKanban className="h-6 w-6 text-muted-foreground" />
-              </div>
-              <h3 className="text-lg font-semibold" data-testid="text-no-projects">No projects found</h3>
-              <p className="text-sm text-muted-foreground max-w-sm mx-auto">
-                {search || activeTab !== "all"
-                  ? "Try adjusting your search or filter criteria."
-                  : "Create your first project to start documenting your field work."}
-              </p>
+              ))}
             </div>
-          </div>
-        ) : (
-          <div className="space-y-1">
-            {filtered.map((project) => (
-              <div
-                key={project.id}
-                className="flex items-center gap-4 p-3 sm:p-4 border rounded-md cursor-pointer hover-elevate transition-all bg-card"
-                onClick={() => navigate(`/projects/${project.id}`)}
-                data-testid={`card-project-${project.id}`}
-              >
-                <div className="h-14 w-14 sm:h-16 sm:w-16 rounded-md overflow-hidden shrink-0 bg-muted flex items-center justify-center">
-                  {project.recentPhotos.length > 0 ? (
-                    <img
-                      src={project.recentPhotos[0].url}
-                      alt={project.name}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <ImageIcon className="h-6 w-6 text-muted-foreground" />
-                  )}
-                </div>
-
-                <div className="flex-1 min-w-0 space-y-0.5">
-                  <h3 className="font-semibold text-sm sm:text-base truncate" data-testid={`text-project-name-${project.id}`}>
-                    {project.name}
-                  </h3>
-                  <p className="text-xs sm:text-sm text-muted-foreground truncate">
-                    {project.address || "No address"}
-                  </p>
-                  <p className="text-xs text-muted-foreground/70">
-                    {formatDate(project.updatedAt)}
-                  </p>
-                </div>
-
-                <div className="hidden sm:flex items-center gap-6 shrink-0">
-                  <div className="text-center min-w-[50px]">
-                    <p className="text-xs text-muted-foreground">Photos</p>
-                    <p className="text-lg font-bold" data-testid={`text-photo-count-${project.id}`}>
-                      {project.photoCount}
-                    </p>
-                  </div>
-
-                  <div className="text-center min-w-[70px]">
-                    <p className="text-xs text-muted-foreground mb-1">Recent Users</p>
-                    <div className="flex items-center justify-center gap-0.5">
-                      {project.recentUsers.length > 0 ? (
-                        project.recentUsers.map((u, i) => (
-                          <Avatar key={i} className="h-6 w-6 border-2 border-card">
-                            <AvatarImage src={u.profileImageUrl || undefined} />
-                            <AvatarFallback className="text-[9px] bg-primary/10 text-primary">
-                              {getInitials(u.firstName, u.lastName)}
-                            </AvatarFallback>
-                          </Avatar>
-                        ))
-                      ) : (
-                        <span className="text-xs text-muted-foreground/50">--</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="hidden lg:flex items-center gap-1.5 shrink-0">
-                  {project.recentPhotos.slice(0, 4).map((photo) => (
-                    <div key={photo.id} className="h-16 w-20 rounded-md overflow-hidden bg-muted">
-                      <img
-                        src={photo.url}
-                        alt=""
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                  ))}
-                  {project.recentPhotos.length === 0 && (
-                    <div className="h-16 w-20 rounded-md bg-muted flex items-center justify-center">
-                      <ImageIcon className="h-4 w-4 text-muted-foreground/40" />
-                    </div>
-                  )}
-                </div>
+          ) : (projects || []).length === 0 ? (
+            <div className="text-center py-6">
+              <div className="flex h-10 w-10 items-center justify-center rounded-md bg-muted mx-auto mb-2">
+                <FolderKanban className="h-5 w-5 text-muted-foreground" />
               </div>
-            ))}
-          </div>
-        )}
-      </div>
+              <p className="text-sm text-muted-foreground">No projects yet</p>
+            </div>
+          ) : (
+            <div className="space-y-1">
+              {(projects || []).filter(p => p.status === "active").slice(0, 5).map((project) => (
+                <div
+                  key={project.id}
+                  className="flex items-center gap-3 p-2 rounded-md cursor-pointer hover-elevate"
+                  onClick={() => navigate(`/projects/${project.id}`)}
+                  data-testid={`card-project-${project.id}`}
+                >
+                  <div className="h-10 w-10 rounded-md overflow-hidden shrink-0 bg-muted flex items-center justify-center">
+                    {project.recentPhotos.length > 0 ? (
+                      <img src={project.recentPhotos[0].url} alt={project.name} className="w-full h-full object-cover" />
+                    ) : (
+                      <ImageIcon className="h-4 w-4 text-muted-foreground" />
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-sm font-medium truncate" data-testid={`text-project-name-${project.id}`}>{project.name}</h3>
+                    <p className="text-xs text-muted-foreground truncate">{project.address || "No address"}</p>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span className="text-xs text-muted-foreground">{project.photoCount} photos</span>
+                    <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
