@@ -20,7 +20,6 @@ import {
   Users,
   Settings,
   LogOut,
-  Eye,
   ClipboardCheck,
   FileBarChart,
   BarChart3,
@@ -28,6 +27,7 @@ import {
 import { useLocation, Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { ThemeToggle } from "@/components/theme-toggle";
+import logoImg from "@assets/image_1770694193695.png";
 
 const navItems = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
@@ -55,10 +55,7 @@ export function AppSidebar() {
       <SidebarHeader className="p-4 pb-3">
         <Link href="/" data-testid="link-home">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground">
-              <Eye className="h-4 w-4" />
-            </div>
-            <span className="text-base font-bold tracking-tight" data-testid="text-brand-name">Field View</span>
+            <img src={logoImg} alt="Field View" className="h-8" data-testid="img-logo" />
           </div>
         </Link>
       </SidebarHeader>
