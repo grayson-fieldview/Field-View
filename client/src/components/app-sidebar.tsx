@@ -21,6 +21,7 @@ import {
   Eye,
   ClipboardCheck,
   FileBarChart,
+  BarChart3,
 } from "lucide-react";
 import { useLocation, Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -31,6 +32,7 @@ const navItems = [
   { title: "Photos", url: "/photos", icon: Camera },
   { title: "Checklists", url: "/checklists", icon: ClipboardCheck },
   { title: "Reports", url: "/reports", icon: FileBarChart },
+  { title: "Analytics", url: "/analytics", icon: BarChart3 },
   { title: "Map", url: "/map", icon: MapPin },
   { title: "Team", url: "/team", icon: Users },
   { title: "Settings", url: "/settings", icon: Settings },

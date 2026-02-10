@@ -20,6 +20,7 @@ import SettingsPage from "@/pages/settings";
 import ChecklistsPage from "@/pages/checklists";
 import ReportsPage from "@/pages/reports";
 import GalleryPage from "@/pages/gallery";
+import AnalyticsPage from "@/pages/analytics";
 
 function AuthenticatedLayout() {
   const style = {
@@ -41,6 +42,7 @@ function AuthenticatedLayout() {
               <Route path="/photos" component={PhotosPage} />
               <Route path="/checklists" component={ChecklistsPage} />
               <Route path="/reports" component={ReportsPage} />
+              <Route path="/analytics" component={AnalyticsPage} />
               <Route path="/map" component={MapPage} />
               <Route path="/team" component={TeamPage} />
               <Route path="/settings" component={SettingsPage} />

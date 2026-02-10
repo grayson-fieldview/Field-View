@@ -6,7 +6,10 @@ import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integra
 import multer from "multer";
 import path from "path";
 import fs from "fs";
-import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertReportSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertReportTemplateSchema } from "@shared/schema";
+import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertReportSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertReportTemplateSchema, projects, media, comments, tasks, checklists, reports } from "@shared/schema";
+import { users } from "@shared/models/auth";
+import { db } from "./db";
+import { eq } from "drizzle-orm";
 
 const uploadDir = path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadDir)) {
@@ -571,6 +574,128 @@ export async function registerRoutes(
       });
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch gallery" });
+    }
+  });
+
+  app.get("/api/analytics", isAuthenticated, async (req, res) => {
+    try {
+      const { from, to } = req.query;
+      const fromDate = from ? new Date(from as string) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const toDate = to ? new Date(to as string) : new Date();
+
+      const allMedia = await db
+        .select({
+          id: media.id,
+          createdAt: media.createdAt,
+          uploadedById: media.uploadedById,
+          projectId: media.projectId,
+          latitude: media.latitude,
+          longitude: media.longitude,
+          uploaderFirst: users.firstName,
+          uploaderLast: users.lastName,
+        })
+        .from(media)
+        .leftJoin(users, eq(media.uploadedById, users.id));
+
+      const filteredMedia = allMedia.filter((m) => {
+        const d = new Date(m.createdAt);
+        return d >= fromDate && d <= toDate;
+      });
+
+      const photosByUser: Record<string, { name: string; count: number }> = {};
+      for (const m of filteredMedia) {
+        const key = m.uploadedById || "unknown";
+        if (!photosByUser[key]) {
+          photosByUser[key] = {
+            name: m.uploaderFirst && m.uploaderLast
+              ? `${m.uploaderFirst} ${m.uploaderLast}`
+              : m.uploaderFirst || "Unknown",
+            count: 0,
+          };
+        }
+        photosByUser[key].count++;
+      }
+
+      const photosByDay: Record<string, number> = {};
+      for (const m of filteredMedia) {
+        const day = new Date(m.createdAt).toISOString().split("T")[0];
+        photosByDay[day] = (photosByDay[day] || 0) + 1;
+      }
+      const sortedDays = Object.keys(photosByDay).sort();
+      const photosOverTime = sortedDays.map((d) => ({ date: d, count: photosByDay[d] }));
+
+      const photoLocations = filteredMedia
+        .filter((m) => m.latitude && m.longitude)
+        .map((m) => ({
+          id: m.id,
+          latitude: m.latitude,
+          longitude: m.longitude,
+          projectId: m.projectId,
+        }));
+
+      const photosByProject: Record<number, { name: string; count: number }> = {};
+      const allProjects = await db.select({ id: projects.id, name: projects.name }).from(projects);
+      const projectMap = Object.fromEntries(allProjects.map((p) => [p.id, p.name]));
+      for (const m of filteredMedia) {
+        if (!photosByProject[m.projectId]) {
+          photosByProject[m.projectId] = { name: projectMap[m.projectId] || `Project ${m.projectId}`, count: 0 };
+        }
+        photosByProject[m.projectId].count++;
+      }
+
+      const allTasks = await db
+        .select({ id: tasks.id, status: tasks.status, projectId: tasks.projectId, createdAt: tasks.createdAt })
+        .from(tasks);
+      const filteredTasks = allTasks.filter((t) => {
+        const d = new Date(t.createdAt);
+        return d >= fromDate && d <= toDate;
+      });
+      const tasksByStatus: Record<string, number> = {};
+      for (const t of filteredTasks) {
+        tasksByStatus[t.status] = (tasksByStatus[t.status] || 0) + 1;
+      }
+
+      const allChecklistRows = await db
+        .select({ id: checklists.id, projectId: checklists.projectId, createdAt: checklists.createdAt })
+        .from(checklists);
+      const filteredChecklists = allChecklistRows.filter((c) => {
+        const d = new Date(c.createdAt);
+        return d >= fromDate && d <= toDate;
+      });
+
+      const allReportRows = await db
+        .select({ id: reports.id, projectId: reports.projectId, createdAt: reports.createdAt })
+        .from(reports);
+      const filteredReports = allReportRows.filter((r) => {
+        const d = new Date(r.createdAt);
+        return d >= fromDate && d <= toDate;
+      });
+
+      const allCommentRows = await db
+        .select({ id: comments.id, createdAt: comments.createdAt })
+        .from(comments);
+      const filteredComments = allCommentRows.filter((c) => {
+        const d = new Date(c.createdAt);
+        return d >= fromDate && d <= toDate;
+      });
+
+      res.json({
+        totalPhotos: filteredMedia.length,
+        totalProjects: allProjects.length,
+        totalTasks: filteredTasks.length,
+        totalChecklists: filteredChecklists.length,
+        totalReports: filteredReports.length,
+        totalComments: filteredComments.length,
+        activeUsers: Object.keys(photosByUser).length,
+        photosByUser: Object.values(photosByUser).sort((a, b) => b.count - a.count),
+        photosOverTime,
+        photoLocations,
+        photosByProject: Object.values(photosByProject).sort((a, b) => b.count - a.count),
+        tasksByStatus,
+      });
+    } catch (error) {
+      console.error("Analytics error:", error);
+      res.status(500).json({ message: "Failed to fetch analytics" });
     }
   });
 

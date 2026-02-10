@@ -58,6 +58,7 @@ Field View is a photo documentation and project management tool designed for fie
 - `GET /api/users` - List team members
 - `POST /api/galleries` - Create shareable gallery
 - `GET /api/galleries/:token` - Get public gallery by token
+- `GET /api/analytics?from=&to=` - Aggregated analytics (photos by user/project/day, task status, locations, counts)
 - Auth: `/api/login`, `/api/logout`, `/api/auth/user`
 
 ## Key Features
@@ -66,6 +67,7 @@ Field View is a photo documentation and project management tool designed for fie
 - Report templates: Create reusable report templates
 - Gallery sharing: Generate shareable photo gallery links with configurable metadata
 - Address autocomplete: Google Places API integration (Enter key blocked to prevent accidental form submission)
+- Analytics dashboard: 7 stat cards, bar chart (photos by user), line chart (photos over time), map (photo locations), bar chart (photos by project), pie chart (task status), time period filtering (7d/30d/90d/365d/all/custom)
 
 ## Google Maps Integration
 - Address autocomplete uses Google Places API via `AddressAutocomplete` component
@@ -84,6 +86,7 @@ Field View is a photo documentation and project management tool designed for fie
 8. **Checklists** - Global checklist management with templates
 9. **Reports** - Global report management with templates
 10. **Gallery** - Public shareable photo gallery (no auth required)
+11. **Analytics** - Dashboard with stat cards, charts (bar, line, pie), map, time period filtering
 
 ## User Preferences
 - Dark mode toggle saved to localStorage
