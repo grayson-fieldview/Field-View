@@ -13,10 +13,10 @@ import {
   CheckCircle2,
   ClipboardCheck,
   Share2,
-  Eye,
   BarChart3,
   Clock,
 } from "lucide-react";
+import logoImg from "@assets/image_1770694193695.png";
 
 const features = [
   {
@@ -80,9 +80,8 @@ export default function LandingPage() {
       <nav className="fixed top-0 left-0 right-0 z-50 bg-sidebar">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between gap-4 h-16">
-            <div className="flex items-center gap-2.5">
-              <Eye className="h-6 w-6 text-primary" />
-              <span className="text-lg font-bold tracking-tight text-sidebar-foreground" data-testid="text-landing-logo">Field View</span>
+            <div className="flex items-center">
+              <img src={logoImg} alt="Field View" className="h-14" data-testid="img-landing-logo" />
             </div>
             <div className="flex items-center gap-3">
               <Button size="icon" variant="ghost" onClick={toggleTheme} className="text-sidebar-foreground/70" data-testid="button-theme-toggle">
@@ -235,9 +234,8 @@ export default function LandingPage() {
       <footer className="border-t py-8">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-2">
-              <Eye className="h-5 w-5 text-primary" />
-              <span className="text-sm font-bold">Field View</span>
+            <div className="flex items-center">
+              <img src={logoImg} alt="Field View" className="h-12" data-testid="img-footer-logo" />
             </div>
             <p className="text-xs text-muted-foreground">
               &copy; {new Date().getFullYear()} Field View. All rights reserved.

@@ -54,9 +54,7 @@ export function AppSidebar() {
     <Sidebar>
       <SidebarHeader className="p-4 pb-3">
         <Link href="/" data-testid="link-home">
-          <div className="flex items-center gap-2.5">
-            <img src={logoImg} alt="Field View" className="h-8" data-testid="img-logo" />
-          </div>
+          <img src={logoImg} alt="Field View" className="h-10 w-auto" data-testid="img-logo" />
         </Link>
       </SidebarHeader>
 
