@@ -582,7 +582,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="shrink-0" style={{ borderBottom: `3px solid ${project.color || "#F09000"}` }}>
+      <div className="shrink-0">
         <div className="px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
           <Button
             variant="ghost"
