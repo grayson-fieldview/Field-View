@@ -7,6 +7,9 @@ import {
   checklistItems,
   reports,
   sharedGalleries,
+  checklistTemplates,
+  checklistTemplateItems,
+  reportTemplates,
   type Project,
   type InsertProject,
   type Media,
@@ -23,6 +26,12 @@ import {
   type InsertReport,
   type SharedGallery,
   type InsertSharedGallery,
+  type ChecklistTemplate,
+  type InsertChecklistTemplate,
+  type ChecklistTemplateItem,
+  type InsertChecklistTemplateItem,
+  type ReportTemplate,
+  type InsertReportTemplate,
 } from "@shared/schema";
 import { users, type User } from "@shared/models/auth";
 import { db } from "./db";
@@ -78,6 +87,18 @@ export interface IStorage {
 
   createSharedGallery(gallery: InsertSharedGallery): Promise<SharedGallery>;
   getSharedGalleryByToken(token: string): Promise<SharedGallery | undefined>;
+
+  getAllChecklistTemplates(): Promise<(ChecklistTemplate & { itemCount: number })[]>;
+  getChecklistTemplate(id: number): Promise<ChecklistTemplate | undefined>;
+  createChecklistTemplate(template: InsertChecklistTemplate): Promise<ChecklistTemplate>;
+  deleteChecklistTemplate(id: number): Promise<void>;
+  getChecklistTemplateItems(templateId: number): Promise<ChecklistTemplateItem[]>;
+  createChecklistTemplateItem(item: InsertChecklistTemplateItem): Promise<ChecklistTemplateItem>;
+
+  getAllReportTemplates(): Promise<ReportTemplate[]>;
+  getReportTemplate(id: number): Promise<ReportTemplate | undefined>;
+  createReportTemplate(template: InsertReportTemplate): Promise<ReportTemplate>;
+  deleteReportTemplate(id: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -452,6 +473,59 @@ export class DatabaseStorage implements IStorage {
   async getSharedGalleryByToken(token: string): Promise<SharedGallery | undefined> {
     const [gallery] = await db.select().from(sharedGalleries).where(eq(sharedGalleries.token, token));
     return gallery;
+  }
+
+  async getAllChecklistTemplates(): Promise<(ChecklistTemplate & { itemCount: number })[]> {
+    const templates = await db.select().from(checklistTemplates).orderBy(desc(checklistTemplates.createdAt));
+    const result = [];
+    for (const t of templates) {
+      const items = await db.select().from(checklistTemplateItems).where(eq(checklistTemplateItems.templateId, t.id));
+      result.push({ ...t, itemCount: items.length });
+    }
+    return result;
+  }
+
+  async getChecklistTemplate(id: number): Promise<ChecklistTemplate | undefined> {
+    const [item] = await db.select().from(checklistTemplates).where(eq(checklistTemplates.id, id));
+    return item;
+  }
+
+  async createChecklistTemplate(template: InsertChecklistTemplate): Promise<ChecklistTemplate> {
+    const [created] = await db.insert(checklistTemplates).values(template).returning();
+    return created;
+  }
+
+  async deleteChecklistTemplate(id: number): Promise<void> {
+    await db.delete(checklistTemplates).where(eq(checklistTemplates.id, id));
+  }
+
+  async getChecklistTemplateItems(templateId: number): Promise<ChecklistTemplateItem[]> {
+    return db.select().from(checklistTemplateItems)
+      .where(eq(checklistTemplateItems.templateId, templateId))
+      .orderBy(asc(checklistTemplateItems.sortOrder));
+  }
+
+  async createChecklistTemplateItem(item: InsertChecklistTemplateItem): Promise<ChecklistTemplateItem> {
+    const [created] = await db.insert(checklistTemplateItems).values(item).returning();
+    return created;
+  }
+
+  async getAllReportTemplates(): Promise<ReportTemplate[]> {
+    return db.select().from(reportTemplates).orderBy(desc(reportTemplates.createdAt));
+  }
+
+  async getReportTemplate(id: number): Promise<ReportTemplate | undefined> {
+    const [item] = await db.select().from(reportTemplates).where(eq(reportTemplates.id, id));
+    return item;
+  }
+
+  async createReportTemplate(template: InsertReportTemplate): Promise<ReportTemplate> {
+    const [created] = await db.insert(reportTemplates).values(template).returning();
+    return created;
+  }
+
+  async deleteReportTemplate(id: number): Promise<void> {
+    await db.delete(reportTemplates).where(eq(reportTemplates.id, id));
   }
 }
 

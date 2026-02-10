@@ -98,6 +98,32 @@ export const reports = pgTable("reports", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+export const checklistTemplates = pgTable("checklist_templates", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  title: text("title").notNull(),
+  description: text("description"),
+  createdById: varchar("created_by_id").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const checklistTemplateItems = pgTable("checklist_template_items", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  templateId: integer("template_id").references(() => checklistTemplates.id, { onDelete: "cascade" }).notNull(),
+  label: text("label").notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
+});
+
+export const reportTemplates = pgTable("report_templates", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  title: text("title").notNull(),
+  type: text("type").default("inspection").notNull(),
+  content: text("content"),
+  findings: text("findings"),
+  recommendations: text("recommendations"),
+  createdById: varchar("created_by_id").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const sharedGalleries = pgTable("shared_galleries", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   token: varchar("token", { length: 32 }).notNull().unique(),
@@ -158,6 +184,14 @@ export const reportsRelations = relations(reports, ({ one }) => ({
   createdBy: one(users, { fields: [reports.createdById], references: [users.id] }),
 }));
 
+export const checklistTemplatesRelations = relations(checklistTemplates, ({ many }) => ({
+  items: many(checklistTemplateItems),
+}));
+
+export const checklistTemplateItemsRelations = relations(checklistTemplateItems, ({ one }) => ({
+  template: one(checklistTemplates, { fields: [checklistTemplateItems.templateId], references: [checklistTemplates.id] }),
+}));
+
 export const insertProjectSchema = createInsertSchema(projects).omit({
   id: true,
   createdAt: true,
@@ -210,3 +244,24 @@ export type InsertChecklistItem = z.infer<typeof insertChecklistItemSchema>;
 export type ChecklistItem = typeof checklistItems.$inferSelect;
 export type InsertReport = z.infer<typeof insertReportSchema>;
 export type Report = typeof reports.$inferSelect;
+
+export const insertChecklistTemplateSchema = createInsertSchema(checklistTemplates).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertChecklistTemplateItemSchema = createInsertSchema(checklistTemplateItems).omit({
+  id: true,
+});
+
+export const insertReportTemplateSchema = createInsertSchema(reportTemplates).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertChecklistTemplate = z.infer<typeof insertChecklistTemplateSchema>;
+export type ChecklistTemplate = typeof checklistTemplates.$inferSelect;
+export type InsertChecklistTemplateItem = z.infer<typeof insertChecklistTemplateItemSchema>;
+export type ChecklistTemplateItem = typeof checklistTemplateItems.$inferSelect;
+export type InsertReportTemplate = z.infer<typeof insertReportTemplateSchema>;
+export type ReportTemplate = typeof reportTemplates.$inferSelect;

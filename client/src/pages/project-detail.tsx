@@ -75,7 +75,8 @@ import {
   Eye,
 } from "lucide-react";
 import { useLocation } from "wouter";
-import type { Project, Media, Comment, Task, Checklist, ChecklistItem, Report } from "@shared/schema";
+import { LayoutTemplate } from "lucide-react";
+import type { Project, Media, Comment, Task, Checklist, ChecklistItem, Report, ChecklistTemplate, ChecklistTemplateItem, ReportTemplate } from "@shared/schema";
 
 type ChecklistWithDetails = Checklist & {
   assignedTo?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null };
@@ -158,6 +159,14 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     queryKey: ["/api/projects", id],
   });
 
+  const { data: checklistTemplates } = useQuery<(ChecklistTemplate & { itemCount: number })[]>({
+    queryKey: ["/api/checklist-templates"],
+  });
+
+  const { data: reportTemplates } = useQuery<ReportTemplate[]>({
+    queryKey: ["/api/report-templates"],
+  });
+
   const uploadMedia = useMutation({
     mutationFn: async (files: FileList) => {
       const formData = new FormData();
@@ -217,6 +226,35 @@ export default function ProjectDetailPage({ id }: { id: string }) {
       queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
     },
   });
+
+  const applyChecklistTemplate = useCallback(async (templateId: number) => {
+    try {
+      const res = await apiRequest("GET", `/api/checklist-templates/${templateId}/items`);
+      const items: ChecklistTemplateItem[] = await res.json();
+      const template = checklistTemplates?.find(t => t.id === templateId);
+      if (template) {
+        setNewChecklistTitle(template.title);
+        setNewChecklistItems(items.length > 0 ? items.map(i => i.label) : [""]);
+        toast({ title: `Template "${template.title}" applied` });
+      }
+    } catch (error) {
+      if (isUnauthorizedError(error as Error)) {
+        toast({ title: "Unauthorized", variant: "destructive" });
+        setTimeout(() => { window.location.href = "/api/login"; }, 500);
+        return;
+      }
+      toast({ title: "Failed to load template", variant: "destructive" });
+    }
+  }, [checklistTemplates, toast]);
+
+  const applyReportTemplate = useCallback((templateId: number) => {
+    const template = reportTemplates?.find(t => t.id === templateId);
+    if (template) {
+      setNewReportTitle(template.title);
+      setNewReportType(template.type);
+      toast({ title: `Template "${template.title}" applied` });
+    }
+  }, [reportTemplates, toast]);
 
   const createChecklist = useMutation({
     mutationFn: async () => {
@@ -783,7 +821,32 @@ export default function ProjectDetailPage({ id }: { id: string }) {
           {activeTab === "checklists" && (
             <div className="px-4 sm:px-6 py-4 space-y-4">
               <Card className="p-4 space-y-3">
-                <h3 className="text-sm font-semibold">Create Checklist</h3>
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-sm font-semibold">Create Checklist</h3>
+                  {checklistTemplates && checklistTemplates.length > 0 && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="sm" data-testid="button-apply-checklist-template">
+                          <LayoutTemplate className="h-3.5 w-3.5 mr-1.5" />
+                          Use Template
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        {checklistTemplates.map((t) => (
+                          <DropdownMenuItem
+                            key={t.id}
+                            onClick={() => applyChecklistTemplate(t.id)}
+                            data-testid={`menu-apply-checklist-template-${t.id}`}
+                          >
+                            <LayoutTemplate className="h-3.5 w-3.5 mr-2 text-muted-foreground" />
+                            {t.title}
+                            <Badge variant="secondary" className="ml-auto text-xs no-default-hover-elevate no-default-active-elevate">{t.itemCount}</Badge>
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
+                </div>
                 <Input
                   placeholder="Checklist title..."
                   value={newChecklistTitle}
@@ -885,7 +948,31 @@ export default function ProjectDetailPage({ id }: { id: string }) {
           {activeTab === "reports" && (
             <div className="px-4 sm:px-6 py-4 space-y-4">
               <Card className="p-4 space-y-3">
-                <h3 className="text-sm font-semibold">Create Report</h3>
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-sm font-semibold">Create Report</h3>
+                  {reportTemplates && reportTemplates.length > 0 && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="sm" data-testid="button-apply-report-template">
+                          <LayoutTemplate className="h-3.5 w-3.5 mr-1.5" />
+                          Use Template
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        {reportTemplates.map((t) => (
+                          <DropdownMenuItem
+                            key={t.id}
+                            onClick={() => applyReportTemplate(t.id)}
+                            data-testid={`menu-apply-report-template-${t.id}`}
+                          >
+                            <LayoutTemplate className="h-3.5 w-3.5 mr-2 text-muted-foreground" />
+                            {t.title}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
+                </div>
                 <div className="flex flex-wrap items-center gap-3">
                   <Input
                     placeholder="Report title..."

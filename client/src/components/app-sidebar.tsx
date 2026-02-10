@@ -55,6 +55,7 @@ export function AppSidebar() {
               <div className="flex h-8 w-8 items-center justify-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground">
                 <Eye className="h-4 w-4" />
               </div>
+              <span className="text-sm font-bold tracking-tight" data-testid="text-brand-name">FieldView</span>
             </div>
           </Link>
           <div className="flex items-center gap-1">

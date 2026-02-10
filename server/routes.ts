@@ -6,7 +6,7 @@ import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integra
 import multer from "multer";
 import path from "path";
 import fs from "fs";
-import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertReportSchema } from "@shared/schema";
+import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertReportSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertReportTemplateSchema } from "@shared/schema";
 
 const uploadDir = path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadDir)) {
@@ -417,6 +417,105 @@ export async function registerRoutes(
       res.json(usersList);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch users" });
+    }
+  });
+
+  // Checklist Templates
+  app.get("/api/checklist-templates", isAuthenticated, async (_req, res) => {
+    try {
+      const templates = await storage.getAllChecklistTemplates();
+      res.json(templates);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch checklist templates" });
+    }
+  });
+
+  app.get("/api/checklist-templates/:id/items", isAuthenticated, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      const items = await storage.getChecklistTemplateItems(id);
+      res.json(items);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch template items" });
+    }
+  });
+
+  app.post("/api/checklist-templates", isAuthenticated, async (req: any, res) => {
+    try {
+      const parsed = insertChecklistTemplateSchema.safeParse({
+        title: req.body.title,
+        description: req.body.description || null,
+        createdById: req.user.claims.sub,
+      });
+      if (!parsed.success) {
+        return res.status(400).json({ message: parsed.error.message });
+      }
+      const template = await storage.createChecklistTemplate(parsed.data);
+      if (req.body.items && Array.isArray(req.body.items)) {
+        for (let i = 0; i < req.body.items.length; i++) {
+          if (req.body.items[i].trim()) {
+            await storage.createChecklistTemplateItem({
+              templateId: template.id,
+              label: req.body.items[i],
+              sortOrder: i,
+            });
+          }
+        }
+      }
+      const items = await storage.getChecklistTemplateItems(template.id);
+      res.status(201).json({ ...template, items, itemCount: items.length });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create checklist template" });
+    }
+  });
+
+  app.delete("/api/checklist-templates/:id", isAuthenticated, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      await storage.deleteChecklistTemplate(id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete checklist template" });
+    }
+  });
+
+  // Report Templates
+  app.get("/api/report-templates", isAuthenticated, async (_req, res) => {
+    try {
+      const templates = await storage.getAllReportTemplates();
+      res.json(templates);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch report templates" });
+    }
+  });
+
+  app.post("/api/report-templates", isAuthenticated, async (req: any, res) => {
+    try {
+      const parsed = insertReportTemplateSchema.safeParse({
+        title: req.body.title,
+        type: req.body.type || "inspection",
+        content: req.body.content || null,
+        findings: req.body.findings || null,
+        recommendations: req.body.recommendations || null,
+        createdById: req.user.claims.sub,
+      });
+      if (!parsed.success) {
+        return res.status(400).json({ message: parsed.error.message });
+      }
+      const template = await storage.createReportTemplate(parsed.data);
+      res.status(201).json(template);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create report template" });
+    }
+  });
+
+  app.delete("/api/report-templates/:id", isAuthenticated, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      await storage.deleteReportTemplate(id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete report template" });
     }
   });
 
