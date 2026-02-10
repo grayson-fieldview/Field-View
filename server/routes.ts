@@ -616,6 +616,7 @@ export async function registerRoutes(
           status: tasks.status,
           priority: tasks.priority,
           projectId: tasks.projectId,
+          dueDate: tasks.dueDate,
           createdAt: tasks.createdAt,
           updatedAt: tasks.updatedAt,
           creatorFirst: users.firstName,
@@ -682,7 +683,7 @@ export async function registerRoutes(
           projectName: t.projectName,
           projectId: t.projectId,
           detail: t.title,
-          extra: { status: t.status, priority: t.priority },
+          extra: { status: t.status, priority: t.priority, dueDate: t.dueDate ? new Date(t.dueDate).toISOString() : null },
         });
       }
 
@@ -714,6 +715,10 @@ export async function registerRoutes(
         .select({ count: sql<number>`count(*)` })
         .from(tasks)
         .where(sql`${tasks.status} != 'done'`);
+      const overdueTaskCount = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(tasks)
+        .where(sql`${tasks.status} != 'done' AND ${tasks.dueDate} IS NOT NULL AND ${tasks.dueDate} < NOW()`);
       const totalMediaCount = await db
         .select({ count: sql<number>`count(*)` })
         .from(media);
@@ -724,6 +729,7 @@ export async function registerRoutes(
           activeProjects: Number(activeProjectCount[0]?.count || 0),
           totalPhotos: Number(totalMediaCount[0]?.count || 0),
           openTasks: Number(openTaskCount[0]?.count || 0),
+          overdueTasks: Number(overdueTaskCount[0]?.count || 0),
         },
       });
     } catch (error) {

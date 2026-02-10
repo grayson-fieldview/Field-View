@@ -106,14 +106,14 @@ export default function LandingPage() {
                 <div className="flex items-center gap-2">
                   <div className="w-2 h-2 rounded-full bg-primary" />
                   <span className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                    Jobsite Photo Documentation
+                    Field Intelligence Platform
                   </span>
                 </div>
                 <h1 className="text-4xl sm:text-5xl lg:text-[3.5rem] font-serif font-bold tracking-tight leading-[1.1] text-foreground" data-testid="text-hero-title">
-                  Document every detail, deliver with confidence
+                  Your field command center for photos, tasks & insights
                 </h1>
                 <p className="text-lg text-muted-foreground max-w-lg leading-relaxed">
-                  Manage your field projects from first photo to final report with the tools you need to maximize efficiency, accountability, and team coordination.
+                  Go beyond photo documentation. Field View combines structured task management, interactive site mapping, real-time analytics, and team collaboration into one powerful field intelligence platform.
                 </p>
                 <div className="flex flex-wrap items-center gap-4">
                   <Button asChild size="lg" data-testid="button-get-started">
@@ -163,7 +163,7 @@ export default function LandingPage() {
               One platform for your entire field operation
             </h2>
             <p className="text-muted-foreground text-lg leading-relaxed">
-              From photo capture to final report, Field View connects your entire team with the tools that matter.
+              From photo capture to structured tasks and daily reports, Field View connects your entire team with field intelligence tools that drive accountability and results.
             </p>
           </div>
 
@@ -202,15 +202,15 @@ export default function LandingPage() {
               Built for crews who build things
             </h2>
             <p className="text-sidebar-foreground/60 text-lg leading-relaxed max-w-2xl mx-auto">
-              Construction teams, inspectors, and maintenance crews trust Field View to keep their projects documented and on track.
+              Construction teams, inspectors, and maintenance crews trust Field View as their field intelligence platform &mdash; powered by photos, maps, and structured tasks.
             </p>
             <ul className="grid sm:grid-cols-2 gap-4 text-left max-w-lg mx-auto pt-4">
               {[
                 "GPS-tagged photos with timestamps",
                 "Advanced photo annotation tools",
                 "Interactive map of all job sites",
-                "Task management with priorities",
-                "Reusable checklist templates",
+                "Task management with priorities & due dates",
+                "Real-time analytics dashboard",
                 "Shareable client galleries",
               ].map((item) => (
                 <li key={item} className="flex items-start gap-2.5 text-sm">

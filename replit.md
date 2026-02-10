@@ -5,7 +5,8 @@ Field View is a photo documentation and project management tool designed for fie
 
 ## Brand & Design
 - **Name**: Field View
-- **Icon**: Eye (lucide-react)
+- **Logo**: Custom PNG logo (attached_assets/image_1770694193695.png) used in sidebar, landing nav, and footer
+- **Positioning**: "Field Intelligence Platform" - differentiating from pure photo documentation competitors
 - **Color Scheme**: Orange primary (#F09000), green accents (#267D32), charcoal sidebar (#1E1E1E), warm cream backgrounds (#F0EDEA)
 - **Design Inspiration**: Procore-style clean, professional construction management aesthetic
 - **Fonts**: Inter (sans), DM Serif Display (serif headings)
@@ -22,7 +23,7 @@ Field View is a photo documentation and project management tool designed for fie
 
 ## Architecture
 - `client/src/` - Frontend React application
-  - `pages/` - Page components (landing, projects, project-detail, photos, map, team, settings, checklists, reports, gallery)
+  - `pages/` - Page components (landing, dashboard, projects, project-detail, tasks, photos, map, team, settings, checklists, reports, analytics, gallery)
   - `components/` - Shared components (app-sidebar, theme-provider, theme-toggle, photo-viewer, address-autocomplete, ui/)
   - `hooks/` - Custom hooks (use-auth, use-toast, use-mobile)
   - `lib/` - Utilities (queryClient, auth-utils, utils)
@@ -70,7 +71,7 @@ Field View is a photo documentation and project management tool designed for fie
 - Gallery sharing: Generate shareable photo gallery links with configurable metadata
 - Address autocomplete: Google Places API integration (Enter key blocked to prevent accidental form submission)
 - Analytics dashboard: 7 stat cards, bar chart (photos by user), line chart (photos over time), map (photo locations), bar chart (photos by project), pie chart (task status), time period filtering (7d/30d/90d/365d/all/custom)
-- Command Center Dashboard: KPI strip (active projects, total photos, open tasks), real-time activity feed, recent photos grid, quick actions, project list with search/filter
+- Command Center Dashboard: KPI strip (active projects, total photos, open tasks), overdue task alert banner, real-time activity feed with task status/priority/due date badges, mini-map widget showing project locations, recent photos grid with hover overlays (project name + photographer), quick actions, project list with search/filter
 - Before/After Photo Comparison: Drag slider to compare two project photos side-by-side (select before + after, view comparison in dialog)
 - Daily Log: Auto-generated daily activity summary per project with stats, photos, tasks, and comments for any date
 

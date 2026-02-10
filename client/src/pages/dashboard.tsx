@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
@@ -7,6 +7,7 @@ import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/auth-utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -36,11 +37,16 @@ import {
   Plus,
   Image as ImageIcon,
   ArrowRight,
+  AlertTriangle,
+  MapPin,
+  Clock,
 } from "lucide-react";
 import type { Project } from "@shared/schema";
 import { insertProjectSchema } from "@shared/schema";
 import { z } from "zod";
 import { AddressAutocomplete } from "@/components/address-autocomplete";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 
 interface ActivityItem {
   type: "photo" | "task" | "comment";
@@ -51,7 +57,7 @@ interface ActivityItem {
   projectName: string | null;
   projectId: number | null;
   detail: string;
-  extra?: { url?: string; status?: string; priority?: string; mediaId?: number };
+  extra?: { url?: string; status?: string; priority?: string; mediaId?: number; dueDate?: string | null };
 }
 
 interface ActivityResponse {
@@ -60,6 +66,7 @@ interface ActivityResponse {
     activeProjects: number;
     totalPhotos: number;
     openTasks: number;
+    overdueTasks: number;
   };
 }
 
@@ -89,16 +96,106 @@ function relativeTime(dateStr: string): string {
   return `${diffMon}mo ago`;
 }
 
+function formatDueDate(dateStr: string): string {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffDays = Math.ceil((date.getTime() - now.getTime()) / 86400000);
+  if (diffDays < 0) return `${Math.abs(diffDays)}d overdue`;
+  if (diffDays === 0) return "Due today";
+  if (diffDays === 1) return "Due tomorrow";
+  return `Due in ${diffDays}d`;
+}
+
 function getInitialsFromName(name: string) {
   const parts = name.trim().split(/\s+/);
   return `${(parts[0] || "")[0] || ""}${(parts[1] || "")[0] || ""}`.toUpperCase() || "U";
 }
 
 const activityConfig = {
-  photo: { icon: Camera, colorClass: "text-orange-500" },
-  task: { icon: ClipboardList, colorClass: "text-blue-500" },
-  comment: { icon: MessageSquare, colorClass: "text-green-500" },
+  photo: { icon: Camera, label: "uploaded a photo" },
+  task: { icon: ClipboardList, label: "updated a task" },
+  comment: { icon: MessageSquare, label: "left a comment" },
 } as const;
+
+const taskStatusBadge: Record<string, { label: string; variant: "default" | "secondary" | "outline" }> = {
+  todo: { label: "To Do", variant: "outline" },
+  in_progress: { label: "In Progress", variant: "secondary" },
+  done: { label: "Done", variant: "default" },
+};
+
+const priorityBadge: Record<string, { label: string; variant: "default" | "secondary" | "outline" | "destructive" }> = {
+  low: { label: "Low", variant: "outline" },
+  medium: { label: "Medium", variant: "secondary" },
+  high: { label: "High", variant: "destructive" },
+  urgent: { label: "Urgent", variant: "destructive" },
+};
+
+function MiniMap({ projects }: { projects: ProjectWithDetails[] }) {
+  const mapRef = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<L.Map | null>(null);
+
+  const geoProjects = projects.filter(p => p.latitude && p.longitude && p.status === "active");
+  const mapKey = JSON.stringify(geoProjects.map(p => ({ id: p.id, lat: p.latitude, lng: p.longitude })));
+
+  useEffect(() => {
+    if (!mapRef.current || geoProjects.length === 0) return;
+
+    if (mapInstanceRef.current) {
+      mapInstanceRef.current.remove();
+      mapInstanceRef.current = null;
+    }
+
+    const map = L.map(mapRef.current, {
+      zoomControl: false,
+      attributionControl: false,
+      dragging: false,
+      scrollWheelZoom: false,
+      doubleClickZoom: false,
+      touchZoom: false,
+    });
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
+
+    const orangeIcon = L.divIcon({
+      className: "",
+      html: `<div style="width:14px;height:14px;background:#F09000;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,0.3);"></div>`,
+      iconSize: [14, 14],
+      iconAnchor: [7, 7],
+    });
+
+    const bounds = L.latLngBounds([]);
+    geoProjects.forEach(p => {
+      const latLng = L.latLng(p.latitude!, p.longitude!);
+      bounds.extend(latLng);
+      L.marker(latLng, { icon: orangeIcon })
+        .bindTooltip(p.name, { direction: "top", offset: [0, -8] })
+        .addTo(map);
+    });
+
+    map.fitBounds(bounds, { padding: [20, 20], maxZoom: 12 });
+    mapInstanceRef.current = map;
+
+    return () => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+      }
+    };
+  }, [mapKey]);
+
+  if (geoProjects.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-full text-muted-foreground">
+        <div className="text-center">
+          <MapPin className="h-5 w-5 mx-auto mb-1 opacity-50" />
+          <p className="text-xs">No geolocated projects</p>
+        </div>
+      </div>
+    );
+  }
+
+  return <div ref={mapRef} className="w-full h-full rounded-md" />;
+}
 
 export default function DashboardPage() {
   const { user } = useAuth();
@@ -179,7 +276,9 @@ export default function DashboardPage() {
           <h1 className="text-2xl font-bold tracking-tight" data-testid="text-dashboard-title">
             Welcome back{user?.firstName ? `, ${user.firstName}` : ""}
           </h1>
-          <p className="text-sm text-muted-foreground mt-0.5">Your command center overview</p>
+          <p className="text-sm text-muted-foreground mt-0.5" data-testid="text-dashboard-tagline">
+            Your Field Command Center &mdash; Photos, Tasks, Maps & Insights in One View
+          </p>
         </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
@@ -258,6 +357,25 @@ export default function DashboardPage() {
         </Dialog>
       </div>
 
+      {!activityLoading && stats && stats.overdueTasks > 0 && (
+        <div
+          className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-md bg-destructive/10 border border-destructive/20 cursor-pointer"
+          onClick={() => navigate("/tasks")}
+          data-testid="banner-overdue-tasks"
+        >
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-destructive shrink-0" />
+            <span className="text-sm font-medium">
+              {stats.overdueTasks} overdue task{stats.overdueTasks !== 1 ? "s" : ""} need attention
+            </span>
+          </div>
+          <Button variant="outline" size="sm" data-testid="button-view-overdue">
+            View Tasks
+            <ArrowRight className="h-3.5 w-3.5 ml-1" />
+          </Button>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {kpiItems.map((kpi) => (
           <Card
@@ -311,6 +429,12 @@ export default function DashboardPage() {
                   {activities.map((activity) => {
                     const config = activityConfig[activity.type];
                     const Icon = config.icon;
+                    const isTask = activity.type === "task";
+                    const taskStatus = isTask ? activity.extra?.status : null;
+                    const taskPriority = isTask ? activity.extra?.priority : null;
+                    const taskDueDate = isTask ? (activity.extra as any)?.dueDate : null;
+                    const isOverdue = taskDueDate && taskStatus !== "done" && new Date(taskDueDate) < new Date();
+
                     return (
                       <div
                         key={`${activity.type}-${activity.id}`}
@@ -340,9 +464,27 @@ export default function DashboardPage() {
                               </span>
                             )}
                           </p>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            <Icon className={`h-3 w-3 ${config.colorClass}`} />
-                            <span className="text-xs text-muted-foreground">{relativeTime(activity.timestamp)}</span>
+                          <div className="flex items-center gap-2 mt-1 flex-wrap">
+                            <div className="flex items-center gap-1">
+                              <Icon className="h-3 w-3 text-muted-foreground" />
+                              <span className="text-xs text-muted-foreground">{relativeTime(activity.timestamp)}</span>
+                            </div>
+                            {isTask && taskStatus && (
+                              <Badge variant={taskStatusBadge[taskStatus]?.variant || "outline"} className="text-[10px]" data-testid={`badge-activity-status-${activity.id}`}>
+                                {taskStatusBadge[taskStatus]?.label || taskStatus}
+                              </Badge>
+                            )}
+                            {isTask && taskPriority && taskPriority !== "medium" && (
+                              <Badge variant={priorityBadge[taskPriority]?.variant || "outline"} className="text-[10px]" data-testid={`badge-activity-priority-${activity.id}`}>
+                                {priorityBadge[taskPriority]?.label || taskPriority}
+                              </Badge>
+                            )}
+                            {isTask && taskDueDate && (
+                              <span className={`text-[10px] flex items-center gap-0.5 ${isOverdue ? "text-destructive font-medium" : "text-muted-foreground"}`} data-testid={`text-activity-due-${activity.id}`}>
+                                <Clock className="h-2.5 w-2.5" />
+                                {formatDueDate(taskDueDate)}
+                              </span>
+                            )}
                           </div>
                         </div>
                         {activity.type === "photo" && activity.extra?.url && (
@@ -365,13 +507,34 @@ export default function DashboardPage() {
 
         <div className="lg:col-span-2 space-y-6">
           <Card>
+            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-3">
+              <CardTitle className="text-lg">Project Locations</CardTitle>
+              <Button variant="ghost" size="sm" asChild data-testid="link-view-map">
+                <Link href="/map">
+                  <MapPin className="h-3.5 w-3.5 mr-1" />
+                  Full Map
+                </Link>
+              </Button>
+            </CardHeader>
+            <CardContent>
+              <div className="h-[200px] rounded-md overflow-hidden bg-muted" data-testid="dashboard-mini-map">
+                {projectsLoading ? (
+                  <Skeleton className="w-full h-full" />
+                ) : (
+                  <MiniMap projects={projects || []} />
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-lg">Recent Photos</CardTitle>
             </CardHeader>
             <CardContent>
               {activityLoading ? (
-                <div className="grid grid-cols-2 gap-2">
-                  {[1, 2, 3, 4].map((i) => (
+                <div className="grid grid-cols-3 gap-2">
+                  {[1, 2, 3, 4, 5, 6].map((i) => (
                     <Skeleton key={i} className="aspect-square rounded-md" />
                   ))}
                 </div>
@@ -383,11 +546,12 @@ export default function DashboardPage() {
                   <p className="text-sm text-muted-foreground">No photos yet</p>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   {recentPhotos.map((photo) => (
                     <div
                       key={photo.id}
-                      className="aspect-square rounded-md overflow-hidden bg-muted"
+                      className="relative group aspect-square rounded-md overflow-hidden bg-muted cursor-pointer"
+                      onClick={() => photo.projectId && navigate(`/projects/${photo.projectId}`)}
                       data-testid={`photo-thumb-${photo.id}`}
                     >
                       <img
@@ -395,6 +559,14 @@ export default function DashboardPage() {
                         alt=""
                         className="w-full h-full object-cover"
                       />
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/50 transition-colors flex flex-col items-center justify-center" style={{ visibility: "visible" }}>
+                        <span className="text-white text-[10px] font-medium opacity-0 group-hover:opacity-100 transition-opacity text-center px-1 truncate max-w-full" data-testid={`text-photo-project-${photo.id}`}>
+                          {photo.projectName || ""}
+                        </span>
+                        <span className="text-white/70 text-[9px] opacity-0 group-hover:opacity-100 transition-opacity" data-testid={`text-photo-user-${photo.id}`}>
+                          {photo.userName}
+                        </span>
+                      </div>
                     </div>
                   ))}
                 </div>
