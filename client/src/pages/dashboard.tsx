@@ -167,9 +167,9 @@ export default function DashboardPage() {
   const recentPhotos = activities.filter((a) => a.type === "photo" && a.extra?.url).slice(0, 6);
 
   const kpiItems = [
-    { label: "Active Projects", value: stats?.activeProjects, icon: FolderKanban },
-    { label: "Total Photos", value: stats?.totalPhotos, icon: Camera },
-    { label: "Open Tasks", value: stats?.openTasks, icon: ClipboardList },
+    { label: "Active Projects", value: stats?.activeProjects, icon: FolderKanban, href: "/projects" },
+    { label: "Total Photos", value: stats?.totalPhotos, icon: Camera, href: "/photos" },
+    { label: "Open Tasks", value: stats?.openTasks, icon: ClipboardList, href: "/projects" },
   ];
 
   return (
@@ -260,7 +260,12 @@ export default function DashboardPage() {
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {kpiItems.map((kpi) => (
-          <Card key={kpi.label} data-testid={`card-kpi-${kpi.label.toLowerCase().replace(/\s+/g, "-")}`}>
+          <Card
+            key={kpi.label}
+            className="cursor-pointer hover-elevate transition-all"
+            onClick={() => navigate(kpi.href)}
+            data-testid={`card-kpi-${kpi.label.toLowerCase().replace(/\s+/g, "-")}`}
+          >
             <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">{kpi.label}</CardTitle>
               <kpi.icon className="h-4 w-4 text-primary" />
