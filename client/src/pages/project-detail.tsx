@@ -649,10 +649,16 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                   {project.name}
                 </h1>
                 {project.address && (
-                  <p className="text-sm text-muted-foreground flex items-center gap-1 mt-0.5" data-testid="text-project-address">
+                  <a
+                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(project.address)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm text-muted-foreground hover:text-primary flex items-center gap-1 mt-0.5 transition-colors"
+                    data-testid="link-project-address"
+                  >
                     <MapPin className="h-3 w-3 shrink-0" />
-                    <span className="truncate">{project.address}</span>
-                  </p>
+                    <span className="truncate underline-offset-2 hover:underline">{project.address}</span>
+                  </a>
                 )}
               </div>
             </div>
