@@ -71,6 +71,9 @@ import {
   Check,
   Mail,
   Eye,
+  Grid3X3,
+  Grid2X2,
+  Square,
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { LayoutTemplate } from "lucide-react";
@@ -238,6 +241,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const [comparePhotos, setComparePhotos] = useState<[number | null, number | null]>([null, null]);
   const [showCompareDialog, setShowCompareDialog] = useState(false);
   const [showProjectInfo, setShowProjectInfo] = useState(false);
+  const [photoSize, setPhotoSize] = useState<"small" | "medium" | "large">("medium");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data, isLoading } = useQuery<ProjectDetailData>({
@@ -834,6 +838,35 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                   </Button>
                 </div>
                 <div className="flex items-center gap-2">
+                  <div className="flex items-center border rounded-md" data-testid="photo-size-toggle">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className={`rounded-none rounded-l-md ${photoSize === "small" ? "toggle-elevate toggle-elevated" : ""}`}
+                      onClick={() => setPhotoSize("small")}
+                      data-testid="button-photo-size-small"
+                    >
+                      <Grid3X3 className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className={`rounded-none border-l border-r ${photoSize === "medium" ? "toggle-elevate toggle-elevated" : ""}`}
+                      onClick={() => setPhotoSize("medium")}
+                      data-testid="button-photo-size-medium"
+                    >
+                      <Grid2X2 className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className={`rounded-none rounded-r-md ${photoSize === "large" ? "toggle-elevate toggle-elevated" : ""}`}
+                      onClick={() => setPhotoSize("large")}
+                      data-testid="button-photo-size-large"
+                    >
+                      <Square className="h-4 w-4" />
+                    </Button>
+                  </div>
                   {!selectionMode && !compareMode && projectMedia.length >= 2 && (
                     <Button
                       variant="outline"
@@ -899,7 +932,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                         <input type="checkbox" className="h-4 w-4 rounded border-muted-foreground/30" />
                         <h3 className="text-sm font-semibold" data-testid={`text-date-group-${date}`}>{date}</h3>
                       </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+                      <div className={`grid gap-3 ${photoSize === "small" ? "grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8" : photoSize === "large" ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3" : "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6"}`}>
                         {items.map((item) => {
                           const isSelected = selectedIds.has(item.id);
                           return (
