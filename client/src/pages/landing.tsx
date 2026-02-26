@@ -292,36 +292,52 @@ export default function LandingPage() {
       <nav className="fixed top-0 left-0 right-0 z-50 bg-sidebar border-b border-sidebar-border">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between gap-4 h-16">
-            <a href="#" className="flex items-center gap-2.5 shrink-0" data-testid="img-landing-logo">
+            <div className="flex items-center gap-2.5 shrink-0" data-testid="img-landing-logo">
               <img src={faviconImg} alt="Field View" className="h-9 w-9 rounded-md" />
               <span className="text-lg font-bold tracking-tight text-sidebar-foreground">Field View</span>
-            </a>
+            </div>
 
             <div className="hidden md:flex items-center gap-6">
               <a
                 href="#features"
-                className="text-sm text-sidebar-foreground/70 transition-colors"
+                onClick={(e) => {
+                  e.preventDefault();
+                  document.querySelector("#features")?.scrollIntoView({ behavior: "smooth" });
+                }}
+                className="text-sm text-sidebar-foreground/70 transition-colors hover:text-sidebar-foreground"
                 data-testid="link-nav-features"
               >
                 Features
               </a>
               <a
                 href="#industries"
-                className="text-sm text-sidebar-foreground/70 transition-colors"
+                onClick={(e) => {
+                  e.preventDefault();
+                  document.querySelector("#industries")?.scrollIntoView({ behavior: "smooth" });
+                }}
+                className="text-sm text-sidebar-foreground/70 transition-colors hover:text-sidebar-foreground"
                 data-testid="link-nav-industries"
               >
                 Industries
               </a>
               <a
                 href="#why"
-                className="text-sm text-sidebar-foreground/70 transition-colors"
+                onClick={(e) => {
+                  e.preventDefault();
+                  document.querySelector("#why")?.scrollIntoView({ behavior: "smooth" });
+                }}
+                className="text-sm text-sidebar-foreground/70 transition-colors hover:text-sidebar-foreground"
                 data-testid="link-nav-why"
               >
                 Why Field View
               </a>
               <a
                 href="#signup"
-                className="text-sm text-sidebar-foreground/70 transition-colors"
+                onClick={(e) => {
+                  e.preventDefault();
+                  document.querySelector("#signup")?.scrollIntoView({ behavior: "smooth" });
+                }}
+                className="text-sm text-sidebar-foreground/70 transition-colors hover:text-sidebar-foreground"
                 data-testid="link-nav-signup"
               >
                 Get Started
@@ -561,14 +577,14 @@ export default function LandingPage() {
             {features.map((feature) => (
               <Card
                 key={feature.title}
-                className="p-5 sm:p-6 hover-elevate transition-all duration-300"
+                className="p-5 sm:p-6 hover:scale-[1.02] hover:shadow-lg transition-all duration-300 cursor-default group"
                 data-testid={`card-feature-${feature.title.toLowerCase().replace(/\s+/g, "-")}`}
               >
                 <div className="space-y-3 sm:space-y-4">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-md bg-primary/10">
-                    <feature.icon className="h-5 w-5 text-primary" />
+                  <div className="flex h-10 w-10 items-center justify-center rounded-md bg-primary/10 group-hover:bg-primary group-hover:text-white transition-colors duration-300">
+                    <feature.icon className="h-5 w-5 text-primary group-hover:text-white transition-colors duration-300" />
                   </div>
-                  <h3 className="text-base font-semibold">{feature.title}</h3>
+                  <h3 className="text-base font-semibold group-hover:text-primary transition-colors duration-300">{feature.title}</h3>
                   <p className="text-sm text-muted-foreground leading-relaxed">
                     {feature.description}
                   </p>
@@ -615,15 +631,15 @@ export default function LandingPage() {
             {industries.map((ind) => (
               <Card
                 key={ind.name}
-                className="p-4 sm:p-5 hover-elevate transition-all duration-300"
+                className="p-4 sm:p-5 hover:scale-[1.05] hover:shadow-md transition-all duration-300 cursor-default group"
                 data-testid={`card-industry-${ind.name.toLowerCase().replace(/\s+/g, "-")}`}
               >
                 <div className="flex items-start gap-3">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary/10">
-                    <ind.icon className="h-4 w-4 text-primary" />
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary/10 group-hover:bg-primary group-hover:text-white transition-colors duration-300">
+                    <ind.icon className="h-4 w-4 text-primary group-hover:text-white transition-colors duration-300" />
                   </div>
                   <div className="min-w-0">
-                    <h3 className="text-sm font-semibold">{ind.name}</h3>
+                    <h3 className="text-sm font-semibold group-hover:text-primary transition-colors duration-300">{ind.name}</h3>
                     <p className="text-xs text-muted-foreground leading-relaxed mt-1 hidden sm:block">
                       {ind.description}
                     </p>
