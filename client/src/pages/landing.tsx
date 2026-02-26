@@ -28,6 +28,9 @@ import {
   Menu,
   X,
   ChevronRight,
+  Minus,
+  Plus,
+  DollarSign,
   Flame,
   Paintbrush,
   Wrench,
@@ -278,6 +281,8 @@ export default function LandingPage() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [submitted, setSubmitted] = useState(false);
+  const [annual, setAnnual] = useState(true);
+  const [teamSize, setTeamSize] = useState(3);
 
   const handleSignup = (e: React.FormEvent) => {
     e.preventDefault();
@@ -330,6 +335,17 @@ export default function LandingPage() {
                 data-testid="link-nav-why"
               >
                 Why Field View
+              </a>
+              <a
+                href="#pricing"
+                onClick={(e) => {
+                  e.preventDefault();
+                  document.querySelector("#pricing")?.scrollIntoView({ behavior: "smooth" });
+                }}
+                className="text-sm text-sidebar-foreground/70 transition-colors hover:text-sidebar-foreground"
+                data-testid="link-nav-pricing"
+              >
+                Pricing
               </a>
               <a
                 href="#signup"
@@ -411,6 +427,14 @@ export default function LandingPage() {
                 data-testid="link-mobile-why"
               >
                 Why Field View
+              </a>
+              <a
+                href="#pricing"
+                className="block text-sm text-sidebar-foreground/80 py-2"
+                onClick={() => setMobileMenuOpen(false)}
+                data-testid="link-mobile-pricing"
+              >
+                Pricing
               </a>
               <a
                 href="#signup"
@@ -780,38 +804,207 @@ export default function LandingPage() {
               </div>
             </div>
 
-            <div className="space-y-4">
-              <Card className="p-5 sm:p-6 bg-sidebar-accent border-sidebar-border">
-                <h3 className="font-semibold text-sidebar-foreground mb-3">
-                  CompanyCam Users Switching?
-                </h3>
-                <p className="text-sm text-sidebar-foreground/60 leading-relaxed mb-4">
-                  Field View gives you everything CompanyCam does, plus
-                  structured task management, interactive maps, inspection
-                  checklists, report generation, analytics dashboards, and daily
-                  logs. One platform instead of five.
-                </p>
-                <div className="space-y-2">
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-lg font-bold text-sidebar-foreground mb-4">Frequently Asked Questions</h3>
+                <div className="space-y-3">
                   {[
-                    "Task management with priorities & due dates",
-                    "Inspection checklists with reusable templates",
-                    "Professional report generation",
-                    "Real-time analytics & charts",
-                    "Auto-generated daily activity logs",
-                  ].map((item) => (
+                    {
+                      q: "How many photos can we upload?",
+                      a: "Unlimited. We don't believe in capping your project documentation.",
+                    },
+                    {
+                      q: "Does it work offline?",
+                      a: "Yes, our mobile-optimized web app handles intermittent field connectivity seamlessly.",
+                    },
+                    {
+                      q: "Does Field View offer a free trial?",
+                      a: "Yes, we offer a 14-day free trial so you can experience the full power of the platform with your team.",
+                    },
+                  ].map((faq) => (
                     <div
-                      key={item}
-                      className="flex items-center gap-2 text-sm"
+                      key={faq.q}
+                      className="p-4 rounded-lg border border-sidebar-border bg-sidebar-accent/50 hover:bg-sidebar-accent transition-colors"
                     >
-                      <CheckCircle2 className="h-3.5 w-3.5 text-[#267D32] shrink-0" />
-                      <span className="text-sidebar-foreground/70">
-                        {item}
-                      </span>
+                      <h4 className="font-semibold text-sm text-sidebar-foreground mb-1">{faq.q}</h4>
+                      <p className="text-xs text-sidebar-foreground/60 leading-relaxed">
+                        {faq.a}
+                      </p>
                     </div>
                   ))}
                 </div>
+              </div>
+
+              <Card className="p-6 bg-primary/10 border-primary/20">
+                <h3 className="font-bold mb-2 text-primary">Ready to take command?</h3>
+                <p className="text-sm text-sidebar-foreground/60 mb-4 leading-relaxed">
+                  Join hundreds of field teams who have traded their scattered
+                  apps for one integrated intelligence platform.
+                </p>
+                <Button asChild className="w-full">
+                  <a href="/api/login">Start Your Free Trial</a>
+                </Button>
               </Card>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="pricing" className="py-16 sm:py-20 lg:py-24 bg-muted">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="text-center max-w-2xl mx-auto mb-12 sm:mb-16">
+            <div className="flex items-center justify-center gap-2 mb-4">
+              <div className="w-2 h-2 rounded-full bg-primary" />
+              <span className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                Simple Pricing
+              </span>
+            </div>
+            <h2
+              className="text-2xl sm:text-3xl lg:text-4xl font-serif font-bold tracking-tight mb-4"
+              data-testid="text-pricing-title"
+            >
+              One plan. Everything included.
+            </h2>
+            <p className="text-muted-foreground text-base sm:text-lg leading-relaxed">
+              No hidden fees, no feature gates. Every team gets the full platform.
+            </p>
+          </div>
+
+          <div className="max-w-lg mx-auto">
+            <div className="flex items-center justify-center gap-3 mb-8">
+              <span className={`text-sm font-medium transition-colors ${!annual ? "text-foreground" : "text-muted-foreground"}`}>Monthly</span>
+              <button
+                onClick={() => setAnnual(!annual)}
+                className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${annual ? "bg-primary" : "bg-muted-foreground/30"}`}
+                data-testid="toggle-billing-period"
+              >
+                <span className={`inline-block h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${annual ? "translate-x-6" : "translate-x-1"}`} />
+              </button>
+              <span className={`text-sm font-medium transition-colors ${annual ? "text-foreground" : "text-muted-foreground"}`}>Annual</span>
+              {annual && (
+                <Badge className="bg-[#267D32]/10 text-[#267D32] border-[#267D32]/20 text-xs" data-testid="badge-save">
+                  Save 38%
+                </Badge>
+              )}
+            </div>
+
+            <Card className="p-6 sm:p-8 border-primary/30 shadow-lg">
+              <div className="text-center mb-6">
+                <div className="flex items-baseline justify-center gap-1 mb-1">
+                  <span className="text-4xl sm:text-5xl font-bold tracking-tight" data-testid="text-base-price">
+                    ${annual ? "49" : "79"}
+                  </span>
+                  <span className="text-muted-foreground text-sm">/month</span>
+                </div>
+                {annual && (
+                  <p className="text-xs text-muted-foreground">Billed annually (${49 * 12}/year)</p>
+                )}
+                <p className="text-sm text-muted-foreground mt-2">
+                  Includes <strong className="text-foreground">3 users</strong> and <strong className="text-foreground">unlimited cloud storage</strong>
+                </p>
+              </div>
+
+              <div className="border rounded-lg p-4 mb-6">
+                <div className="flex items-center justify-between mb-3">
+                  <label className="text-sm font-medium" htmlFor="team-size">Team size</label>
+                  <span className="text-xs text-muted-foreground">
+                    {teamSize <= 3 ? "Included" : `+${teamSize - 3} extra seat${teamSize - 3 > 1 ? "s" : ""}`}
+                  </span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="shrink-0"
+                    onClick={() => setTeamSize(Math.max(1, teamSize - 1))}
+                    disabled={teamSize <= 1}
+                    data-testid="button-decrease-seats"
+                  >
+                    <Minus className="h-4 w-4" />
+                  </Button>
+                  <Input
+                    id="team-size"
+                    type="number"
+                    min={1}
+                    max={999}
+                    value={teamSize}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value);
+                      if (!isNaN(val) && val >= 1) setTeamSize(Math.min(999, val));
+                    }}
+                    className="text-center text-lg font-semibold h-9 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    data-testid="input-team-size"
+                  />
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="shrink-0"
+                    onClick={() => setTeamSize(Math.min(999, teamSize + 1))}
+                    data-testid="button-increase-seats"
+                  >
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                </div>
+                {teamSize > 3 && (
+                  <p className="text-xs text-muted-foreground mt-2 text-center">
+                    Additional users: ${annual ? "24" : "29"}/month each
+                  </p>
+                )}
+              </div>
+
+              <div className="border rounded-lg p-4 mb-6 bg-muted/50">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm text-muted-foreground">Base plan (3 users)</span>
+                  <span className="text-sm font-medium">${annual ? "49" : "79"}/mo</span>
+                </div>
+                {teamSize > 3 && (
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-muted-foreground">{teamSize - 3} additional user{teamSize - 3 > 1 ? "s" : ""} × ${annual ? "24" : "29"}</span>
+                    <span className="text-sm font-medium">${(teamSize - 3) * (annual ? 24 : 29)}/mo</span>
+                  </div>
+                )}
+                <div className="border-t pt-2 mt-2 flex items-center justify-between">
+                  <span className="text-sm font-semibold">Total</span>
+                  <div className="text-right">
+                    <span className="text-2xl font-bold text-primary" data-testid="text-total-price">
+                      ${(annual ? 49 : 79) + Math.max(0, teamSize - 3) * (annual ? 24 : 29)}
+                    </span>
+                    <span className="text-sm text-muted-foreground">/month</span>
+                    {annual && (
+                      <p className="text-xs text-muted-foreground">
+                        ${((annual ? 49 : 79) + Math.max(0, teamSize - 3) * (annual ? 24 : 29)) * 12}/year
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <Button asChild size="lg" className="w-full gap-2 mb-4" data-testid="button-pricing-cta">
+                <a href="/api/login">
+                  Start 14-Day Free Trial
+                  <ArrowRight className="h-4 w-4" />
+                </a>
+              </Button>
+              <p className="text-xs text-muted-foreground text-center">No credit card required</p>
+
+              <div className="grid grid-cols-2 gap-x-4 gap-y-2 mt-6 pt-6 border-t">
+                {[
+                  "Unlimited photos & storage",
+                  "All annotation tools",
+                  "Task management",
+                  "Checklists & reports",
+                  "Client gallery sharing",
+                  "Analytics dashboard",
+                  "Interactive site map",
+                  "Daily activity logs",
+                ].map((item) => (
+                  <div key={item} className="flex items-center gap-2 text-xs">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-[#267D32] shrink-0" />
+                    <span className="text-muted-foreground">{item}</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
           </div>
         </div>
       </section>

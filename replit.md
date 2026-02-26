@@ -82,7 +82,7 @@ Field View is a photo documentation and project management tool designed for fie
 - Project creation form shows only Name, Description, and Address fields
 
 ## Pages
-1. **Landing** - Procore-inspired marketing page with warm cream hero, charcoal CTA section
+1. **Landing** - Procore-inspired marketing page with warm cream hero, charcoal CTA section, pricing calculator, FAQ section
 2. **Dashboard (Home)** - Command center with KPI strip, activity feed, recent photos, quick actions, and project list with search/filter
 3. **Project Detail** - Photos tab (with before/after compare) + Tasks tab + Checklists + Reports + Daily Log with upload and management
 4. **Photos** - Global gallery with search and project filtering
