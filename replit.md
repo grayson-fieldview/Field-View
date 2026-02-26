@@ -15,7 +15,8 @@ Field View is a photo documentation and project management tool designed for fie
 ## Tech Stack
 - **Frontend**: React 18 with TypeScript, Tailwind CSS, shadcn/ui components
 - **Backend**: Node.js with Express, PostgreSQL with Drizzle ORM
-- **Auth**: Replit Auth (OpenID Connect)
+- **Auth**: Custom email/password authentication (Passport.js local strategy, bcryptjs, session-based with connect-pg-simple)
+- **Payments**: Stripe integration via stripe-replit-sync (subscription billing)
 - **Map**: Leaflet with react-leaflet
 - **File Upload**: Multer (stored in /uploads directory)
 - **Routing**: wouter (frontend), Express (backend)
@@ -23,7 +24,7 @@ Field View is a photo documentation and project management tool designed for fie
 
 ## Architecture
 - `client/src/` - Frontend React application
-  - `pages/` - Page components (landing, dashboard, projects, project-detail, tasks, photos, map, team, settings, checklists, reports, analytics, gallery)
+  - `pages/` - Page components (landing, login, register, forgot-password, subscribe, dashboard, projects, project-detail, tasks, photos, map, team, settings, checklists, reports, analytics, gallery)
   - `components/` - Shared components (app-sidebar, theme-provider, theme-toggle, photo-viewer, address-autocomplete, ui/)
   - `hooks/` - Custom hooks (use-auth, use-toast, use-mobile)
   - `lib/` - Utilities (queryClient, auth-utils, utils)
@@ -32,13 +33,34 @@ Field View is a photo documentation and project management tool designed for fie
   - `storage.ts` - Database operations (DatabaseStorage class)
   - `seed.ts` - Seed data for demo purposes
   - `db.ts` - Database connection
-  - `replit_integrations/auth/` - Replit Auth integration
+  - `stripeClient.ts` - Stripe client (credentials from Replit connector API)
+  - `webhookHandlers.ts` - Stripe webhook processing via stripe-replit-sync
+  - `seed-stripe-products.ts` - Script to create Stripe products/prices
+  - `replit_integrations/auth/` - Custom auth (Passport local strategy, session-based)
 - `shared/` - Shared types and schemas
   - `schema.ts` - Drizzle ORM schema definitions (projects, media, comments, tasks, checklists, reports, galleries)
-  - `models/auth.ts` - Auth-related schemas (users, sessions)
+  - `models/auth.ts` - Auth-related schemas (users with password/subscription fields, sessions)
+
+## Authentication
+- Custom email/password auth using Passport.js local strategy
+- Passwords hashed with bcryptjs (12 rounds)
+- Sessions stored in PostgreSQL via connect-pg-simple
+- User schema includes: id (UUID), email, password (hashed), firstName, lastName, profileImageUrl, stripeCustomerId, stripeSubscriptionId, subscriptionStatus, trialEndsAt
+- New users get 14-day free trial (subscriptionStatus: "trial")
+- Auth routes: POST /api/register, POST /api/login, POST /api/logout, GET /api/auth/user, POST /api/forgot-password
+
+## Stripe Integration
+- Connected via Replit Stripe integration (connection:conn_stripe_01KJBS6YDZQ52E57MVSQTHTKE5)
+- stripe-replit-sync manages stripe schema tables automatically (DO NOT insert directly)
+- Webhook route at /api/stripe/webhook registered BEFORE express.json() middleware
+- Products created via Stripe API (seed-stripe-products.ts), synced automatically
+- Pricing: Monthly $79/mo base (3 users) + $29/extra user; Annual $49/mo base + $24/extra user
+- Stripe product: "Field View Pro" with monthly and annual prices
+- Checkout flow: POST /api/create-checkout-session with priceId → Stripe Checkout → webhook updates user
+- Billing portal: POST /api/create-portal-session → Stripe Billing Portal
 
 ## Data Models
-- **Users** - Managed by Replit Auth (id, email, firstName, lastName, profileImageUrl)
+- **Users** - Custom auth (id UUID, email, password hashed, firstName, lastName, profileImageUrl, stripeCustomerId, stripeSubscriptionId, subscriptionStatus, trialEndsAt)
 - **Projects** - Job sites (name, description, status, address, lat/lng, color)
 - **Media** - Photos/videos (projectId, url, caption, tags, GPS coords)
 - **Comments** - On media items (mediaId, userId, content)
@@ -48,6 +70,11 @@ Field View is a photo documentation and project management tool designed for fie
 - **Galleries** - Shareable photo collections (projectId, token, mediaIds, options)
 
 ## Key API Endpoints
+- `POST /api/register` - Register new user (email, password, firstName, lastName)
+- `POST /api/login` - Login (email, password)
+- `POST /api/logout` - Logout
+- `GET /api/auth/user` - Get current authenticated user (excludes password)
+- `POST /api/forgot-password` - Request password reset
 - `GET/POST /api/projects` - List/create projects
 - `GET /api/projects/:id` - Get project with media, tasks, checklists, reports
 - `GET /api/config/maps` - Returns Google Maps API key for Places autocomplete
@@ -59,10 +86,14 @@ Field View is a photo documentation and project management tool designed for fie
 - `GET /api/users` - List team members
 - `POST /api/galleries` - Create shareable gallery
 - `GET /api/galleries/:token` - Get public gallery by token
-- `GET /api/analytics?from=&to=` - Aggregated analytics (photos by user/project/day, task status, locations, counts)
-- `GET /api/activity?limit=` - Activity feed (recent photos, tasks, comments merged and sorted)
-- `GET /api/projects/:id/daily-log?date=` - Daily log for a project (photos, tasks, comments for a specific day)
-- Auth: `/api/login`, `/api/logout`, `/api/auth/user`
+- `GET /api/analytics?from=&to=` - Aggregated analytics
+- `GET /api/activity?limit=` - Activity feed
+- `GET /api/projects/:id/daily-log?date=` - Daily log for a project
+- `POST /api/create-checkout-session` - Create Stripe checkout session
+- `POST /api/create-portal-session` - Create Stripe billing portal session
+- `GET /api/subscription` - Get current subscription status
+- `GET /api/stripe/prices` - Get available prices from stripe schema
+- `GET /api/stripe/publishable-key` - Get Stripe publishable key
 
 ## Key Features
 - Photo annotations: 5 drawing tools (freehand, arrow, circle, rectangle, line), 8 colors, adjustable stroke width
@@ -70,10 +101,11 @@ Field View is a photo documentation and project management tool designed for fie
 - Report templates: Create reusable report templates
 - Gallery sharing: Generate shareable photo gallery links with configurable metadata
 - Address autocomplete: Google Places API integration (Enter key blocked to prevent accidental form submission)
-- Analytics dashboard: 7 stat cards, bar chart (photos by user), line chart (photos over time), map (photo locations), bar chart (photos by project), pie chart (task status), time period filtering (7d/30d/90d/365d/all/custom)
-- Command Center Dashboard: KPI strip (active projects, total photos, open tasks), overdue task alert banner, real-time activity feed with task status/priority/due date badges, mini-map widget showing project locations, recent photos grid with hover overlays (project name + photographer), quick actions, project list with search/filter
-- Before/After Photo Comparison: Drag slider to compare two project photos side-by-side (select before + after, view comparison in dialog)
-- Daily Log: Auto-generated daily activity summary per project with stats, photos, tasks, and comments for any date
+- Analytics dashboard: 7 stat cards, bar chart (photos by user), line chart (photos over time), map (photo locations), bar chart (photos by project), pie chart (task status), time period filtering
+- Command Center Dashboard: KPI strip, overdue task alert banner, activity feed, mini-map, recent photos, quick actions, project list with search/filter
+- Before/After Photo Comparison: Drag slider to compare two project photos side-by-side
+- Daily Log: Auto-generated daily activity summary per project
+- Subscription gate: Users without active subscription or valid trial are shown subscribe page
 
 ## Google Maps Integration
 - Address autocomplete uses Google Places API via `AddressAutocomplete` component
@@ -83,16 +115,20 @@ Field View is a photo documentation and project management tool designed for fie
 
 ## Pages
 1. **Landing** - Procore-inspired marketing page with warm cream hero, charcoal CTA section, pricing calculator, FAQ section
-2. **Dashboard (Home)** - Command center with KPI strip, activity feed, recent photos, quick actions, and project list with search/filter
-3. **Project Detail** - Photos tab (with before/after compare) + Tasks tab + Checklists + Reports + Daily Log with upload and management
-4. **Photos** - Global gallery with search and project filtering
-5. **Map** - Leaflet map with project location markers
-6. **Team** - Team member directory
-7. **Settings** - Profile, appearance (dark mode), notifications
-8. **Checklists** - Global checklist management with templates
-9. **Reports** - Global report management with templates
-10. **Gallery** - Public shareable photo gallery (no auth required)
-11. **Analytics** - Dashboard with stat cards, charts (bar, line, pie), map, time period filtering
+2. **Login** - Email/password login form with forgot password link
+3. **Register** - Registration form with trial features list
+4. **Forgot Password** - Email input for password reset
+5. **Subscribe** - Subscription page with plan details, team size calculator, Stripe checkout
+6. **Dashboard (Home)** - Command center with KPI strip, activity feed, recent photos, quick actions, project list
+7. **Project Detail** - Photos tab (with before/after compare) + Tasks tab + Checklists + Reports + Daily Log
+8. **Photos** - Global gallery with search and project filtering
+9. **Map** - Leaflet map with project location markers
+10. **Team** - Team member directory
+11. **Settings** - Profile, appearance (dark mode), billing/subscription management, notifications
+12. **Checklists** - Global checklist management with templates
+13. **Reports** - Global report management with templates
+14. **Gallery** - Public shareable photo gallery (no auth required)
+15. **Analytics** - Dashboard with stat cards, charts, map, time period filtering
 
 ## User Preferences
 - Dark mode toggle saved to localStorage
@@ -101,3 +137,4 @@ Field View is a photo documentation and project management tool designed for fie
 ## Running
 - `npm run dev` - Start development server (port 5000)
 - `npm run db:push` - Push schema changes to database
+- `npx tsx server/seed-stripe-products.ts` - Create Stripe products/prices

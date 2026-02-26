@@ -277,7 +277,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     onError: (error: Error) => {
       if (isUnauthorizedError(error)) {
         toast({ title: "Unauthorized", description: "Logging in again...", variant: "destructive" });
-        setTimeout(() => { window.location.href = "/api/login"; }, 500);
+        setTimeout(() => { window.location.href = "/login"; }, 500);
         return;
       }
       toast({ title: "Upload failed", description: error.message, variant: "destructive" });
@@ -300,7 +300,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     onError: (error: Error) => {
       if (isUnauthorizedError(error)) {
         toast({ title: "Unauthorized", variant: "destructive" });
-        setTimeout(() => { window.location.href = "/api/login"; }, 500);
+        setTimeout(() => { window.location.href = "/login"; }, 500);
         return;
       }
       toast({ title: "Error", description: error.message, variant: "destructive" });
@@ -330,7 +330,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     } catch (error) {
       if (isUnauthorizedError(error as Error)) {
         toast({ title: "Unauthorized", variant: "destructive" });
-        setTimeout(() => { window.location.href = "/api/login"; }, 500);
+        setTimeout(() => { window.location.href = "/login"; }, 500);
         return;
       }
       toast({ title: "Failed to load template", variant: "destructive" });
@@ -365,7 +365,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     onError: (error: Error) => {
       if (isUnauthorizedError(error)) {
         toast({ title: "Unauthorized", variant: "destructive" });
-        setTimeout(() => { window.location.href = "/api/login"; }, 500);
+        setTimeout(() => { window.location.href = "/login"; }, 500);
         return;
       }
       toast({ title: "Error", description: error.message, variant: "destructive" });
@@ -389,7 +389,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     onError: (error: Error) => {
       if (isUnauthorizedError(error)) {
         toast({ title: "Unauthorized", variant: "destructive" });
-        setTimeout(() => { window.location.href = "/api/login"; }, 500);
+        setTimeout(() => { window.location.href = "/login"; }, 500);
         return;
       }
       toast({ title: "Error", description: error.message, variant: "destructive" });
@@ -419,7 +419,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     onError: (error: Error) => {
       if (isUnauthorizedError(error)) {
         toast({ title: "Unauthorized", variant: "destructive" });
-        setTimeout(() => { window.location.href = "/api/login"; }, 500);
+        setTimeout(() => { window.location.href = "/login"; }, 500);
         return;
       }
       toast({ title: "Error", description: error.message, variant: "destructive" });

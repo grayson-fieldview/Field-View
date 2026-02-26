@@ -1,10 +1,13 @@
 import { useAuth } from "@/hooks/use-auth";
+import { useMutation } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
+import { Badge } from "@/components/ui/badge";
 import { useTheme } from "@/components/theme-provider";
+import { useToast } from "@/hooks/use-toast";
 import {
   Settings as SettingsIcon,
   User,
@@ -16,7 +19,95 @@ import {
   Moon,
   Mail,
   Calendar,
+  CreditCard,
+  Loader2,
 } from "lucide-react";
+
+function BillingCard() {
+  const { user } = useAuth();
+  const { toast } = useToast();
+
+  const portalMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/create-portal-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.message || "Failed to open billing portal");
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      if (data.url) window.location.href = data.url;
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const status = user?.subscriptionStatus || "none";
+  const statusLabel: Record<string, string> = {
+    active: "Active",
+    trial: "Trial",
+    past_due: "Past Due",
+    canceled: "Canceled",
+    none: "No Plan",
+  };
+  const statusColor: Record<string, string> = {
+    active: "bg-[#267D32] text-white",
+    trial: "bg-[#F09000] text-white",
+    past_due: "bg-red-500 text-white",
+    canceled: "bg-gray-500 text-white",
+    none: "bg-gray-400 text-white",
+  };
+
+  return (
+    <Card className="p-6" data-testid="card-billing">
+      <div className="flex items-center gap-2 mb-4">
+        <CreditCard className="h-5 w-5 text-primary" />
+        <h2 className="text-lg font-semibold">Billing & Subscription</h2>
+      </div>
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium">Subscription Status</p>
+            <div className="flex items-center gap-2 mt-1">
+              <Badge className={statusColor[status] || statusColor.none}>
+                {statusLabel[status] || status}
+              </Badge>
+              {status === "trial" && user?.trialEndsAt && (
+                <span className="text-xs text-muted-foreground">
+                  Ends {new Date(user.trialEndsAt).toLocaleDateString()}
+                </span>
+              )}
+            </div>
+          </div>
+          {user?.stripeCustomerId && (
+            <Button
+              variant="outline"
+              onClick={() => portalMutation.mutate()}
+              disabled={portalMutation.isPending}
+              data-testid="button-manage-billing"
+            >
+              {portalMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                "Manage Billing"
+              )}
+            </Button>
+          )}
+        </div>
+      </div>
+    </Card>
+  );
+}
 
 export default function SettingsPage() {
   const { user, logout } = useAuth();
@@ -117,6 +208,8 @@ export default function SettingsPage() {
           </div>
         </div>
       </Card>
+
+      <BillingCard />
 
       <Card className="p-6" data-testid="card-account">
         <div className="flex items-center gap-2 mb-4">

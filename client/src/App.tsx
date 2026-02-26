@@ -11,6 +11,10 @@ import { useAuth } from "@/hooks/use-auth";
 import { Skeleton } from "@/components/ui/skeleton";
 import NotFound from "@/pages/not-found";
 import LandingPage from "@/pages/landing";
+import LoginPage from "@/pages/login";
+import RegisterPage from "@/pages/register";
+import ForgotPasswordPage from "@/pages/forgot-password";
+import SubscribePage from "@/pages/subscribe";
 import DashboardPage from "@/pages/dashboard";
 import ProjectsPage from "@/pages/projects";
 import ProjectDetailPage from "@/pages/project-detail";
@@ -59,6 +63,22 @@ function AuthenticatedLayout() {
   );
 }
 
+function SubscriptionGate() {
+  const { user } = useAuth();
+
+  if (!user) return null;
+
+  const status = user.subscriptionStatus;
+  const trialEndsAt = user.trialEndsAt ? new Date(user.trialEndsAt) : null;
+  const trialExpired = trialEndsAt && trialEndsAt < new Date();
+
+  if (status === "active" || (status === "trial" && !trialExpired)) {
+    return <AuthenticatedLayout />;
+  }
+
+  return <SubscribePage />;
+}
+
 function AppContent() {
   const { user, isLoading } = useAuth();
 
@@ -75,10 +95,19 @@ function AppContent() {
   }
 
   if (!user) {
-    return <LandingPage />;
+    return (
+      <Switch>
+        <Route path="/login" component={LoginPage} />
+        <Route path="/register" component={RegisterPage} />
+        <Route path="/forgot-password" component={ForgotPasswordPage} />
+        <Route>
+          <LandingPage />
+        </Route>
+      </Switch>
+    );
   }
 
-  return <AuthenticatedLayout />;
+  return <SubscriptionGate />;
 }
 
 function App() {

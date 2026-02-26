@@ -2,7 +2,9 @@ import express, { type Express } from "express";
 import { createServer, type Server } from "http";
 import crypto from "crypto";
 import { storage } from "./storage";
-import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
+import { setupAuth, registerAuthRoutes, isAuthenticated, requireActiveSubscription } from "./replit_integrations/auth";
+import { authStorage } from "./replit_integrations/auth/storage";
+import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
@@ -46,7 +48,7 @@ export async function registerRoutes(
     next();
   }, express.static(uploadDir));
 
-  app.get("/api/config/maps", isAuthenticated, (_req, res) => {
+  app.get("/api/config/maps", requireActiveSubscription, (_req, res) => {
     const apiKey = process.env.GOOGLE_MAPS_API_KEY;
     if (!apiKey) {
       return res.status(500).json({ message: "Google Maps API key not configured" });
@@ -54,7 +56,7 @@ export async function registerRoutes(
     res.json({ apiKey });
   });
 
-  app.get("/api/projects", isAuthenticated, async (_req, res) => {
+  app.get("/api/projects", requireActiveSubscription, async (_req, res) => {
     try {
       const projects = await storage.getProjectsWithDetails();
       res.json(projects);
@@ -63,7 +65,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/projects/:id", isAuthenticated, async (req, res) => {
+  app.get("/api/projects/:id", requireActiveSubscription, async (req, res) => {
     try {
       const id = parseInt(req.params.id as string);
       const project = await storage.getProject(id);
@@ -80,11 +82,11 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/projects", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects", requireActiveSubscription, async (req: any, res) => {
     try {
       const parsed = insertProjectSchema.safeParse({
         ...req.body,
-        createdById: req.user.claims.sub,
+        createdById: req.user.id,
       });
       if (!parsed.success) {
         return res.status(400).json({ message: parsed.error.message });
@@ -96,7 +98,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/projects/:id", isAuthenticated, async (req, res) => {
+  app.patch("/api/projects/:id", requireActiveSubscription, async (req, res) => {
     try {
       const id = parseInt(req.params.id as string);
       const allowed = ["name", "description", "status", "address", "latitude", "longitude", "color"];
@@ -112,7 +114,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/projects/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/projects/:id", requireActiveSubscription, async (req, res) => {
     try {
       const id = parseInt(req.params.id as string);
       await storage.deleteProject(id);
@@ -122,7 +124,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/projects/:id/media", isAuthenticated, upload.array("files", 20), async (req: any, res) => {
+  app.post("/api/projects/:id/media", requireActiveSubscription, upload.array("files", 20), async (req: any, res) => {
     try {
       const projectId = parseInt(req.params.id as string);
       const project = await storage.getProject(projectId);
@@ -140,7 +142,7 @@ export async function registerRoutes(
         files.map((file) =>
           storage.createMedia({
             projectId,
-            uploadedById: req.user.claims.sub,
+            uploadedById: req.user.id,
             filename: file.filename,
             originalName: file.originalname,
             mimeType: file.mimetype,
@@ -159,7 +161,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/tasks", isAuthenticated, async (_req, res) => {
+  app.get("/api/tasks", requireActiveSubscription, async (_req, res) => {
     try {
       const allTasks = await storage.getAllTasks();
       res.json(allTasks);
@@ -168,7 +170,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/media", isAuthenticated, async (_req, res) => {
+  app.get("/api/media", requireActiveSubscription, async (_req, res) => {
     try {
       const allMedia = await storage.getAllMedia();
       res.json(allMedia);
@@ -177,7 +179,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/media/:id/comments", isAuthenticated, async (req, res) => {
+  app.get("/api/media/:id/comments", requireActiveSubscription, async (req, res) => {
     try {
       const mediaId = parseInt(req.params.id as string);
       const mediaComments = await storage.getCommentsByMedia(mediaId);
@@ -187,12 +189,12 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/media/:id/comments", isAuthenticated, async (req: any, res) => {
+  app.post("/api/media/:id/comments", requireActiveSubscription, async (req: any, res) => {
     try {
       const mediaId = parseInt(req.params.id as string);
       const parsed = insertCommentSchema.safeParse({
         mediaId,
-        userId: req.user.claims.sub,
+        userId: req.user.id,
         content: req.body.content,
       });
       if (!parsed.success) {
@@ -205,7 +207,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/projects/:id/tasks", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/tasks", requireActiveSubscription, async (req: any, res) => {
     try {
       const projectId = parseInt(req.params.id as string);
       const parsed = insertTaskSchema.safeParse({
@@ -214,7 +216,7 @@ export async function registerRoutes(
         description: req.body.description || null,
         priority: req.body.priority || "medium",
         assignedToId: req.body.assignedToId || null,
-        createdById: req.user.claims.sub,
+        createdById: req.user.id,
         dueDate: req.body.dueDate ? new Date(req.body.dueDate) : null,
       });
       if (!parsed.success) {
@@ -227,7 +229,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/tasks/:id", isAuthenticated, async (req, res) => {
+  app.patch("/api/tasks/:id", requireActiveSubscription, async (req, res) => {
     try {
       const id = parseInt(req.params.id as string);
       const allowed = ["title", "description", "status", "priority", "assignedToId", "dueDate"];
@@ -244,7 +246,7 @@ export async function registerRoutes(
   });
 
   // Checklists
-  app.get("/api/checklists", isAuthenticated, async (_req, res) => {
+  app.get("/api/checklists", requireActiveSubscription, async (_req, res) => {
     try {
       const allChecklists = await storage.getAllChecklists();
       res.json(allChecklists);
@@ -253,7 +255,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/projects/:id/checklists", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/checklists", requireActiveSubscription, async (req: any, res) => {
     try {
       const projectId = parseInt(req.params.id as string);
       const parsed = insertChecklistSchema.safeParse({
@@ -261,7 +263,7 @@ export async function registerRoutes(
         title: req.body.title,
         description: req.body.description || null,
         assignedToId: req.body.assignedToId || null,
-        createdById: req.user.claims.sub,
+        createdById: req.user.id,
         dueDate: req.body.dueDate ? new Date(req.body.dueDate) : null,
       });
       if (!parsed.success) {
@@ -285,7 +287,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/checklists/:id", isAuthenticated, async (req, res) => {
+  app.patch("/api/checklists/:id", requireActiveSubscription, async (req, res) => {
     try {
       const id = parseInt(req.params.id as string);
       const allowed = ["title", "description", "status", "assignedToId", "dueDate"];
@@ -301,7 +303,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/checklists/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/checklists/:id", requireActiveSubscription, async (req, res) => {
     try {
       const id = parseInt(req.params.id as string);
       await storage.deleteChecklist(id);
@@ -311,7 +313,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/checklists/:id/items", isAuthenticated, async (req, res) => {
+  app.get("/api/checklists/:id/items", requireActiveSubscription, async (req, res) => {
     try {
       const checklistId = parseInt(req.params.id as string);
       const items = await storage.getChecklistItems(checklistId);
@@ -321,7 +323,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/checklists/:id/items", isAuthenticated, async (req, res) => {
+  app.post("/api/checklists/:id/items", requireActiveSubscription, async (req, res) => {
     try {
       const checklistId = parseInt(req.params.id as string);
       const parsed = insertChecklistItemSchema.safeParse({
@@ -339,7 +341,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/checklist-items/:id", isAuthenticated, async (req, res) => {
+  app.patch("/api/checklist-items/:id", requireActiveSubscription, async (req, res) => {
     try {
       const id = parseInt(req.params.id as string);
       const allowed = ["label", "checked", "sortOrder"];
@@ -355,7 +357,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/checklist-items/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/checklist-items/:id", requireActiveSubscription, async (req, res) => {
     try {
       const id = parseInt(req.params.id as string);
       await storage.deleteChecklistItem(id);
@@ -366,7 +368,7 @@ export async function registerRoutes(
   });
 
   // Reports
-  app.get("/api/reports", isAuthenticated, async (_req, res) => {
+  app.get("/api/reports", requireActiveSubscription, async (_req, res) => {
     try {
       const allReports = await storage.getAllReports();
       res.json(allReports);
@@ -375,7 +377,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/projects/:id/reports", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/reports", requireActiveSubscription, async (req: any, res) => {
     try {
       const projectId = parseInt(req.params.id as string);
       const parsed = insertReportSchema.safeParse({
@@ -385,7 +387,7 @@ export async function registerRoutes(
         content: req.body.content || null,
         findings: req.body.findings || null,
         recommendations: req.body.recommendations || null,
-        createdById: req.user.claims.sub,
+        createdById: req.user.id,
       });
       if (!parsed.success) {
         return res.status(400).json({ message: parsed.error.message });
@@ -397,7 +399,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/reports/:id", isAuthenticated, async (req, res) => {
+  app.patch("/api/reports/:id", requireActiveSubscription, async (req, res) => {
     try {
       const id = parseInt(req.params.id as string);
       const allowed = ["title", "type", "status", "content", "findings", "recommendations"];
@@ -413,7 +415,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/reports/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/reports/:id", requireActiveSubscription, async (req, res) => {
     try {
       const id = parseInt(req.params.id as string);
       await storage.deleteReport(id);
@@ -423,7 +425,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/users", isAuthenticated, async (_req, res) => {
+  app.get("/api/users", requireActiveSubscription, async (_req, res) => {
     try {
       const usersList = await storage.getUsers();
       res.json(usersList);
@@ -433,7 +435,7 @@ export async function registerRoutes(
   });
 
   // Checklist Templates
-  app.get("/api/checklist-templates", isAuthenticated, async (_req, res) => {
+  app.get("/api/checklist-templates", requireActiveSubscription, async (_req, res) => {
     try {
       const templates = await storage.getAllChecklistTemplates();
       res.json(templates);
@@ -442,7 +444,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/checklist-templates/:id/items", isAuthenticated, async (req, res) => {
+  app.get("/api/checklist-templates/:id/items", requireActiveSubscription, async (req, res) => {
     try {
       const id = parseInt(req.params.id as string);
       const items = await storage.getChecklistTemplateItems(id);
@@ -452,12 +454,12 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/checklist-templates", isAuthenticated, async (req: any, res) => {
+  app.post("/api/checklist-templates", requireActiveSubscription, async (req: any, res) => {
     try {
       const parsed = insertChecklistTemplateSchema.safeParse({
         title: req.body.title,
         description: req.body.description || null,
-        createdById: req.user.claims.sub,
+        createdById: req.user.id,
       });
       if (!parsed.success) {
         return res.status(400).json({ message: parsed.error.message });
@@ -481,7 +483,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/checklist-templates/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/checklist-templates/:id", requireActiveSubscription, async (req, res) => {
     try {
       const id = parseInt(req.params.id as string);
       await storage.deleteChecklistTemplate(id);
@@ -492,7 +494,7 @@ export async function registerRoutes(
   });
 
   // Report Templates
-  app.get("/api/report-templates", isAuthenticated, async (_req, res) => {
+  app.get("/api/report-templates", requireActiveSubscription, async (_req, res) => {
     try {
       const templates = await storage.getAllReportTemplates();
       res.json(templates);
@@ -501,7 +503,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/report-templates", isAuthenticated, async (req: any, res) => {
+  app.post("/api/report-templates", requireActiveSubscription, async (req: any, res) => {
     try {
       const parsed = insertReportTemplateSchema.safeParse({
         title: req.body.title,
@@ -509,7 +511,7 @@ export async function registerRoutes(
         content: req.body.content || null,
         findings: req.body.findings || null,
         recommendations: req.body.recommendations || null,
-        createdById: req.user.claims.sub,
+        createdById: req.user.id,
       });
       if (!parsed.success) {
         return res.status(400).json({ message: parsed.error.message });
@@ -521,7 +523,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/report-templates/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/report-templates/:id", requireActiveSubscription, async (req, res) => {
     try {
       const id = parseInt(req.params.id as string);
       await storage.deleteReportTemplate(id);
@@ -531,7 +533,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/galleries", isAuthenticated, async (req, res) => {
+  app.post("/api/galleries", requireActiveSubscription, async (req, res) => {
     try {
       const { projectId, mediaIds, includeMetadata, includeDescriptions } = req.body;
       if (!projectId || !Array.isArray(mediaIds) || mediaIds.length === 0) {
@@ -586,7 +588,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/activity", isAuthenticated, async (req, res) => {
+  app.get("/api/activity", requireActiveSubscription, async (req, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
 
@@ -738,7 +740,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/projects/:id/daily-log", isAuthenticated, async (req, res) => {
+  app.get("/api/projects/:id/daily-log", requireActiveSubscription, async (req, res) => {
     try {
       const projectId = parseInt(req.params.id);
       const dateStr = (req.query.date as string) || new Date().toISOString().split("T")[0];
@@ -840,7 +842,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/analytics", isAuthenticated, async (req, res) => {
+  app.get("/api/analytics", requireActiveSubscription, async (req, res) => {
     try {
       const { from, to } = req.query;
       const fromDate = from ? new Date(from as string) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
@@ -959,6 +961,119 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Analytics error:", error);
       res.status(500).json({ message: "Failed to fetch analytics" });
+    }
+  });
+
+  app.get("/api/stripe/publishable-key", isAuthenticated, async (_req, res) => {
+    try {
+      const key = await getStripePublishableKey();
+      res.json({ publishableKey: key });
+    } catch (error) {
+      console.error("Error fetching publishable key:", error);
+      res.status(500).json({ message: "Failed to fetch Stripe config" });
+    }
+  });
+
+  app.get("/api/subscription", isAuthenticated, async (req: any, res) => {
+    try {
+      const user = await authStorage.getUser(req.user.id);
+      if (!user) return res.status(404).json({ message: "User not found" });
+
+      res.json({
+        subscriptionStatus: user.subscriptionStatus || "none",
+        stripeSubscriptionId: user.stripeSubscriptionId,
+        trialEndsAt: user.trialEndsAt,
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch subscription" });
+    }
+  });
+
+  app.post("/api/create-checkout-session", isAuthenticated, async (req: any, res) => {
+    try {
+      const { priceId } = req.body;
+      if (!priceId) {
+        return res.status(400).json({ message: "Price ID is required" });
+      }
+
+      const stripe = await getUncachableStripeClient();
+      const user = await authStorage.getUser(req.user.id);
+      if (!user) return res.status(404).json({ message: "User not found" });
+
+      let customerId = user.stripeCustomerId;
+      if (!customerId) {
+        const customer = await stripe.customers.create({
+          email: user.email || undefined,
+          name: [user.firstName, user.lastName].filter(Boolean).join(" ") || undefined,
+          metadata: { userId: user.id },
+        });
+        customerId = customer.id;
+        await authStorage.updateUser(user.id, { stripeCustomerId: customerId });
+      }
+
+      const baseUrl = `${req.protocol}://${req.get("host")}`;
+      const session = await stripe.checkout.sessions.create({
+        customer: customerId,
+        mode: "subscription",
+        line_items: [{ price: priceId, quantity: 1 }],
+        success_url: `${baseUrl}/?checkout=success`,
+        cancel_url: `${baseUrl}/?checkout=canceled`,
+        subscription_data: {
+          trial_period_days: 14,
+        },
+      });
+
+      res.json({ url: session.url });
+    } catch (error: any) {
+      console.error("Checkout session error:", error);
+      res.status(500).json({ message: error.message || "Failed to create checkout session" });
+    }
+  });
+
+  app.post("/api/create-portal-session", isAuthenticated, async (req: any, res) => {
+    try {
+      const user = await authStorage.getUser(req.user.id);
+      if (!user?.stripeCustomerId) {
+        return res.status(400).json({ message: "No billing account found" });
+      }
+
+      const stripe = await getUncachableStripeClient();
+      const baseUrl = `${req.protocol}://${req.get("host")}`;
+      const session = await stripe.billingPortal.sessions.create({
+        customer: user.stripeCustomerId,
+        return_url: `${baseUrl}/settings`,
+      });
+
+      res.json({ url: session.url });
+    } catch (error: any) {
+      console.error("Portal session error:", error);
+      res.status(500).json({ message: "Failed to create billing portal session" });
+    }
+  });
+
+  app.get("/api/stripe/prices", isAuthenticated, async (_req, res) => {
+    try {
+      const result = await db.execute(sql`
+        SELECT 
+          p.id as product_id,
+          p.name as product_name,
+          p.description,
+          p.metadata,
+          pr.id as price_id,
+          pr.unit_amount,
+          pr.currency,
+          pr.recurring_interval,
+          pr.recurring_interval_count,
+          pr.active as price_active
+        FROM stripe.products p
+        JOIN stripe.prices pr ON pr.product = p.id
+        WHERE p.active = true AND pr.active = true
+        ORDER BY pr.unit_amount ASC
+      `);
+      res.json(result.rows || []);
+    } catch (error) {
+      console.error("Error fetching prices:", error);
+      res.status(500).json({ message: "Failed to fetch prices" });
     }
   });
 

@@ -375,14 +375,14 @@ export default function LandingPage() {
                 )}
               </Button>
               <a
-                href="/api/login"
+                href="/login"
                 className="hidden sm:inline text-sm font-medium text-sidebar-foreground/80 transition-colors"
                 data-testid="link-login"
               >
                 Log in
               </a>
               <Button asChild className="hidden sm:inline-flex" data-testid="button-login">
-                <a href="/api/login">Start Free</a>
+                <a href="/login">Start Free</a>
               </Button>
               <Button
                 size="icon"
@@ -446,14 +446,14 @@ export default function LandingPage() {
               </a>
               <div className="flex items-center gap-3 pt-2 border-t border-sidebar-border">
                 <a
-                  href="/api/login"
+                  href="/login"
                   className="text-sm font-medium text-sidebar-foreground/80"
                   data-testid="link-mobile-login"
                 >
                   Log in
                 </a>
                 <Button asChild size="sm" data-testid="button-mobile-start">
-                  <a href="/api/login">Start Free</a>
+                  <a href="/login">Start Free</a>
                 </Button>
               </div>
             </div>
@@ -486,7 +486,7 @@ export default function LandingPage() {
                 </p>
                 <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
                   <Button asChild size="lg" data-testid="button-get-started">
-                    <a href="/api/login" className="gap-2">
+                    <a href="/login" className="gap-2">
                       Get Started Free
                       <ArrowRight className="h-4 w-4" />
                     </a>
@@ -842,7 +842,7 @@ export default function LandingPage() {
                   apps for one integrated intelligence platform.
                 </p>
                 <Button asChild className="w-full">
-                  <a href="/api/login">Start Your Free Trial</a>
+                  <a href="/login">Start Your Free Trial</a>
                 </Button>
               </Card>
             </div>
@@ -980,7 +980,7 @@ export default function LandingPage() {
               </div>
 
               <Button asChild size="lg" className="w-full gap-2 mb-4" data-testid="button-pricing-cta">
-                <a href="/api/login">
+                <a href="/login">
                   Start 14-Day Free Trial
                   <ArrowRight className="h-4 w-4" />
                 </a>
@@ -1045,7 +1045,7 @@ export default function LandingPage() {
                     We'll be in touch shortly with your access details.
                   </p>
                   <Button asChild className="mt-2" data-testid="button-try-now">
-                    <a href="/api/login">Try It Now</a>
+                    <a href="/login">Try It Now</a>
                   </Button>
                 </div>
               </Card>
@@ -1095,7 +1095,7 @@ export default function LandingPage() {
                     variant="outline"
                     data-testid="button-login-existing"
                   >
-                    <a href="/api/login">Log In</a>
+                    <a href="/login">Log In</a>
                   </Button>
                 </div>
               </Card>
@@ -1116,7 +1116,7 @@ export default function LandingPage() {
             </p>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-2">
               <Button asChild size="lg" data-testid="button-cta-bottom">
-                <a href="/api/login" className="gap-2">
+                <a href="/login" className="gap-2">
                   Get Started Free
                   <ArrowRight className="h-4 w-4" />
                 </a>
@@ -1127,7 +1127,7 @@ export default function LandingPage() {
                 size="lg"
                 data-testid="button-cta-demo"
               >
-                <a href="/api/login">Request a Demo</a>
+                <a href="/login">Request a Demo</a>
               </Button>
             </div>
           </div>
