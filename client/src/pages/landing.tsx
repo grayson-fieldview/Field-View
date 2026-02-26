@@ -41,7 +41,7 @@ import {
   Truck,
   Construction,
 } from "lucide-react";
-import logoImg from "@assets/image_1770694193695.png";
+import faviconImg from "@assets/Favicon-01_1772067008525.png";
 
 const features = [
   {
@@ -294,13 +294,9 @@ export default function LandingPage() {
       <nav className="fixed top-0 left-0 right-0 z-50 bg-sidebar border-b border-sidebar-border">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between gap-4 h-16">
-            <a href="#" className="flex items-center shrink-0">
-              <img
-                src={logoImg}
-                alt="Field View"
-                className="h-12 sm:h-14"
-                data-testid="img-landing-logo"
-              />
+            <a href="#" className="flex items-center gap-2.5 shrink-0" data-testid="img-landing-logo">
+              <img src={faviconImg} alt="Field View" className="h-9 w-9 rounded-md" />
+              <span className="text-lg font-bold tracking-tight text-sidebar-foreground">Field View</span>
             </a>
 
             <div className="hidden md:flex items-center gap-6">
@@ -915,12 +911,10 @@ export default function LandingPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-12">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-8">
             <div className="col-span-2 sm:col-span-1">
-              <img
-                src={logoImg}
-                alt="Field View"
-                className="h-12 mb-3"
-                data-testid="img-footer-logo"
-              />
+              <div className="flex items-center gap-2 mb-3" data-testid="img-footer-logo">
+                <img src={faviconImg} alt="Field View" className="h-8 w-8 rounded-md" />
+                <span className="text-base font-bold tracking-tight text-sidebar-foreground">Field View</span>
+              </div>
               <p className="text-xs text-sidebar-foreground/50 leading-relaxed">
                 The field intelligence platform for teams who build, maintain,
                 and inspect.

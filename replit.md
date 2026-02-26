@@ -5,7 +5,7 @@ Field View is a photo documentation and project management tool designed for fie
 
 ## Brand & Design
 - **Name**: Field View
-- **Logo**: Custom PNG logo (attached_assets/image_1770694193695.png) used in sidebar, landing nav, and footer
+- **Logo**: Favicon icon (attached_assets/Favicon-01_1772067008525.png) + "Field View" text used in sidebar, landing nav, and footer; Full logo (attached_assets/Transparent-01_1772067005406.png) available for light backgrounds; Favicon also serves as browser tab icon (client/public/favicon.png)
 - **Positioning**: "Field Intelligence Platform" - differentiating from pure photo documentation competitors
 - **Color Scheme**: Orange primary (#F09000), green accents (#267D32), charcoal sidebar (#1E1E1E), warm cream backgrounds (#F0EDEA)
 - **Design Inspiration**: Procore-style clean, professional construction management aesthetic

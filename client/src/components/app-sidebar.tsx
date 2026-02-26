@@ -27,7 +27,7 @@ import {
 import { useLocation, Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { ThemeToggle } from "@/components/theme-toggle";
-import logoImg from "@assets/image_1770694193695.png";
+import faviconImg from "@assets/Favicon-01_1772067008525.png";
 
 const navItems = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
@@ -54,7 +54,10 @@ export function AppSidebar() {
     <Sidebar>
       <SidebarHeader className="p-4 pb-3">
         <Link href="/" data-testid="link-home">
-          <img src={logoImg} alt="Field View" className="h-10 w-auto" data-testid="img-logo" />
+          <div className="flex items-center gap-2.5" data-testid="img-logo">
+            <img src={faviconImg} alt="Field View" className="h-9 w-9 rounded-md" />
+            <span className="text-lg font-bold tracking-tight text-sidebar-foreground">Field View</span>
+          </div>
         </Link>
       </SidebarHeader>
 
