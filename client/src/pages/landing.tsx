@@ -42,6 +42,11 @@ import {
   Construction,
 } from "lucide-react";
 import faviconImg from "@assets/Favicon-01_1772067008525.png";
+import painterImg from "@assets/stock_images/painter_working.jpg";
+import plumberImg from "@assets/stock_images/plumber_working.jpg";
+import electricianImg from "@assets/stock_images/electrician_working_1.jpg";
+import constructionTeamImg from "@assets/stock_images/construction_phone_2.jpg";
+import hvacTechImg from "@assets/stock_images/hvac_technician.jpg";
 
 const features = [
   {
@@ -253,13 +258,6 @@ const industries = [
   },
 ];
 
-const stats = [
-  { value: "10x", label: "Faster Documentation" },
-  { value: "100%", label: "Cloud Backed Up" },
-  { value: "Zero", label: "Photos Ever Lost" },
-  { value: "Real-time", label: "Team Sync" },
-];
-
 const checklistItems = [
   "GPS-tagged photos with timestamps",
   "5 annotation drawing tools",
@@ -464,17 +462,37 @@ export default function LandingPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 sm:gap-4">
-                {stats.map((s) => (
-                  <Card key={s.label} className="p-4 sm:p-5">
-                    <p className="text-2xl sm:text-3xl font-bold text-primary">
-                      {s.value}
-                    </p>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      {s.label}
-                    </p>
-                  </Card>
-                ))}
+              <div className="grid grid-cols-6 grid-rows-4 gap-2 sm:gap-3 h-[320px] sm:h-[380px] lg:h-[420px]" data-testid="hero-photo-mosaic">
+                <div className="col-span-4 row-span-2 relative rounded-xl overflow-hidden">
+                  <img src={constructionTeamImg} alt="Construction team reviewing plans on site" className="absolute inset-0 w-full h-full object-cover" />
+                  <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-3">
+                    <span className="text-white text-xs font-medium">Construction Team</span>
+                  </div>
+                </div>
+                <div className="col-span-2 row-span-2 relative rounded-xl overflow-hidden">
+                  <img src={painterImg} alt="Professional painter at work" className="absolute inset-0 w-full h-full object-cover" />
+                  <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-3">
+                    <span className="text-white text-xs font-medium">Painter</span>
+                  </div>
+                </div>
+                <div className="col-span-2 row-span-2 relative rounded-xl overflow-hidden">
+                  <img src={electricianImg} alt="Electrician installing outlet" className="absolute inset-0 w-full h-full object-cover" />
+                  <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-3">
+                    <span className="text-white text-xs font-medium">Electrician</span>
+                  </div>
+                </div>
+                <div className="col-span-2 row-span-2 relative rounded-xl overflow-hidden">
+                  <img src={plumberImg} alt="Plumber fixing faucet" className="absolute inset-0 w-full h-full object-cover" />
+                  <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-3">
+                    <span className="text-white text-xs font-medium">Plumber</span>
+                  </div>
+                </div>
+                <div className="col-span-2 row-span-2 relative rounded-xl overflow-hidden">
+                  <img src={hvacTechImg} alt="HVAC technician with safety gear" className="absolute inset-0 w-full h-full object-cover" />
+                  <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-3">
+                    <span className="text-white text-xs font-medium">HVAC Tech</span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
