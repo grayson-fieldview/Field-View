@@ -1128,8 +1128,8 @@ export async function registerRoutes(
           pr.id as price_id,
           pr.unit_amount,
           pr.currency,
-          pr.recurring_interval,
-          pr.recurring_interval_count,
+          pr.recurring->>'interval' as recurring_interval,
+          (pr.recurring->>'interval_count')::int as recurring_interval_count,
           pr.active as price_active
         FROM stripe.products p
         JOIN stripe.prices pr ON pr.product = p.id
