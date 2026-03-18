@@ -101,7 +101,7 @@ export async function registerRoutes(
   app.patch("/api/projects/:id", requireActiveSubscription, async (req, res) => {
     try {
       const id = parseInt(req.params.id as string);
-      const allowed = ["name", "description", "status", "address", "latitude", "longitude", "color"];
+      const allowed = ["name", "description", "status", "address", "latitude", "longitude", "color", "coverPhotoId"];
       const filtered: Record<string, any> = {};
       for (const key of allowed) {
         if (key in req.body) filtered[key] = req.body[key];
@@ -428,9 +428,31 @@ export async function registerRoutes(
   app.get("/api/users", requireActiveSubscription, async (_req, res) => {
     try {
       const usersList = await storage.getUsers();
-      res.json(usersList);
+      const safeUsers = usersList.map(({ password, ...rest }) => rest);
+      res.json(safeUsers);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch users" });
+    }
+  });
+
+  app.patch("/api/users/:userId/role", requireActiveSubscription, async (req, res) => {
+    try {
+      const currentUser = req.user;
+      if (currentUser.role !== "admin") {
+        return res.status(403).json({ message: "Only admins can change roles" });
+      }
+      const { userId } = req.params;
+      const { role } = req.body;
+      const validRoles = ["admin", "manager", "standard", "restricted"];
+      if (!validRoles.includes(role)) {
+        return res.status(400).json({ message: "Invalid role" });
+      }
+      const updated = await db.update(users).set({ role }).where(eq(users.id, userId)).returning();
+      if (updated.length === 0) return res.status(404).json({ message: "User not found" });
+      const { password: _, ...safeUser } = updated[0];
+      res.json(safeUser);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update role" });
     }
   });
 

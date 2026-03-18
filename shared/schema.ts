@@ -21,6 +21,7 @@ export const projects = pgTable("projects", {
   latitude: real("latitude"),
   longitude: real("longitude"),
   color: text("color").default("#3B82F6"),
+  coverPhotoId: integer("cover_photo_id"),
   createdById: varchar("created_by_id").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),

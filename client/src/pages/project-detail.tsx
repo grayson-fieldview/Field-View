@@ -244,6 +244,8 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const [showProjectInfo, setShowProjectInfo] = useState(false);
   const [photoSize, setPhotoSize] = useState<"small" | "medium" | "large">("medium");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [stagedFiles, setStagedFiles] = useState<File[]>([]);
+  const [stagedPreviews, setStagedPreviews] = useState<string[]>([]);
 
   const { data, isLoading } = useQuery<ProjectDetailData>({
     queryKey: ["/api/projects", id],
@@ -257,10 +259,32 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     queryKey: ["/api/report-templates"],
   });
 
+  const handleFilesSelected = useCallback((files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const newFiles = Array.from(files);
+    setStagedFiles((prev) => [...prev, ...newFiles]);
+    const newPreviews = newFiles.map((f) => URL.createObjectURL(f));
+    setStagedPreviews((prev) => [...prev, ...newPreviews]);
+  }, []);
+
+  const removeStagedFile = useCallback((index: number) => {
+    setStagedPreviews((prev) => {
+      URL.revokeObjectURL(prev[index]);
+      return prev.filter((_, i) => i !== index);
+    });
+    setStagedFiles((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const clearStaged = useCallback(() => {
+    stagedPreviews.forEach((url) => URL.revokeObjectURL(url));
+    setStagedFiles([]);
+    setStagedPreviews([]);
+  }, [stagedPreviews]);
+
   const uploadMedia = useMutation({
-    mutationFn: async (files: FileList) => {
+    mutationFn: async (files: File[]) => {
       const formData = new FormData();
-      Array.from(files).forEach((f) => formData.append("files", f));
+      files.forEach((f) => formData.append("files", f));
       const res = await fetch(`/api/projects/${id}/media`, {
         method: "POST",
         body: formData,
@@ -270,6 +294,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
       return res.json();
     },
     onSuccess: () => {
+      clearStaged();
       queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
       queryClient.invalidateQueries({ queryKey: ["/api/projects"], exact: true });
       toast({ title: "Uploaded", description: "Photos added to the project." });
@@ -281,6 +306,17 @@ export default function ProjectDetailPage({ id }: { id: string }) {
         return;
       }
       toast({ title: "Upload failed", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const setCoverPhoto = useMutation({
+    mutationFn: async (mediaId: number) => {
+      const res = await apiRequest("PATCH", `/api/projects/${id}`, { coverPhotoId: mediaId });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
+      toast({ title: "Cover photo updated" });
     },
   });
 
@@ -637,7 +673,27 @@ export default function ProjectDetailPage({ id }: { id: string }) {
 
         <div className="px-4 sm:px-6 pb-4">
           <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="min-w-0">
+            <div className="flex items-start gap-4 min-w-0">
+              {(() => {
+                const coverMedia = project.coverPhotoId
+                  ? projectMedia.find((m) => m.id === project.coverPhotoId)
+                  : projectMedia[0];
+                return coverMedia ? (
+                  <div className="relative shrink-0 group">
+                    <img
+                      src={coverMedia.url}
+                      alt="Cover"
+                      className="h-16 w-16 sm:h-20 sm:w-20 rounded-lg object-cover border shadow-sm"
+                      data-testid="img-project-cover"
+                    />
+                  </div>
+                ) : (
+                  <div className="h-16 w-16 sm:h-20 sm:w-20 rounded-lg bg-muted border flex items-center justify-center shrink-0">
+                    <ImageIcon className="h-6 w-6 text-muted-foreground" />
+                  </div>
+                );
+              })()}
+              <div className="min-w-0">
               <h1 className="text-xl sm:text-2xl font-bold tracking-tight truncate" data-testid="text-project-name">
                 {project.name}
               </h1>
@@ -658,6 +714,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                   <Calendar className="h-3 w-3 shrink-0" />
                   Created {new Date(project.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
                 </span>
+              </div>
               </div>
             </div>
 
@@ -899,24 +956,74 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                     type="file"
                     multiple
                     accept="image/*,video/*"
+                    capture="environment"
                     className="hidden"
                     onChange={(e) => {
-                      if (e.target.files?.length) uploadMedia.mutate(e.target.files);
+                      handleFilesSelected(e.target.files);
+                      e.target.value = "";
                     }}
                     data-testid="input-file-upload"
                   />
                   <Button
+                    variant="outline"
                     onClick={() => fileInputRef.current?.click()}
-                    disabled={uploadMedia.isPending}
-                    data-testid="button-upload-photos"
+                    data-testid="button-add-photos"
                   >
-                    <Upload className="h-4 w-4 mr-2" />
-                    {uploadMedia.isPending ? "Uploading..." : "Upload Photos"}
+                    <Plus className="h-4 w-4 mr-2" />
+                    Add Photos
                   </Button>
+                  {stagedFiles.length > 0 && (
+                    <Button
+                      onClick={() => uploadMedia.mutate(stagedFiles)}
+                      disabled={uploadMedia.isPending}
+                      data-testid="button-upload-photos"
+                    >
+                      <Upload className="h-4 w-4 mr-2" />
+                      {uploadMedia.isPending ? "Uploading..." : `Upload ${stagedFiles.length} Photo${stagedFiles.length !== 1 ? "s" : ""}`}
+                    </Button>
+                  )}
                 </div>
               </div>
 
-              {projectMedia.length === 0 ? (
+              {stagedFiles.length > 0 && (
+                <Card className="p-4" data-testid="staged-photos-queue">
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-sm font-semibold">{stagedFiles.length} photo{stagedFiles.length !== 1 ? "s" : ""} ready to upload</p>
+                    <Button variant="ghost" size="sm" onClick={clearStaged} data-testid="button-clear-staged">
+                      <X className="h-3.5 w-3.5 mr-1" />
+                      Clear all
+                    </Button>
+                  </div>
+                  <div className="flex gap-2 overflow-x-auto pb-2">
+                    {stagedPreviews.map((preview, i) => (
+                      <div key={i} className="relative shrink-0 group">
+                        <img
+                          src={preview}
+                          alt={stagedFiles[i]?.name || "Photo"}
+                          className="h-20 w-20 object-cover rounded-md border"
+                        />
+                        <button
+                          onClick={() => removeStagedFile(i)}
+                          className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                          data-testid={`button-remove-staged-${i}`}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      className="h-20 w-20 shrink-0 rounded-md border-2 border-dashed border-muted-foreground/30 flex flex-col items-center justify-center text-muted-foreground hover:border-primary hover:text-primary transition-colors"
+                      data-testid="button-add-more-photos"
+                    >
+                      <Plus className="h-5 w-5" />
+                      <span className="text-[10px] mt-0.5">Add more</span>
+                    </button>
+                  </div>
+                </Card>
+              )}
+
+              {projectMedia.length === 0 && stagedFiles.length === 0 ? (
                 <Card className="p-12">
                   <div className="text-center space-y-3">
                     <div className="flex h-12 w-12 items-center justify-center rounded-md bg-muted mx-auto">
@@ -998,6 +1105,19 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                                   <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-blue-600 text-white text-xs font-semibold">
                                     After
                                   </div>
+                                )}
+                                {!selectionMode && !compareMode && (
+                                  <button
+                                    className={`absolute top-2 right-2 h-7 w-7 rounded-full flex items-center justify-center transition-opacity ${project.coverPhotoId === item.id ? "bg-primary text-primary-foreground opacity-100" : "bg-black/50 text-white opacity-0 group-hover:opacity-100"}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setCoverPhoto.mutate(item.id);
+                                    }}
+                                    title="Set as cover photo"
+                                    data-testid={`button-set-cover-${item.id}`}
+                                  >
+                                    <Star className={`h-3.5 w-3.5 ${project.coverPhotoId === item.id ? "fill-current" : ""}`} />
+                                  </button>
                                 )}
                                 {item.uploadedBy && !selectionMode && (
                                   <div className="absolute bottom-2 right-2">

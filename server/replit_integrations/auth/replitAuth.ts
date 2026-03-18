@@ -85,11 +85,15 @@ export async function setupAuth(app: Express) {
 
       const hashedPassword = await bcrypt.hash(password, 12);
 
+      const allUsers = await authStorage.getAllUsers();
+      const isFirstUser = allUsers.length === 0;
+
       const user = await authStorage.upsertUser({
         email,
         password: hashedPassword,
         firstName: firstName || null,
         lastName: lastName || null,
+        role: isFirstUser ? "admin" : "standard",
         subscriptionStatus: "none",
         trialEndsAt: null,
       });

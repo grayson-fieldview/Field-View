@@ -6,6 +6,7 @@ export interface IAuthStorage {
   getUser(id: string): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
   getUserByStripeCustomerId(stripeCustomerId: string): Promise<User | undefined>;
+  getAllUsers(): Promise<User[]>;
   upsertUser(user: UpsertUser): Promise<User>;
   updateUser(id: string, data: Partial<UpsertUser>): Promise<User | undefined>;
 }
@@ -26,6 +27,10 @@ class AuthStorage implements IAuthStorage {
     if (!stripeCustomerId) return undefined;
     const [user] = await db.select().from(users).where(eq(users.stripeCustomerId, stripeCustomerId));
     return user;
+  }
+
+  async getAllUsers(): Promise<User[]> {
+    return db.select().from(users);
   }
 
   async upsertUser(userData: UpsertUser): Promise<User> {

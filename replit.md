@@ -64,8 +64,8 @@ Field View is a photo documentation and project management tool designed for fie
 - Subscription statuses: "none" (no subscription), "trialing" (Stripe trial with card), "active", "past_due", "canceled"
 
 ## Data Models
-- **Users** - Custom auth (id UUID, email, password hashed, firstName, lastName, profileImageUrl, stripeCustomerId, stripeSubscriptionId, subscriptionStatus, trialEndsAt)
-- **Projects** - Job sites (name, description, status, address, lat/lng, color)
+- **Users** - Custom auth (id UUID, email, password hashed, firstName, lastName, profileImageUrl, role [admin/manager/standard/restricted], stripeCustomerId, stripeSubscriptionId, subscriptionStatus, trialEndsAt)
+- **Projects** - Job sites (name, description, status, address, lat/lng, color, coverPhotoId)
 - **Media** - Photos/videos (projectId, url, caption, tags, GPS coords)
 - **Comments** - On media items (mediaId, userId, content)
 - **Tasks** - Project tasks (projectId, title, status, priority, assignedTo)
@@ -88,6 +88,7 @@ Field View is a photo documentation and project management tool designed for fie
 - `GET /api/media` - All media across projects
 - `GET/POST /api/media/:id/comments` - Comments on media
 - `GET /api/users` - List team members
+- `PATCH /api/users/:userId/role` - Update user role (admin only)
 - `POST /api/galleries` - Create shareable gallery
 - `GET /api/galleries/:token` - Get public gallery by token
 - `GET /api/analytics?from=&to=` - Aggregated analytics
@@ -100,11 +101,14 @@ Field View is a photo documentation and project management tool designed for fie
 - `GET /api/stripe/publishable-key` - Get Stripe publishable key
 
 ## Key Features
-- Photo annotations: 5 drawing tools (freehand, arrow, circle, rectangle, line), 8 colors, adjustable stroke width
+- Photo annotations: 5 drawing tools (freehand, arrow, circle, rectangle, line), 8 colors (#F09000 orange standardized), adjustable stroke width
+- Batch photo upload: Stage multiple photos with preview thumbnails before uploading; camera capture support on mobile
+- Project cover photo: Shows in project detail header (uses coverPhotoId or first media as fallback)
+- User roles: Admin, Manager, Standard, Restricted — admin can change roles from Team page
 - Checklist templates: Create reusable templates, apply to projects
 - Report templates: Create reusable report templates
 - Gallery sharing: Generate shareable photo gallery links with configurable metadata
-- Address autocomplete: Google Places API integration (Enter key blocked to prevent accidental form submission)
+- Address autocomplete: Google Places API integration (Enter key blocked, dialog interaction/pointer/focus events handled for modal compatibility)
 - Analytics dashboard: 7 stat cards, bar chart (photos by user), line chart (photos over time), map (photo locations), bar chart (photos by project), pie chart (task status), time period filtering
 - Command Center Dashboard: KPI strip, overdue task alert banner, activity feed, mini-map, recent photos, quick actions, project list with search/filter
 - Before/After Photo Comparison: Drag slider to compare two project photos side-by-side
@@ -127,7 +131,7 @@ Field View is a photo documentation and project management tool designed for fie
 7. **Project Detail** - Photos tab (with before/after compare) + Tasks tab + Checklists + Reports + Daily Log
 8. **Photos** - Global gallery with search and project filtering
 9. **Map** - Leaflet map with project location markers
-10. **Team** - Team member directory
+10. **Team** - Team member directory with role badges and admin role management
 11. **Settings** - Profile, appearance (dark mode), billing/subscription management, notifications
 12. **Checklists** - Global checklist management with templates
 13. **Reports** - Global report management with templates

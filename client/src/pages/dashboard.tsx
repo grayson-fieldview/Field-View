@@ -226,13 +226,13 @@ export default function DashboardPage() {
   });
 
   const handleAddressSelect = useCallback((result: { address: string; latitude: number; longitude: number }) => {
-    form.setValue("address", result.address);
-    form.setValue("latitude", result.latitude);
-    form.setValue("longitude", result.longitude);
+    form.setValue("address", result.address, { shouldValidate: true, shouldDirty: true });
+    form.setValue("latitude", result.latitude, { shouldDirty: true });
+    form.setValue("longitude", result.longitude, { shouldDirty: true });
   }, [form]);
 
   const handleAddressTextChange = useCallback((text: string) => {
-    form.setValue("address", text);
+    form.setValue("address", text, { shouldDirty: true });
     form.setValue("latitude", null);
     form.setValue("longitude", null);
   }, [form]);
@@ -290,6 +290,16 @@ export default function DashboardPage() {
           <DialogContent className="sm:max-w-lg" onInteractOutside={(e) => {
             const target = e.target as HTMLElement;
             if (target.closest(".pac-container")) {
+              e.preventDefault();
+            }
+          }} onPointerDownOutside={(e) => {
+            const target = e.target as HTMLElement;
+            if (target.closest(".pac-container")) {
+              e.preventDefault();
+            }
+          }} onFocusOutside={(e) => {
+            const target = e.target as HTMLElement;
+            if (target.closest && target.closest(".pac-container")) {
               e.preventDefault();
             }
           }}>

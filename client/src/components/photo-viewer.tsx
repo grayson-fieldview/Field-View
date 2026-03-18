@@ -67,7 +67,7 @@ const ANNOTATION_COLORS = [
   { name: "Green", value: "#34c759" },
   { name: "Blue", value: "#007aff" },
   { name: "Yellow", value: "#ffcc00" },
-  { name: "Orange", value: "#ff9500" },
+  { name: "Orange", value: "#F09000" },
   { name: "Purple", value: "#af52de" },
   { name: "White", value: "#ffffff" },
   { name: "Black", value: "#000000" },
