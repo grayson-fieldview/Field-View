@@ -75,7 +75,7 @@ export default function RegisterPage() {
             <span className="text-xl font-bold text-[#1E1E1E] dark:text-white">Field View</span>
           </div>
           <CardTitle className="text-2xl" data-testid="text-register-title">Start your free trial</CardTitle>
-          <CardDescription>14 days free, no credit card required</CardDescription>
+          <CardDescription>14 days free — add a payment method to get started</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">

@@ -1462,9 +1462,9 @@ export default function ProjectDetailPage({ id }: { id: string }) {
             </div>
           ) : (
             <div className="space-y-4">
-              <div className="flex items-center gap-2 p-2 rounded-md border bg-muted/50 min-w-0 overflow-hidden">
+              <div className="flex items-center gap-2 p-2 rounded-md border bg-muted/50 min-w-0 overflow-hidden max-w-full">
                 <Link2 className="h-4 w-4 text-muted-foreground shrink-0" />
-                <span className="text-sm truncate min-w-0 flex-1" data-testid="text-share-link">{shareLink}</span>
+                <span className="text-sm min-w-0 flex-1 break-all line-clamp-2" data-testid="text-share-link">{shareLink}</span>
                 <Button
                   variant="outline"
                   size="sm"

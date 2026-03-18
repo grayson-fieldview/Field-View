@@ -39,6 +39,10 @@ function AuthenticatedLayout() {
       <div className="flex h-screen w-full">
         <AppSidebar />
         <div className="flex flex-col flex-1 min-w-0">
+          <div className="md:hidden flex items-center gap-2 px-3 py-2 border-b bg-background">
+            <SidebarTrigger data-testid="button-mobile-menu" />
+            <span className="text-sm font-medium text-foreground">Field View</span>
+          </div>
           <main className="flex-1 overflow-auto">
             <Switch>
               <Route path="/" component={DashboardPage} />
@@ -75,7 +79,7 @@ function SubscriptionGate() {
   const trialEndsAt = user.trialEndsAt ? new Date(user.trialEndsAt) : null;
   const trialExpired = trialEndsAt && trialEndsAt < new Date();
 
-  if (status === "active" || (status === "trial" && !trialExpired)) {
+  if (status === "active" || status === "trialing" || (status === "trial" && !trialExpired)) {
     return <AuthenticatedLayout />;
   }
 

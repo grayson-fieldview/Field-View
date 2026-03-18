@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useState, useEffect } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -18,8 +18,26 @@ import faviconImg from "@assets/Favicon-01_1772067008525.png";
 export default function SubscribePage() {
   const { user, logout } = useAuth();
   const { toast } = useToast();
+  const qc = useQueryClient();
   const [billingCycle, setBillingCycle] = useState<"annual" | "monthly">("annual");
   const [teamSize, setTeamSize] = useState(3);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("checkout") === "success") {
+      window.history.replaceState({}, "", "/");
+      fetch("/api/confirm-checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      })
+        .then((res) => res.json())
+        .then(() => {
+          qc.invalidateQueries({ queryKey: ["/api/auth/user"] });
+        })
+        .catch(() => {});
+    }
+  }, [qc]);
 
   const { data: prices, isLoading: pricesLoading } = useQuery({
     queryKey: ["/api/stripe/prices"],
@@ -101,6 +119,7 @@ export default function SubscribePage() {
     }
   };
 
+  const status = user?.subscriptionStatus;
   const trialEndsAt = user?.trialEndsAt ? new Date(user.trialEndsAt) : null;
   const trialExpired = trialEndsAt && trialEndsAt < new Date();
   const daysLeft = trialEndsAt
@@ -132,6 +151,15 @@ export default function SubscribePage() {
             </h1>
             <p className="text-muted-foreground text-lg">
               Subscribe to continue using Field View for your team
+            </p>
+          </div>
+        ) : status === "none" || !status ? (
+          <div className="text-center mb-8">
+            <h1 className="text-3xl font-bold text-foreground mb-2" data-testid="text-subscribe-title">
+              Start your 14-day free trial
+            </h1>
+            <p className="text-muted-foreground text-lg">
+              Add a payment method to begin — you won't be charged until the trial ends
             </p>
           </div>
         ) : (
@@ -250,6 +278,11 @@ export default function SubscribePage() {
                   <Loader2 className="mr-2 h-5 w-5 animate-spin" />
                   Redirecting to checkout...
                 </>
+              ) : status === "none" || !status ? (
+                <>
+                  <CreditCard className="mr-2 h-5 w-5" />
+                  Start Free Trial — ${totalPrice}/mo after trial
+                </>
               ) : (
                 <>
                   <CreditCard className="mr-2 h-5 w-5" />
@@ -259,7 +292,7 @@ export default function SubscribePage() {
             </Button>
 
             <p className="text-xs text-center text-muted-foreground">
-              14-day free trial included. Cancel anytime. Prices in USD.
+              14-day free trial — your card won't be charged until the trial ends. Cancel anytime.
             </p>
           </CardContent>
         </Card>

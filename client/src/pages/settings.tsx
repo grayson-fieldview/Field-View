@@ -55,6 +55,7 @@ function BillingCard() {
   const status = user?.subscriptionStatus || "none";
   const statusLabel: Record<string, string> = {
     active: "Active",
+    trialing: "Trial",
     trial: "Trial",
     past_due: "Past Due",
     canceled: "Canceled",
@@ -62,6 +63,7 @@ function BillingCard() {
   };
   const statusColor: Record<string, string> = {
     active: "bg-[#267D32] text-white",
+    trialing: "bg-[#F09000] text-white",
     trial: "bg-[#F09000] text-white",
     past_due: "bg-red-500 text-white",
     canceled: "bg-gray-500 text-white",

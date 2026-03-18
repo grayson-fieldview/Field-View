@@ -4,8 +4,9 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import { seedDatabase } from "./seed";
 import { runMigrations } from "stripe-replit-sync";
-import { getStripeSync } from "./stripeClient";
+import { getStripeSync, getUncachableStripeClient } from "./stripeClient";
 import { WebhookHandlers } from "./webhookHandlers";
+import { authStorage } from "./replit_integrations/auth/storage";
 
 const app = express();
 const httpServer = createServer(app);
@@ -64,6 +65,65 @@ async function initStripe() {
   }
 }
 
+async function handleSubscriptionEvent(event: any) {
+  try {
+    const type = event.type;
+    const data = event.data?.object;
+    if (!data) return;
+
+    if (type === "checkout.session.completed") {
+      const customerId = data.customer;
+      const subscriptionId = data.subscription;
+      if (customerId && subscriptionId) {
+        const user = await authStorage.getUserByStripeCustomerId(customerId);
+        if (user) {
+          let appStatus = "trialing";
+          try {
+            const stripe = await getUncachableStripeClient();
+            const sub = await stripe.subscriptions.retrieve(subscriptionId as string);
+            if (sub.status === "active") appStatus = "active";
+            else if (sub.status === "trialing") appStatus = "trialing";
+            else if (sub.status === "past_due") appStatus = "past_due";
+          } catch (e) {}
+          await authStorage.updateUser(user.id, {
+            stripeSubscriptionId: subscriptionId as string,
+            subscriptionStatus: appStatus,
+          });
+          console.log(`User ${user.id} subscription updated to ${appStatus} via checkout`);
+        }
+      }
+    } else if (type === "customer.subscription.updated") {
+      const customerId = data.customer;
+      const status = data.status;
+      const user = await authStorage.getUserByStripeCustomerId(customerId);
+      if (user) {
+        let appStatus = "none";
+        if (status === "active") appStatus = "active";
+        else if (status === "trialing") appStatus = "trialing";
+        else if (status === "past_due") appStatus = "past_due";
+        else if (status === "canceled" || status === "unpaid") appStatus = "canceled";
+
+        await authStorage.updateUser(user.id, {
+          subscriptionStatus: appStatus,
+          stripeSubscriptionId: data.id,
+        });
+        console.log(`User ${user.id} subscription updated to ${appStatus}`);
+      }
+    } else if (type === "customer.subscription.deleted") {
+      const customerId = data.customer;
+      const user = await authStorage.getUserByStripeCustomerId(customerId);
+      if (user) {
+        await authStorage.updateUser(user.id, {
+          subscriptionStatus: "canceled",
+        });
+        console.log(`User ${user.id} subscription canceled`);
+      }
+    }
+  } catch (err: any) {
+    console.error("Error handling subscription event:", err.message);
+  }
+}
+
 (async () => {
   await initStripe();
 
@@ -86,6 +146,19 @@ async function initStripe() {
         }
 
         await WebhookHandlers.processWebhook(req.body as Buffer, sig);
+
+        try {
+          const stripe = await getUncachableStripeClient();
+          const event = stripe.webhooks.constructEvent(req.body, sig, '');
+          await handleSubscriptionEvent(event);
+        } catch (eventErr: any) {
+          try {
+            const rawEvent = JSON.parse(req.body.toString());
+            await handleSubscriptionEvent(rawEvent);
+          } catch (parseErr) {
+          }
+        }
+
         res.status(200).json({ received: true });
       } catch (error: any) {
         console.error('Webhook error:', error.message);

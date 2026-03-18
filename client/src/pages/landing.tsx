@@ -985,7 +985,7 @@ export default function LandingPage() {
                   <ArrowRight className="h-4 w-4" />
                 </a>
               </Button>
-              <p className="text-xs text-muted-foreground text-center">No credit card required</p>
+              <p className="text-xs text-muted-foreground text-center">14-day free trial included</p>
 
               <div className="grid grid-cols-2 gap-x-4 gap-y-2 mt-6 pt-6 border-t">
                 {[
@@ -1083,7 +1083,7 @@ export default function LandingPage() {
                     <ArrowRight className="h-4 w-4" />
                   </Button>
                   <p className="text-xs text-muted-foreground text-center">
-                    Free to start. No credit card required.
+                    14-day free trial — cancel anytime.
                   </p>
                 </form>
                 <div className="mt-4 pt-4 border-t text-center">

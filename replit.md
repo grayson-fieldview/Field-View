@@ -46,7 +46,8 @@ Field View is a photo documentation and project management tool designed for fie
 - Passwords hashed with bcryptjs (12 rounds)
 - Sessions stored in PostgreSQL via connect-pg-simple
 - User schema includes: id (UUID), email, password (hashed), firstName, lastName, profileImageUrl, stripeCustomerId, stripeSubscriptionId, subscriptionStatus, trialEndsAt
-- New users get 14-day free trial (subscriptionStatus: "trial")
+- New users register with subscriptionStatus: "none" — must enter credit card via Stripe Checkout to start 14-day free trial
+- Stripe manages the trial period (subscriptionStatus: "trialing" after checkout)
 - Auth routes: POST /api/register, POST /api/login, POST /api/logout, GET /api/auth/user, POST /api/forgot-password
 
 ## Stripe Integration
@@ -56,8 +57,11 @@ Field View is a photo documentation and project management tool designed for fie
 - Products created via Stripe API (seed-stripe-products.ts), synced automatically
 - Pricing: Monthly $79/mo base (3 users) + $29/extra user; Annual $49/mo base + $24/extra user
 - Stripe product: "Field View Pro" with monthly and annual prices
-- Checkout flow: POST /api/create-checkout-session with priceId → Stripe Checkout → webhook updates user
+- Checkout flow: POST /api/create-checkout-session with priceId → Stripe Checkout (payment_method_collection: "always", trial_period_days: 14 for new users) → webhook updates user
+- POST /api/confirm-checkout - Syncs subscription status from Stripe after checkout redirect
 - Billing portal: POST /api/create-portal-session → Stripe Billing Portal
+- Webhook handler in index.ts processes checkout.session.completed, customer.subscription.updated, customer.subscription.deleted events to update user subscriptionStatus
+- Subscription statuses: "none" (no subscription), "trialing" (Stripe trial with card), "active", "past_due", "canceled"
 
 ## Data Models
 - **Users** - Custom auth (id UUID, email, password hashed, firstName, lastName, profileImageUrl, stripeCustomerId, stripeSubscriptionId, subscriptionStatus, trialEndsAt)

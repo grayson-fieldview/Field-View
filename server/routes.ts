@@ -1012,21 +1012,65 @@ export async function registerRoutes(
       }
 
       const baseUrl = `${req.protocol}://${req.get("host")}`;
-      const session = await stripe.checkout.sessions.create({
+      const hasSubscription = user.subscriptionStatus === "active" || user.stripeSubscriptionId;
+      const sessionConfig: any = {
         customer: customerId,
         mode: "subscription",
         line_items: [{ price: priceId, quantity: 1 }],
         success_url: `${baseUrl}/?checkout=success`,
         cancel_url: `${baseUrl}/?checkout=canceled`,
-        subscription_data: {
+        payment_method_collection: "always",
+      };
+      if (!hasSubscription) {
+        sessionConfig.subscription_data = {
           trial_period_days: 14,
-        },
-      });
+        };
+      }
+      const session = await stripe.checkout.sessions.create(sessionConfig);
 
       res.json({ url: session.url });
     } catch (error: any) {
       console.error("Checkout session error:", error);
       res.status(500).json({ message: error.message || "Failed to create checkout session" });
+    }
+  });
+
+  app.post("/api/confirm-checkout", isAuthenticated, async (req: any, res) => {
+    try {
+      const user = await authStorage.getUser(req.user.id);
+      if (!user?.stripeCustomerId) {
+        return res.status(400).json({ message: "No billing account found" });
+      }
+
+      const stripe = await getUncachableStripeClient();
+      const subscriptions = await stripe.subscriptions.list({
+        customer: user.stripeCustomerId,
+        limit: 1,
+        status: "all",
+      });
+
+      if (subscriptions.data.length > 0) {
+        const sub = subscriptions.data[0];
+        let appStatus = "none";
+        if (sub.status === "active") appStatus = "active";
+        else if (sub.status === "trialing") appStatus = "trialing";
+        else if (sub.status === "past_due") appStatus = "past_due";
+        else if (sub.status === "canceled" || sub.status === "unpaid") appStatus = "canceled";
+
+        await authStorage.updateUser(user.id, {
+          stripeSubscriptionId: sub.id,
+          subscriptionStatus: appStatus,
+        });
+
+        const updatedUser = await authStorage.getUser(user.id);
+        const { password: _, ...safeUser } = updatedUser!;
+        return res.json(safeUser);
+      }
+
+      return res.json({ message: "No subscription found" });
+    } catch (error: any) {
+      console.error("Confirm checkout error:", error);
+      res.status(500).json({ message: "Failed to confirm checkout" });
     }
   });
 

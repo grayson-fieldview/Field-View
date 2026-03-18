@@ -84,16 +84,14 @@ export async function setupAuth(app: Express) {
       }
 
       const hashedPassword = await bcrypt.hash(password, 12);
-      const trialEndsAt = new Date();
-      trialEndsAt.setDate(trialEndsAt.getDate() + 14);
 
       const user = await authStorage.upsertUser({
         email,
         password: hashedPassword,
         firstName: firstName || null,
         lastName: lastName || null,
-        subscriptionStatus: "trial",
-        trialEndsAt,
+        subscriptionStatus: "none",
+        trialEndsAt: null,
       });
 
       req.login(user, (err) => {
@@ -175,7 +173,7 @@ export const requireActiveSubscription: RequestHandler = async (req: any, res, n
   }
 
   const status = user.subscriptionStatus;
-  if (status === "active") {
+  if (status === "active" || status === "trialing") {
     return next();
   }
 
