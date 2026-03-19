@@ -241,7 +241,6 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const [compareMode, setCompareMode] = useState(false);
   const [comparePhotos, setComparePhotos] = useState<[number | null, number | null]>([null, null]);
   const [showCompareDialog, setShowCompareDialog] = useState(false);
-  const [showProjectInfo, setShowProjectInfo] = useState(false);
   const [photoSize, setPhotoSize] = useState<"small" | "medium" | "large">("medium");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [stagedFiles, setStagedFiles] = useState<File[]>([]);
@@ -621,205 +620,177 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     ? Math.round(projectChecklists.reduce((acc, cl) => acc + (cl.itemCount > 0 ? cl.checkedCount / cl.itemCount : 0), 0) / projectChecklists.length * 100)
     : 0;
 
+  const coverMedia = project.coverPhotoId
+    ? projectMedia.find((m) => m.id === project.coverPhotoId)
+    : projectMedia[0];
+
+  const statusConfig: Record<string, { label: string; className: string }> = {
+    active: { label: "Active", className: "bg-[#267D32]/15 text-[#267D32] border-[#267D32]/30" },
+    completed: { label: "Completed", className: "bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30" },
+    on_hold: { label: "On Hold", className: "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30" },
+  };
+  const currentStatus = statusConfig[project.status] || statusConfig.active;
+
   return (
     <div className="h-full flex flex-col">
       <div className="shrink-0">
-        <div className="px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => navigate("/")}
-            data-testid="button-back"
-          >
-            <ChevronLeft className="h-4 w-4 mr-1" />
-            Projects
-          </Button>
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="icon" data-testid="button-star">
-              <Star className="h-4 w-4" />
-            </Button>
+        <div className="relative">
+          {coverMedia ? (
+            <div className="relative h-36 sm:h-44 overflow-hidden bg-muted" data-testid="project-hero-banner">
+              <img
+                src={coverMedia.url}
+                alt="Project cover"
+                className="absolute inset-0 w-full h-full object-cover"
+                data-testid="img-project-cover"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/30 to-black/10" />
+            </div>
+          ) : (
+            <div className="relative h-28 sm:h-36 overflow-hidden bg-gradient-to-br from-[#1E1E1E] to-[#2a2a2a]" data-testid="project-hero-banner">
+              <div className="absolute inset-0 opacity-10" style={{ backgroundImage: "radial-gradient(circle at 20% 50%, #F09000 0%, transparent 50%), radial-gradient(circle at 80% 50%, #267D32 0%, transparent 50%)" }} />
+            </div>
+          )}
+
+          <div className="absolute top-3 left-3 right-3 flex items-center justify-between z-10">
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setShowProjectInfo(!showProjectInfo)}
-              data-testid="button-project-info-toggle"
+              onClick={() => navigate("/")}
+              className="text-white bg-black/30 hover:bg-black/50 backdrop-blur-sm border-0"
+              data-testid="button-back"
             >
-              <Info className="h-4 w-4 mr-1.5" />
-              Details
+              <ChevronLeft className="h-4 w-4 mr-1" />
+              Projects
             </Button>
-            <Button variant="ghost" size="sm" data-testid="button-share">
-              <Share2 className="h-4 w-4 mr-1.5" />
-              Share
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" data-testid="button-more">
-                  <MoreHorizontal className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem
-                  className="text-destructive focus:text-destructive"
-                  onClick={() => setShowDeleteDialog(true)}
-                  data-testid="menu-item-delete-project"
-                >
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  Delete Project
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <div className="flex items-center gap-1.5">
+              <Button variant="ghost" size="icon" className="text-white bg-black/30 hover:bg-black/50 backdrop-blur-sm h-8 w-8" data-testid="button-share">
+                <Share2 className="h-4 w-4" />
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="text-white bg-black/30 hover:bg-black/50 backdrop-blur-sm h-8 w-8" data-testid="button-more">
+                    <MoreHorizontal className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem
+                    className="text-destructive focus:text-destructive"
+                    onClick={() => setShowDeleteDialog(true)}
+                    data-testid="menu-item-delete-project"
+                  >
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Delete Project
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
           </div>
         </div>
 
-        <div className="px-4 sm:px-6 pb-4">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="flex items-start gap-4 min-w-0">
-              {(() => {
-                const coverMedia = project.coverPhotoId
-                  ? projectMedia.find((m) => m.id === project.coverPhotoId)
-                  : projectMedia[0];
-                return coverMedia ? (
-                  <div className="relative shrink-0 group">
-                    <img
-                      src={coverMedia.url}
-                      alt="Cover"
-                      className="h-16 w-16 sm:h-20 sm:w-20 rounded-lg object-cover border shadow-sm"
-                      data-testid="img-project-cover"
-                    />
-                  </div>
-                ) : (
-                  <div className="h-16 w-16 sm:h-20 sm:w-20 rounded-lg bg-muted border flex items-center justify-center shrink-0">
-                    <ImageIcon className="h-6 w-6 text-muted-foreground" />
-                  </div>
-                );
-              })()}
-              <div className="min-w-0">
-              <h1 className="text-xl sm:text-2xl font-bold tracking-tight truncate" data-testid="text-project-name">
-                {project.name}
-              </h1>
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1">
-                {project.address && (
-                  <a
-                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(project.address)}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-sm text-muted-foreground hover:text-primary flex items-center gap-1 transition-colors"
-                    data-testid="link-project-address"
-                  >
-                    <MapPin className="h-3 w-3 shrink-0" />
-                    <span className="underline-offset-2 hover:underline">{project.address}</span>
-                  </a>
-                )}
-                <span className="text-sm text-muted-foreground flex items-center gap-1" data-testid="text-project-created">
-                  <Calendar className="h-3 w-3 shrink-0" />
-                  Created {new Date(project.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
-                </span>
-              </div>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-              <Card className="px-3 py-1.5 flex items-center gap-2" data-testid="stat-project-photos">
-                <ImageIcon className="h-3.5 w-3.5 text-primary" />
-                <span className="text-sm font-semibold">{projectMedia.length}</span>
-                <span className="text-xs text-muted-foreground">Photos</span>
-              </Card>
-              <Card className="px-3 py-1.5 flex items-center gap-2" data-testid="stat-project-tasks">
-                <ClipboardList className="h-3.5 w-3.5 text-primary" />
-                <span className="text-sm font-semibold">{projectTasks.length}</span>
-                <span className="text-xs text-muted-foreground">Tasks</span>
-              </Card>
-              {projectChecklists.length > 0 && (
-                <Card className="px-3 py-1.5 flex items-center gap-2" data-testid="stat-project-checklists">
-                  <ClipboardCheck className="h-3.5 w-3.5 text-[#267D32]" />
-                  <span className="text-sm font-semibold">{checklistProgress}%</span>
-                  <span className="text-xs text-muted-foreground">Checklists</span>
-                </Card>
-              )}
-              {projectUsers.length > 0 && (
-                <div className="flex items-center -space-x-1.5">
-                  {projectUsers.slice(0, 4).map((u, i) => (
-                    <Avatar key={i} className="h-7 w-7 border-2 border-background">
-                      <AvatarImage src={u.profileImageUrl || undefined} />
-                      <AvatarFallback className="text-[9px] bg-primary/10 text-primary">
-                        {getInitials(u.firstName, u.lastName)}
-                      </AvatarFallback>
-                    </Avatar>
-                  ))}
-                  {projectUsers.length > 4 && (
-                    <div className="h-7 w-7 rounded-full bg-muted border-2 border-background flex items-center justify-center">
-                      <span className="text-[9px] font-medium text-muted-foreground">+{projectUsers.length - 4}</span>
-                    </div>
+        <div className="px-4 sm:px-6 -mt-10 relative z-10">
+          <div className="bg-background rounded-xl border shadow-sm p-4 sm:p-5" data-testid="project-info-card">
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2.5 mb-1.5">
+                  <h1 className="text-xl sm:text-2xl font-bold tracking-tight truncate" data-testid="text-project-name">
+                    {project.name}
+                  </h1>
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border shrink-0 ${currentStatus.className}`} data-testid="badge-project-status">
+                    {currentStatus.label}
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                  {project.address && (
+                    <a
+                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(project.address)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm text-muted-foreground hover:text-[#F09000] flex items-center gap-1 transition-colors"
+                      data-testid="link-project-address"
+                    >
+                      <MapPin className="h-3.5 w-3.5 shrink-0" />
+                      <span className="underline-offset-2 hover:underline">{project.address}</span>
+                    </a>
+                  )}
+                  <span className="text-sm text-muted-foreground flex items-center gap-1" data-testid="text-project-created">
+                    <Calendar className="h-3.5 w-3.5 shrink-0" />
+                    {new Date(project.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                  </span>
+                  {project.description && (
+                    <span className="text-sm text-muted-foreground hidden lg:block">
+                      {project.description.length > 80 ? project.description.slice(0, 80) + "..." : project.description}
+                    </span>
                   )}
                 </div>
-              )}
+              </div>
+
+              <div className="flex items-center gap-3 sm:gap-4 shrink-0">
+                <div className="text-center" data-testid="stat-project-photos">
+                  <div className="text-lg font-bold text-[#F09000]">{projectMedia.length}</div>
+                  <div className="text-[11px] text-muted-foreground font-medium uppercase tracking-wide">Photos</div>
+                </div>
+                <div className="w-px h-8 bg-border" />
+                <div className="text-center" data-testid="stat-project-tasks">
+                  <div className="text-lg font-bold">{projectTasks.length}</div>
+                  <div className="text-[11px] text-muted-foreground font-medium uppercase tracking-wide">Tasks</div>
+                </div>
+                <div className="w-px h-8 bg-border" />
+                <div className="text-center" data-testid="stat-project-checklists">
+                  <div className="text-lg font-bold text-[#267D32]">{checklistProgress}%</div>
+                  <div className="text-[11px] text-muted-foreground font-medium uppercase tracking-wide">Complete</div>
+                </div>
+                {projectUsers.length > 0 && (
+                  <>
+                    <div className="w-px h-8 bg-border hidden sm:block" />
+                    <div className="hidden sm:flex items-center -space-x-1.5">
+                      {projectUsers.slice(0, 3).map((u, i) => (
+                        <Avatar key={i} className="h-7 w-7 border-2 border-background">
+                          <AvatarImage src={u.profileImageUrl || undefined} />
+                          <AvatarFallback className="text-[9px] bg-[#F09000]/10 text-[#F09000]">
+                            {getInitials(u.firstName, u.lastName)}
+                          </AvatarFallback>
+                        </Avatar>
+                      ))}
+                      {projectUsers.length > 3 && (
+                        <div className="h-7 w-7 rounded-full bg-muted border-2 border-background flex items-center justify-center">
+                          <span className="text-[9px] font-medium text-muted-foreground">+{projectUsers.length - 3}</span>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           </div>
+        </div>
 
-          {showProjectInfo && (
-            <Card className="mt-4 p-4" data-testid="project-info-panel">
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="space-y-1">
-                  <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Description</h3>
-                  <p className="text-sm">{project.description || "No description added."}</p>
-                </div>
-                <div className="space-y-1">
-                  <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Status</h3>
-                  <Badge variant={project.status === "active" ? "default" : "secondary"}>
-                    {project.status === "active" ? "Active" : project.status === "completed" ? "Completed" : "On Hold"}
-                  </Badge>
-                </div>
-                <div className="space-y-1">
-                  <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Task Progress</h3>
-                  <div className="flex items-center gap-3 text-sm">
-                    <span className="text-muted-foreground">{todoCount} open</span>
-                    <span className="text-amber-600 dark:text-amber-400">{inProgressCount} active</span>
-                    <span className="text-green-600 dark:text-green-400">{doneCount} done</span>
-                  </div>
-                </div>
-                <div className="space-y-1">
-                  <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Team ({projectUsers.length})</h3>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {projectUsers.length > 0 ? (
-                      projectUsers.map((u, i) => (
-                        <span key={i} className="text-sm text-muted-foreground">{u.firstName} {u.lastName}{i < projectUsers.length - 1 ? "," : ""}</span>
-                      ))
-                    ) : (
-                      <span className="text-sm text-muted-foreground">No team members yet</span>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </Card>
-          )}
+        <div className="px-4 sm:px-6 mt-4 mb-1">
+          <div className="flex items-center gap-1 p-1 rounded-full bg-muted/60 dark:bg-muted/30 w-fit">
+            {tabs.map((tab) => (
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key)}
+                className={`px-3.5 py-1.5 text-sm font-medium rounded-full transition-all whitespace-nowrap ${
+                  activeTab === tab.key
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+                data-testid={`tab-${tab.key}`}
+              >
+                {tab.label}
+                {tab.count > 0 && (
+                  <span className={`ml-1.5 text-xs font-normal ${activeTab === tab.key ? "text-muted-foreground" : "text-muted-foreground/60"}`}>
+                    {tab.count}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
       <div className="flex-1 flex flex-col min-h-0">
         <div className="overflow-auto flex-1">
-          <div className="px-4 sm:px-6 pt-4 pb-2">
-            <div className="flex flex-wrap items-center gap-1.5">
-              {tabs.map((tab) => (
-                <button
-                  key={tab.key}
-                  onClick={() => setActiveTab(tab.key)}
-                  className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors whitespace-nowrap ${
-                    activeTab === tab.key
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover-elevate"
-                  }`}
-                  data-testid={`tab-${tab.key}`}
-                >
-                  {tab.label}
-                  {tab.count > 0 && (
-                    <span className={`ml-1.5 text-xs ${activeTab === tab.key ? "text-primary-foreground/70" : "text-muted-foreground/60"}`}>
-                      {tab.count}
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-          </div>
 
           {activeTab === "photos" && (
             <div className="px-4 sm:px-6 py-4 space-y-6">

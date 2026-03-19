@@ -39,7 +39,7 @@ Field View is a photo documentation and project management tool designed for fie
   - `replit_integrations/auth/` - Custom auth (Passport local strategy, session-based)
 - `shared/` - Shared types and schemas
   - `schema.ts` - Drizzle ORM schema definitions (projects, media, comments, tasks, checklists, reports, galleries)
-  - `models/auth.ts` - Auth-related schemas (users with password/subscription fields, sessions)
+  - `models/auth.ts` - Auth-related schemas (users with password/subscription fields, sessions, passwordResetTokens)
 
 ## Authentication
 - Custom email/password auth using Passport.js local strategy
@@ -48,7 +48,9 @@ Field View is a photo documentation and project management tool designed for fie
 - User schema includes: id (UUID), email, password (hashed), firstName, lastName, profileImageUrl, stripeCustomerId, stripeSubscriptionId, subscriptionStatus, trialEndsAt
 - New users register with subscriptionStatus: "none" — must enter credit card via Stripe Checkout to start 14-day free trial
 - Stripe manages the trial period (subscriptionStatus: "trialing" after checkout)
-- Auth routes: POST /api/register, POST /api/login, POST /api/logout, GET /api/auth/user, POST /api/forgot-password
+- Password reset: POST /api/forgot-password generates token (logged to console in dev), POST /api/reset-password validates token and updates password
+- Password reset tokens stored in password_reset_tokens table (token, userId, expiresAt, usedAt)
+- Auth routes: POST /api/register, POST /api/login, POST /api/logout, GET /api/auth/user, POST /api/forgot-password, POST /api/reset-password
 
 ## Stripe Integration
 - Connected via Replit Stripe integration (connection:conn_stripe_01KJBS6YDZQ52E57MVSQTHTKE5)
@@ -128,7 +130,7 @@ Field View is a photo documentation and project management tool designed for fie
 4. **Forgot Password** - Email input for password reset
 5. **Subscribe** - Subscription page with plan details, team size calculator, Stripe checkout
 6. **Dashboard (Home)** - Command center with KPI strip, activity feed, recent photos, quick actions, project list
-7. **Project Detail** - Photos tab (with before/after compare) + Tasks tab + Checklists + Reports + Daily Log
+7. **Project Detail** - Hero banner header (cover photo or gradient), inline info card with status/stats, pill-style tabs for Photos (with before/after compare) + Tasks + Checklists + Reports + Daily Log
 8. **Photos** - Global gallery with search and project filtering
 9. **Map** - Leaflet map with project location markers
 10. **Team** - Team member directory with role badges and admin role management

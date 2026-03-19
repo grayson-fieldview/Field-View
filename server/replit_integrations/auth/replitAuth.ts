@@ -4,7 +4,11 @@ import session from "express-session";
 import type { Express, RequestHandler } from "express";
 import connectPg from "connect-pg-simple";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import { authStorage } from "./storage";
+import { db } from "../../db";
+import { eq } from "drizzle-orm";
+import { passwordResetTokens } from "@shared/models/auth";
 
 export function getSession() {
   const sessionTtlSeconds = 7 * 24 * 60 * 60;
@@ -152,9 +156,70 @@ export async function setupAuth(app: Express) {
       if (!email) {
         return res.status(400).json({ message: "Email is required" });
       }
+
+      const user = await authStorage.getUserByEmail(email);
+      if (user) {
+        const token = crypto.randomBytes(32).toString("hex");
+        const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+
+        await db.insert(passwordResetTokens).values({
+          userId: user.id,
+          token,
+          expiresAt,
+        });
+
+        const baseUrl = `${req.protocol}://${req.get("host")}`;
+        const resetLink = `${baseUrl}/reset-password?token=${token}`;
+
+        if (process.env.NODE_ENV !== "production") {
+          console.log(`[Password Reset] Link for ${email}: ${resetLink}`);
+        }
+      }
+
       res.json({ message: "If an account exists with that email, we've sent password reset instructions." });
     } catch (error) {
+      console.error("Forgot password error:", error);
       res.status(500).json({ message: "Request failed" });
+    }
+  });
+
+  app.post("/api/reset-password", async (req, res) => {
+    try {
+      const { token, password } = req.body;
+      if (!token || !password) {
+        return res.status(400).json({ message: "Token and password are required" });
+      }
+      if (password.length < 8) {
+        return res.status(400).json({ message: "Password must be at least 8 characters" });
+      }
+
+      const [resetRecord] = await db
+        .select()
+        .from(passwordResetTokens)
+        .where(eq(passwordResetTokens.token, token));
+
+      if (!resetRecord) {
+        return res.status(400).json({ message: "Invalid or expired reset link" });
+      }
+      if (resetRecord.usedAt) {
+        return res.status(400).json({ message: "This reset link has already been used" });
+      }
+      if (new Date() > resetRecord.expiresAt) {
+        return res.status(400).json({ message: "This reset link has expired. Please request a new one." });
+      }
+
+      const hashedPassword = await bcrypt.hash(password, 12);
+      await authStorage.updateUser(resetRecord.userId, { password: hashedPassword });
+
+      await db
+        .update(passwordResetTokens)
+        .set({ usedAt: new Date() })
+        .where(eq(passwordResetTokens.id, resetRecord.id));
+
+      res.json({ message: "Password has been reset successfully. You can now sign in." });
+    } catch (error) {
+      console.error("Reset password error:", error);
+      res.status(500).json({ message: "Password reset failed" });
     }
   });
 }

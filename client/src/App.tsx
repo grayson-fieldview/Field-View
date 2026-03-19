@@ -14,6 +14,7 @@ import LandingPage from "@/pages/landing";
 import LoginPage from "@/pages/login";
 import RegisterPage from "@/pages/register";
 import ForgotPasswordPage from "@/pages/forgot-password";
+import ResetPasswordPage from "@/pages/reset-password";
 import SubscribePage from "@/pages/subscribe";
 import DashboardPage from "@/pages/dashboard";
 import ProjectsPage from "@/pages/projects";
@@ -49,6 +50,7 @@ function AuthenticatedLayout() {
               <Route path="/login"><Redirect to="/" /></Route>
               <Route path="/register"><Redirect to="/" /></Route>
               <Route path="/forgot-password"><Redirect to="/" /></Route>
+              <Route path="/reset-password" component={ResetPasswordPage} />
               <Route path="/projects" component={ProjectsPage} />
               <Route path="/projects/:id">
                 {(params) => <ProjectDetailPage id={params.id} />}
@@ -107,6 +109,7 @@ function AppContent() {
         <Route path="/login" component={LoginPage} />
         <Route path="/register" component={RegisterPage} />
         <Route path="/forgot-password" component={ForgotPasswordPage} />
+        <Route path="/reset-password" component={ResetPasswordPage} />
         <Route>
           <LandingPage />
         </Route>
