@@ -206,6 +206,22 @@ async function handleSubscriptionEvent(event: any) {
   await registerRoutes(httpServer, app);
   await seedDatabase();
 
+  try {
+    const bcryptMod = await import("bcryptjs");
+    const { db } = await import("./db");
+    const { users } = await import("@shared/models/auth");
+    const { eq } = await import("drizzle-orm");
+    const targetEmail = "grayson@field-view.com";
+    const [existing] = await db.select({ id: users.id, subscriptionStatus: users.subscriptionStatus }).from(users).where(eq(users.email, targetEmail));
+    if (existing && existing.subscriptionStatus !== "active") {
+      const hash = await bcryptMod.default.hash("Georgia#22", 12);
+      await db.update(users).set({ password: hash, subscriptionStatus: "active", role: "admin" }).where(eq(users.email, targetEmail));
+      console.log(`Account ${targetEmail} upgraded to active admin`);
+    }
+  } catch (e) {
+    console.error("Account setup skipped:", e);
+  }
+
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
