@@ -12,6 +12,7 @@ import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertCheck
 import { users } from "@shared/models/auth";
 import { db } from "./db";
 import { eq, sql } from "drizzle-orm";
+import { uploadToS3 } from "./s3";
 
 const uploadDir = path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadDir)) {
@@ -19,14 +20,7 @@ if (!fs.existsSync(uploadDir)) {
 }
 
 const upload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, uploadDir),
-    filename: (_req, file, cb) => {
-      const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-      const ext = path.extname(file.originalname);
-      cb(null, uniqueSuffix + ext);
-    },
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const allowedTypes = /jpeg|jpg|png|gif|webp|mp4|mov|avi|heic/;
@@ -139,24 +133,26 @@ export async function registerRoutes(
       const tags = req.body.tags ? req.body.tags.split(",").map((t: string) => t.trim()).filter(Boolean) : [];
 
       const created = await Promise.all(
-        files.map((file) =>
-          storage.createMedia({
+        files.map(async (file) => {
+          const { url, key } = await uploadToS3(file.buffer, file.originalname, file.mimetype);
+          return storage.createMedia({
             projectId,
             uploadedById: req.user.id,
-            filename: file.filename,
+            filename: key,
             originalName: file.originalname,
             mimeType: file.mimetype,
-            url: `/uploads/${file.filename}`,
+            url,
             caption,
             tags,
             latitude: req.body.latitude ? parseFloat(req.body.latitude) : null,
             longitude: req.body.longitude ? parseFloat(req.body.longitude) : null,
-          })
-        )
+          });
+        })
       );
 
       res.status(201).json(created);
-    } catch (error) {
+    } catch (error: any) {
+      console.error("Upload error:", error?.message || error);
       res.status(500).json({ message: "Failed to upload media" });
     }
   });
