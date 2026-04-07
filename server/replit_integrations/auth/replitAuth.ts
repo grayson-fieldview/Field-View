@@ -7,8 +7,8 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { authStorage } from "./storage";
 import { db } from "../../db";
-import { eq } from "drizzle-orm";
-import { passwordResetTokens, accounts } from "@shared/models/auth";
+import { eq, and } from "drizzle-orm";
+import { passwordResetTokens, accounts, invitations } from "@shared/models/auth";
 
 export function getSession() {
   const sessionTtlSeconds = 7 * 24 * 60 * 60;
@@ -70,9 +70,29 @@ export async function setupAuth(app: Express) {
     }
   });
 
+  app.get("/api/invitations/validate/:token", async (req, res) => {
+    try {
+      const { token } = req.params;
+      const [invitation] = await db.select().from(invitations).where(
+        and(eq(invitations.token, token), eq(invitations.status, "pending"))
+      );
+      if (!invitation || new Date() > invitation.expiresAt) {
+        return res.status(404).json({ message: "Invalid or expired invitation" });
+      }
+      const [account] = await db.select().from(accounts).where(eq(accounts.id, invitation.accountId));
+      res.json({
+        email: invitation.email,
+        role: invitation.role,
+        accountName: account?.name || "Team",
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to validate invitation" });
+    }
+  });
+
   app.post("/api/register", async (req, res) => {
     try {
-      const { email, password, firstName, lastName } = req.body;
+      const { email, password, firstName, lastName, inviteToken } = req.body;
 
       if (!email || !password) {
         return res.status(400).json({ message: "Email and password are required" });
@@ -89,16 +109,36 @@ export async function setupAuth(app: Express) {
 
       const hashedPassword = await bcrypt.hash(password, 12);
 
-      const accountName = [firstName, lastName].filter(Boolean).join(" ") || email;
-      const [account] = await db.insert(accounts).values({ name: accountName + "'s Team" }).returning();
+      let accountId: string;
+      let role: string;
+
+      if (inviteToken) {
+        const [invitation] = await db.select().from(invitations).where(
+          and(eq(invitations.token, inviteToken), eq(invitations.status, "pending"))
+        );
+        if (!invitation || new Date() > invitation.expiresAt) {
+          return res.status(400).json({ message: "Invalid or expired invitation" });
+        }
+        if (invitation.email.toLowerCase() !== email.toLowerCase()) {
+          return res.status(400).json({ message: "Email does not match invitation" });
+        }
+        accountId = invitation.accountId;
+        role = invitation.role;
+        await db.update(invitations).set({ status: "accepted" }).where(eq(invitations.id, invitation.id));
+      } else {
+        const accountName = [firstName, lastName].filter(Boolean).join(" ") || email;
+        const [account] = await db.insert(accounts).values({ name: accountName + "'s Team" }).returning();
+        accountId = account.id;
+        role = "admin";
+      }
 
       const user = await authStorage.upsertUser({
         email,
         password: hashedPassword,
         firstName: firstName || null,
         lastName: lastName || null,
-        role: "admin",
-        accountId: account.id,
+        role,
+        accountId,
         subscriptionStatus: "none",
         trialEndsAt: null,
       });

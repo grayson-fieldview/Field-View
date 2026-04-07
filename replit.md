@@ -47,10 +47,18 @@ Field View is a photo documentation and project management tool designed for fie
 - **Projects**: `accountId` field links each project to its account
 - **Templates**: `checklistTemplates` and `reportTemplates` have `accountId`
 - **Child data** (media, tasks, checklists, reports, comments): Isolated via project joins — no direct accountId, filtered through `projects.accountId`
-- **Registration**: Every new user auto-creates an account and is set as `role: "admin"` of that account
+- **Registration**: Every new user auto-creates an account and is set as `role: "admin"` of that account; invited users join existing accounts with assigned role
+- **User Invitations**: `invitations` table (id, accountId, email, role, token, status [pending/accepted/expired], invitedById, expiresAt); admin/manager can invite; 7-day expiry; invite link: /register?token=xxx
+- **Project Assignments**: `project_assignments` table (id, projectId, userId, assignedById) — used to give restricted users access to specific projects
 - **Storage layer**: All collection-fetching methods accept `accountId` and filter accordingly
 - **Routes**: All API endpoints extract `req.user.accountId` and verify ownership; helper functions (`verifyProjectAccess`, `verifyMediaAccess`, `verifyChecklistAccess`, `verifyTaskAccess`, `verifyReportAccess`) prevent cross-account access on all mutation/by-ID routes
 - **Access control**: Users can only see/modify data belonging to their account; admin role changes and subscription updates are account-scoped
+- **Role-based access**:
+  - **Admin**: Complete control over account (all projects, manage users, change roles, billing)
+  - **Manager**: Access all projects, can manage users (invite/remove standard/restricted)
+  - **Standard**: Access all projects, cannot manage users
+  - **Restricted**: Only access projects they created or are assigned to
+- **Sidebar filtering**: Team nav item only visible to admin/manager roles
 
 ## Authentication
 - Custom email/password auth using Passport.js local strategy
@@ -100,8 +108,15 @@ Field View is a photo documentation and project management tool designed for fie
 - `PATCH /api/tasks/:id` - Update task status
 - `GET /api/media` - All media across projects
 - `GET/POST /api/media/:id/comments` - Comments on media
-- `GET /api/users` - List team members
-- `PATCH /api/users/:userId/role` - Update user role (admin only)
+- `GET /api/users` - List team members (same account)
+- `PATCH /api/users/:userId/role` - Update user role (admin/manager)
+- `DELETE /api/users/:userId` - Remove user from account (admin/manager)
+- `GET /api/invitations` - List pending invitations (admin/manager)
+- `POST /api/invitations` - Create invitation (email, role) (admin/manager)
+- `DELETE /api/invitations/:id` - Cancel invitation (admin/manager)
+- `GET /api/invitations/validate/:token` - Validate invite token (public)
+- `POST /api/register` - Register (email, password, firstName, lastName, inviteToken?)
+- `GET/POST/DELETE /api/projects/:id/assignments` - Manage project assignments for restricted users
 - `POST /api/galleries` - Create shareable gallery
 - `GET /api/galleries/:token` - Get public gallery by token
 - `GET /api/analytics?from=&to=` - Aggregated analytics

@@ -4,7 +4,7 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
 export * from "./models/auth";
-import { users, accounts } from "./models/auth";
+import { users, accounts, invitations } from "./models/auth";
 
 export const projectStatusEnum = pgEnum("project_status", ["active", "completed", "on_hold", "archived"]);
 export const taskStatusEnum = pgEnum("task_status", ["todo", "in_progress", "done"]);
@@ -139,6 +139,14 @@ export const sharedGalleries = pgTable("shared_galleries", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const projectAssignments = pgTable("project_assignments", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }).notNull(),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+  assignedById: varchar("assigned_by_id").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const insertSharedGallerySchema = createInsertSchema(sharedGalleries).omit({
   id: true,
   createdAt: true,
@@ -146,6 +154,7 @@ export const insertSharedGallerySchema = createInsertSchema(sharedGalleries).omi
 
 export type InsertSharedGallery = z.infer<typeof insertSharedGallerySchema>;
 export type SharedGallery = typeof sharedGalleries.$inferSelect;
+export type ProjectAssignment = typeof projectAssignments.$inferSelect;
 
 export const projectsRelations = relations(projects, ({ one, many }) => ({
   createdBy: one(users, { fields: [projects.createdById], references: [users.id] }),

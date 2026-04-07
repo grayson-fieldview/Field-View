@@ -30,16 +30,16 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import faviconImg from "@assets/Favicon-01_1772067008525.png";
 
 const navItems = [
-  { title: "Dashboard", url: "/", icon: LayoutDashboard },
-  { title: "Projects", url: "/projects", icon: FolderKanban },
-  { title: "Tasks", url: "/tasks", icon: ClipboardList },
-  { title: "Photos", url: "/photos", icon: Camera },
-  { title: "Checklists", url: "/checklists", icon: ClipboardCheck },
-  { title: "Reports", url: "/reports", icon: FileBarChart },
-  { title: "Analytics", url: "/analytics", icon: BarChart3 },
-  { title: "Map", url: "/map", icon: MapPin },
-  { title: "Team", url: "/team", icon: Users },
-  { title: "Settings", url: "/settings", icon: Settings },
+  { title: "Dashboard", url: "/", icon: LayoutDashboard, roles: null },
+  { title: "Projects", url: "/projects", icon: FolderKanban, roles: null },
+  { title: "Tasks", url: "/tasks", icon: ClipboardList, roles: null },
+  { title: "Photos", url: "/photos", icon: Camera, roles: null },
+  { title: "Checklists", url: "/checklists", icon: ClipboardCheck, roles: null },
+  { title: "Reports", url: "/reports", icon: FileBarChart, roles: null },
+  { title: "Analytics", url: "/analytics", icon: BarChart3, roles: null },
+  { title: "Map", url: "/map", icon: MapPin, roles: null },
+  { title: "Team", url: "/team", icon: Users, roles: ["admin", "manager"] },
+  { title: "Settings", url: "/settings", icon: Settings, roles: null },
 ];
 
 export function AppSidebar() {
@@ -70,7 +70,7 @@ export function AppSidebar() {
           </div>
           <SidebarGroupContent>
             <SidebarMenu>
-              {navItems.map((item) => {
+              {navItems.filter(item => !item.roles || item.roles.includes(user?.role || "standard")).map((item) => {
                 const isActive = item.url === "/"
                   ? location === "/"
                   : location.startsWith(item.url);

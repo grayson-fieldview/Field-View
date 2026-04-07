@@ -43,5 +43,19 @@ export const passwordResetTokens = pgTable("password_reset_tokens", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const invitations = pgTable("invitations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  accountId: varchar("account_id").references(() => accounts.id).notNull(),
+  email: varchar("email").notNull(),
+  role: varchar("role").default("standard").notNull(),
+  token: varchar("token").notNull().unique(),
+  status: varchar("status").default("pending").notNull(),
+  invitedById: varchar("invited_by_id").references(() => users.id),
+  expiresAt: timestamp("expires_at").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 export type UpsertUser = typeof users.$inferInsert;
 export type User = typeof users.$inferSelect;
+export type Invitation = typeof invitations.$inferSelect;
+export type InsertInvitation = typeof invitations.$inferInsert;

@@ -1,16 +1,18 @@
-import { useState } from "react";
-import { useLocation } from "wouter";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState, useEffect } from "react";
+import { useLocation, useSearch } from "wouter";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Eye, EyeOff, Loader2, CheckCircle2 } from "lucide-react";
+import { Eye, EyeOff, Loader2, CheckCircle2, Users } from "lucide-react";
 import faviconImg from "@assets/Favicon-01_1772067008525.png";
 
 export default function RegisterPage() {
   const [, setLocation] = useLocation();
+  const searchString = useSearch();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [firstName, setFirstName] = useState("");
@@ -19,6 +21,26 @@ export default function RegisterPage() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+
+  const params = new URLSearchParams(searchString);
+  const inviteToken = params.get("token");
+
+  const { data: inviteInfo } = useQuery<{ email: string; role: string; accountName: string }>({
+    queryKey: ["/api/invitations/validate", inviteToken],
+    queryFn: async () => {
+      const res = await fetch(`/api/invitations/validate/${inviteToken}`);
+      if (!res.ok) throw new Error("Invalid invitation");
+      return res.json();
+    },
+    enabled: !!inviteToken,
+    retry: false,
+  });
+
+  useEffect(() => {
+    if (inviteInfo?.email) {
+      setEmail(inviteInfo.email);
+    }
+  }, [inviteInfo]);
 
   const registerMutation = useMutation({
     mutationFn: async () => {
@@ -32,7 +54,13 @@ export default function RegisterPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ email, password, firstName, lastName }),
+        body: JSON.stringify({
+          email,
+          password,
+          firstName,
+          lastName,
+          ...(inviteToken ? { inviteToken } : {}),
+        }),
       });
       if (!res.ok) {
         const data = await res.json();
@@ -66,6 +94,13 @@ export default function RegisterPage() {
     "Analytics dashboard",
   ];
 
+  const roleLabels: Record<string, string> = {
+    admin: "Admin",
+    manager: "Manager",
+    standard: "Standard",
+    restricted: "Restricted",
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#F0EDEA] dark:bg-gray-950 px-4 py-8">
       <Card className="w-full max-w-md shadow-lg border-0">
@@ -74,10 +109,33 @@ export default function RegisterPage() {
             <img src={faviconImg} alt="Field View" className="h-8 w-8" />
             <span className="text-xl font-bold text-[#1E1E1E] dark:text-white">Field View</span>
           </div>
-          <CardTitle className="text-2xl" data-testid="text-register-title">Start your free trial</CardTitle>
-          <CardDescription>14 days free — add a payment method to get started</CardDescription>
+          {inviteInfo ? (
+            <>
+              <CardTitle className="text-2xl" data-testid="text-register-title">Join {inviteInfo.accountName}</CardTitle>
+              <CardDescription>
+                You've been invited to join as a{" "}
+                <Badge variant="secondary" className="text-xs">{roleLabels[inviteInfo.role] || inviteInfo.role}</Badge>
+              </CardDescription>
+            </>
+          ) : (
+            <>
+              <CardTitle className="text-2xl" data-testid="text-register-title">Start your free trial</CardTitle>
+              <CardDescription>14 days free — add a payment method to get started</CardDescription>
+            </>
+          )}
         </CardHeader>
         <CardContent>
+          {inviteInfo && (
+            <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg flex items-center gap-3">
+              <Users className="h-5 w-5 text-blue-600 dark:text-blue-400 shrink-0" />
+              <div className="text-sm">
+                <p className="font-medium text-blue-900 dark:text-blue-300">Team Invitation</p>
+                <p className="text-blue-700 dark:text-blue-400 text-xs">
+                  You're joining <strong>{inviteInfo.accountName}</strong> as {roleLabels[inviteInfo.role] || inviteInfo.role}
+                </p>
+              </div>
+            </div>
+          )}
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
@@ -110,6 +168,8 @@ export default function RegisterPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
+                readOnly={!!inviteInfo}
+                className={inviteInfo ? "bg-muted" : ""}
                 data-testid="input-email"
               />
             </div>
@@ -157,24 +217,26 @@ export default function RegisterPage() {
               {registerMutation.isPending ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Creating account...
+                  {inviteInfo ? "Joining team..." : "Creating account..."}
                 </>
               ) : (
-                "Create Account & Start Trial"
+                inviteInfo ? "Join Team" : "Create Account & Start Trial"
               )}
             </Button>
           </form>
-          <div className="mt-5 p-4 bg-[#F0EDEA] dark:bg-gray-900 rounded-lg">
-            <p className="text-sm font-medium mb-2 text-foreground">Your trial includes:</p>
-            <ul className="space-y-1.5">
-              {trialFeatures.map((feature) => (
-                <li key={feature} className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <CheckCircle2 className="h-3.5 w-3.5 text-[#267D32] flex-shrink-0" />
-                  {feature}
-                </li>
-              ))}
-            </ul>
-          </div>
+          {!inviteInfo && (
+            <div className="mt-5 p-4 bg-[#F0EDEA] dark:bg-gray-900 rounded-lg">
+              <p className="text-sm font-medium mb-2 text-foreground">Your trial includes:</p>
+              <ul className="space-y-1.5">
+                {trialFeatures.map((feature) => (
+                  <li key={feature} className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-[#267D32] flex-shrink-0" />
+                    {feature}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <div className="mt-4 text-center text-sm text-muted-foreground">
             Already have an account?{" "}
             <a href="/login" className="text-[#F09000] hover:underline font-medium" data-testid="link-login">

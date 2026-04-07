@@ -8,10 +8,10 @@ import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClie
 import multer from "multer";
 import path from "path";
 import fs from "fs";
-import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertReportSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertReportTemplateSchema, projects, media, comments, tasks, checklists, reports } from "@shared/schema";
-import { users } from "@shared/models/auth";
+import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertReportSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertReportTemplateSchema, projects, media, comments, tasks, checklists, reports, projectAssignments } from "@shared/schema";
+import { users, invitations } from "@shared/models/auth";
 import { db } from "./db";
-import { eq, sql, and } from "drizzle-orm";
+import { eq, sql, and, or, inArray } from "drizzle-orm";
 import { uploadToS3 } from "./s3";
 
 async function verifyProjectAccess(projectId: number, accountId: string): Promise<boolean> {
@@ -95,8 +95,14 @@ export async function registerRoutes(
     try {
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
-      const projects = await storage.getProjectsWithDetails(accountId);
-      res.json(projects);
+      let allProjects = await storage.getProjectsWithDetails(accountId);
+      if (req.user.role === "restricted") {
+        const assignedIds = await db.select({ projectId: projectAssignments.projectId })
+          .from(projectAssignments).where(eq(projectAssignments.userId, req.user.id));
+        const assignedSet = new Set(assignedIds.map(a => a.projectId));
+        allProjects = allProjects.filter(p => p.createdById === req.user.id || assignedSet.has(p.id));
+      }
+      res.json(allProjects);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch projects" });
     }
@@ -108,6 +114,13 @@ export async function registerRoutes(
       const project = await storage.getProject(id);
       if (!project) return res.status(404).json({ message: "Project not found" });
       if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
+      if (req.user.role === "restricted") {
+        const [assignment] = await db.select().from(projectAssignments)
+          .where(and(eq(projectAssignments.projectId, id), eq(projectAssignments.userId, req.user.id)));
+        if (!assignment && project.createdById !== req.user.id) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+      }
 
       const mediaItems = await storage.getMediaByProject(id);
       const taskItems = await storage.getTasksByProject(id);
@@ -510,6 +523,190 @@ export async function registerRoutes(
       res.json(safeUsers);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch users" });
+    }
+  });
+
+  // Invitations
+  app.get("/api/invitations", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const currentUser = req.user;
+      if (currentUser.role !== "admin" && currentUser.role !== "manager") {
+        return res.status(403).json({ message: "Only admins and managers can view invitations" });
+      }
+      const accountId = currentUser.accountId;
+      const result = await db.select({
+        id: invitations.id,
+        email: invitations.email,
+        role: invitations.role,
+        token: invitations.token,
+        status: invitations.status,
+        expiresAt: invitations.expiresAt,
+        createdAt: invitations.createdAt,
+        invitedByFirst: users.firstName,
+        invitedByLast: users.lastName,
+      })
+        .from(invitations)
+        .leftJoin(users, eq(invitations.invitedById, users.id))
+        .where(and(eq(invitations.accountId, accountId), eq(invitations.status, "pending")));
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch invitations" });
+    }
+  });
+
+  app.post("/api/invitations", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const currentUser = req.user;
+      if (currentUser.role !== "admin" && currentUser.role !== "manager") {
+        return res.status(403).json({ message: "Only admins and managers can invite users" });
+      }
+      const { email, role } = req.body;
+      if (!email) return res.status(400).json({ message: "Email is required" });
+      const validRoles = ["admin", "manager", "standard", "restricted"];
+      if (!validRoles.includes(role || "standard")) {
+        return res.status(400).json({ message: "Invalid role" });
+      }
+      if (currentUser.role === "manager" && (role === "admin" || role === "manager")) {
+        return res.status(403).json({ message: "Managers can only invite standard or restricted users" });
+      }
+      const existingUser = await authStorage.getUserByEmail(email);
+      if (existingUser) {
+        return res.status(409).json({ message: "A user with this email already exists" });
+      }
+      const [existingInvite] = await db.select().from(invitations).where(
+        and(eq(invitations.email, email.toLowerCase()), eq(invitations.accountId, currentUser.accountId), eq(invitations.status, "pending"))
+      );
+      if (existingInvite) {
+        return res.status(409).json({ message: "An invitation has already been sent to this email" });
+      }
+      const token = crypto.randomBytes(24).toString("base64url");
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      const [invitation] = await db.insert(invitations).values({
+        accountId: currentUser.accountId,
+        email: email.toLowerCase(),
+        role: role || "standard",
+        token,
+        invitedById: currentUser.id,
+        expiresAt,
+      }).returning();
+
+      const baseUrl = `${req.protocol}://${req.get("host")}`;
+      const inviteLink = `${baseUrl}/register?token=${token}`;
+      if (process.env.NODE_ENV !== "production") {
+        console.log(`[Invitation] Link for ${email}: ${inviteLink}`);
+      }
+
+      res.status(201).json({ ...invitation, inviteLink });
+    } catch (error) {
+      console.error("Create invitation error:", error);
+      res.status(500).json({ message: "Failed to create invitation" });
+    }
+  });
+
+  app.delete("/api/invitations/:id", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const currentUser = req.user;
+      if (currentUser.role !== "admin" && currentUser.role !== "manager") {
+        return res.status(403).json({ message: "Only admins and managers can cancel invitations" });
+      }
+      const { id } = req.params;
+      const [invitation] = await db.select().from(invitations).where(eq(invitations.id, id));
+      if (!invitation || invitation.accountId !== currentUser.accountId) {
+        return res.status(404).json({ message: "Invitation not found" });
+      }
+      await db.delete(invitations).where(eq(invitations.id, id));
+      res.json({ message: "Invitation cancelled" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to cancel invitation" });
+    }
+  });
+
+  app.delete("/api/users/:userId", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const currentUser = req.user;
+      if (currentUser.role !== "admin" && currentUser.role !== "manager") {
+        return res.status(403).json({ message: "Only admins and managers can remove users" });
+      }
+      const { userId } = req.params;
+      if (userId === currentUser.id) {
+        return res.status(400).json({ message: "You cannot remove yourself" });
+      }
+      const targetUser = await authStorage.getUser(userId);
+      if (!targetUser) return res.status(404).json({ message: "User not found" });
+      if (targetUser.accountId !== currentUser.accountId) return res.status(403).json({ message: "Access denied" });
+      if (targetUser.role === "admin" && currentUser.role !== "admin") {
+        return res.status(403).json({ message: "Only admins can remove other admins" });
+      }
+      await db.update(users).set({ accountId: null, role: "standard" }).where(eq(users.id, userId));
+      res.json({ message: "User removed from account" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to remove user" });
+    }
+  });
+
+  // Project assignments (for restricted users)
+  app.get("/api/projects/:id/assignments", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const projectId = parseInt(req.params.id);
+      if (!(await verifyProjectAccess(projectId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      const assignments = await db.select({
+        id: projectAssignments.id,
+        userId: projectAssignments.userId,
+        firstName: users.firstName,
+        lastName: users.lastName,
+        email: users.email,
+        profileImageUrl: users.profileImageUrl,
+      })
+        .from(projectAssignments)
+        .innerJoin(users, eq(projectAssignments.userId, users.id))
+        .where(eq(projectAssignments.projectId, projectId));
+      res.json(assignments);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch assignments" });
+    }
+  });
+
+  app.post("/api/projects/:id/assignments", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const currentUser = req.user;
+      if (currentUser.role !== "admin" && currentUser.role !== "manager") {
+        return res.status(403).json({ message: "Only admins and managers can assign users to projects" });
+      }
+      const projectId = parseInt(req.params.id);
+      if (!(await verifyProjectAccess(projectId, currentUser.accountId))) return res.status(403).json({ message: "Access denied" });
+      const { userId } = req.body;
+      if (!userId) return res.status(400).json({ message: "userId is required" });
+      const targetUser = await authStorage.getUser(userId);
+      if (!targetUser || targetUser.accountId !== currentUser.accountId) return res.status(404).json({ message: "User not found" });
+      const [existing] = await db.select().from(projectAssignments).where(
+        and(eq(projectAssignments.projectId, projectId), eq(projectAssignments.userId, userId))
+      );
+      if (existing) return res.status(409).json({ message: "User already assigned to this project" });
+      const [assignment] = await db.insert(projectAssignments).values({
+        projectId,
+        userId,
+        assignedById: currentUser.id,
+      }).returning();
+      res.status(201).json(assignment);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to assign user" });
+    }
+  });
+
+  app.delete("/api/projects/:id/assignments/:userId", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const currentUser = req.user;
+      if (currentUser.role !== "admin" && currentUser.role !== "manager") {
+        return res.status(403).json({ message: "Only admins and managers can remove project assignments" });
+      }
+      const projectId = parseInt(req.params.id);
+      if (!(await verifyProjectAccess(projectId, currentUser.accountId))) return res.status(403).json({ message: "Access denied" });
+      await db.delete(projectAssignments).where(
+        and(eq(projectAssignments.projectId, projectId), eq(projectAssignments.userId, req.params.userId))
+      );
+      res.json({ message: "Assignment removed" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to remove assignment" });
     }
   });
 
