@@ -63,14 +63,18 @@ export function AddressAutocomplete({
         isSelectingRef.current = true;
         const address = place.formatted_address;
         setInternalValue(address);
+        onTextChangeRef.current(address);
         onChangeRef.current({
           address,
           latitude: place.geometry.location.lat(),
           longitude: place.geometry.location.lng(),
         });
+        if (inputRef.current) {
+          inputRef.current.value = address;
+        }
         setTimeout(() => {
           isSelectingRef.current = false;
-        }, 100);
+        }, 300);
       }
     });
 
@@ -127,6 +131,7 @@ export function AddressAutocomplete({
   }, []);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (isSelectingRef.current) return;
     const text = e.target.value;
     setInternalValue(text);
     onTextChangeRef.current(text);
