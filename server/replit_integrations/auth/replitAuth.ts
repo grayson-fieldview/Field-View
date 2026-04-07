@@ -8,7 +8,7 @@ import crypto from "crypto";
 import { authStorage } from "./storage";
 import { db } from "../../db";
 import { eq } from "drizzle-orm";
-import { passwordResetTokens } from "@shared/models/auth";
+import { passwordResetTokens, accounts } from "@shared/models/auth";
 
 export function getSession() {
   const sessionTtlSeconds = 7 * 24 * 60 * 60;
@@ -89,15 +89,16 @@ export async function setupAuth(app: Express) {
 
       const hashedPassword = await bcrypt.hash(password, 12);
 
-      const allUsers = await authStorage.getAllUsers();
-      const isFirstUser = allUsers.length === 0;
+      const accountName = [firstName, lastName].filter(Boolean).join(" ") || email;
+      const [account] = await db.insert(accounts).values({ name: accountName + "'s Team" }).returning();
 
       const user = await authStorage.upsertUser({
         email,
         password: hashedPassword,
         firstName: firstName || null,
         lastName: lastName || null,
-        role: isFirstUser ? "admin" : "standard",
+        role: "admin",
+        accountId: account.id,
         subscriptionStatus: "none",
         trialEndsAt: null,
       });

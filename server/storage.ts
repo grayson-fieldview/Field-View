@@ -35,7 +35,7 @@ import {
 } from "@shared/schema";
 import { users, type User } from "@shared/models/auth";
 import { db } from "./db";
-import { eq, desc, sql, asc } from "drizzle-orm";
+import { eq, desc, sql, asc, and } from "drizzle-orm";
 
 export interface ProjectWithDetails extends Project {
   photoCount: number;
@@ -44,15 +44,15 @@ export interface ProjectWithDetails extends Project {
 }
 
 export interface IStorage {
-  getProjects(): Promise<Project[]>;
-  getProjectsWithDetails(): Promise<ProjectWithDetails[]>;
+  getProjects(accountId: string): Promise<Project[]>;
+  getProjectsWithDetails(accountId: string): Promise<ProjectWithDetails[]>;
   getProject(id: number): Promise<Project | undefined>;
   createProject(project: InsertProject): Promise<Project>;
   updateProject(id: number, data: Partial<InsertProject>): Promise<Project | undefined>;
   deleteProject(id: number): Promise<void>;
 
   getMediaByProject(projectId: number): Promise<(Media & { uploadedBy?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } })[]>;
-  getAllMedia(): Promise<(Media & { project?: { name: string; color: string | null }; uploadedBy?: { firstName: string | null; lastName: string | null } })[]>;
+  getAllMedia(accountId: string): Promise<(Media & { project?: { name: string; color: string | null }; uploadedBy?: { firstName: string | null; lastName: string | null } })[]>;
   getMedia(id: number): Promise<Media | undefined>;
   createMedia(item: InsertMedia): Promise<Media>;
   deleteMedia(id: number): Promise<void>;
@@ -61,12 +61,12 @@ export interface IStorage {
   createComment(comment: InsertComment): Promise<Comment>;
 
   getTasksByProject(projectId: number): Promise<(Task & { assignedTo?: { firstName: string | null; lastName: string | null } })[]>;
-  getAllTasks(): Promise<(Task & { project?: { name: string }; assignedTo?: { firstName: string | null; lastName: string | null } })[]>;
+  getAllTasks(accountId: string): Promise<(Task & { project?: { name: string }; assignedTo?: { firstName: string | null; lastName: string | null } })[]>;
   createTask(task: InsertTask): Promise<Task>;
   updateTask(id: number, data: Partial<InsertTask>): Promise<Task | undefined>;
 
   getChecklistsByProject(projectId: number): Promise<(Checklist & { assignedTo?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }; itemCount: number; checkedCount: number })[]>;
-  getAllChecklists(): Promise<(Checklist & { project?: { name: string }; assignedTo?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }; itemCount: number; checkedCount: number })[]>;
+  getAllChecklists(accountId: string): Promise<(Checklist & { project?: { name: string }; assignedTo?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }; itemCount: number; checkedCount: number })[]>;
   getChecklist(id: number): Promise<Checklist | undefined>;
   createChecklist(checklist: InsertChecklist): Promise<Checklist>;
   updateChecklist(id: number, data: Partial<InsertChecklist>): Promise<Checklist | undefined>;
@@ -78,37 +78,37 @@ export interface IStorage {
   deleteChecklistItem(id: number): Promise<void>;
 
   getReportsByProject(projectId: number): Promise<(Report & { createdBy?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } })[]>;
-  getAllReports(): Promise<(Report & { project?: { name: string }; createdBy?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } })[]>;
+  getAllReports(accountId: string): Promise<(Report & { project?: { name: string }; createdBy?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } })[]>;
   getReport(id: number): Promise<Report | undefined>;
   createReport(report: InsertReport): Promise<Report>;
   updateReport(id: number, data: Partial<InsertReport>): Promise<Report | undefined>;
   deleteReport(id: number): Promise<void>;
 
-  getUsers(): Promise<User[]>;
+  getUsers(accountId: string): Promise<User[]>;
 
   createSharedGallery(gallery: InsertSharedGallery): Promise<SharedGallery>;
   getSharedGalleryByToken(token: string): Promise<SharedGallery | undefined>;
 
-  getAllChecklistTemplates(): Promise<(ChecklistTemplate & { itemCount: number })[]>;
+  getAllChecklistTemplates(accountId: string): Promise<(ChecklistTemplate & { itemCount: number })[]>;
   getChecklistTemplate(id: number): Promise<ChecklistTemplate | undefined>;
   createChecklistTemplate(template: InsertChecklistTemplate): Promise<ChecklistTemplate>;
   deleteChecklistTemplate(id: number): Promise<void>;
   getChecklistTemplateItems(templateId: number): Promise<ChecklistTemplateItem[]>;
   createChecklistTemplateItem(item: InsertChecklistTemplateItem): Promise<ChecklistTemplateItem>;
 
-  getAllReportTemplates(): Promise<ReportTemplate[]>;
+  getAllReportTemplates(accountId: string): Promise<ReportTemplate[]>;
   getReportTemplate(id: number): Promise<ReportTemplate | undefined>;
   createReportTemplate(template: InsertReportTemplate): Promise<ReportTemplate>;
   deleteReportTemplate(id: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
-  async getProjects(): Promise<Project[]> {
-    return db.select().from(projects).orderBy(desc(projects.createdAt));
+  async getProjects(accountId: string): Promise<Project[]> {
+    return db.select().from(projects).where(eq(projects.accountId, accountId)).orderBy(desc(projects.createdAt));
   }
 
-  async getProjectsWithDetails(): Promise<ProjectWithDetails[]> {
-    const allProjects = await db.select().from(projects).orderBy(desc(projects.updatedAt));
+  async getProjectsWithDetails(accountId: string): Promise<ProjectWithDetails[]> {
+    const allProjects = await db.select().from(projects).where(eq(projects.accountId, accountId)).orderBy(desc(projects.updatedAt));
     
     const result: ProjectWithDetails[] = [];
     for (const project of allProjects) {
@@ -191,7 +191,7 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
-  async getAllMedia() {
+  async getAllMedia(accountId: string) {
     const rows = await db
       .select({
         media: media,
@@ -205,8 +205,9 @@ export class DatabaseStorage implements IStorage {
         },
       })
       .from(media)
-      .leftJoin(projects, eq(media.projectId, projects.id))
+      .innerJoin(projects, eq(media.projectId, projects.id))
       .leftJoin(users, eq(media.uploadedById, users.id))
+      .where(eq(projects.accountId, accountId))
       .orderBy(desc(media.createdAt));
 
     return rows.map((r) => ({
@@ -276,7 +277,7 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
-  async getAllTasks() {
+  async getAllTasks(accountId: string) {
     const rows = await db
       .select({
         task: tasks,
@@ -287,8 +288,9 @@ export class DatabaseStorage implements IStorage {
         },
       })
       .from(tasks)
-      .leftJoin(projects, eq(tasks.projectId, projects.id))
+      .innerJoin(projects, eq(tasks.projectId, projects.id))
       .leftJoin(users, eq(tasks.assignedToId, users.id))
+      .where(eq(projects.accountId, accountId))
       .orderBy(desc(tasks.createdAt));
 
     return rows.map((r) => ({
@@ -340,7 +342,7 @@ export class DatabaseStorage implements IStorage {
     return result;
   }
 
-  async getAllChecklists() {
+  async getAllChecklists(accountId: string) {
     const rows = await db
       .select({
         checklist: checklists,
@@ -352,8 +354,9 @@ export class DatabaseStorage implements IStorage {
         },
       })
       .from(checklists)
-      .leftJoin(projects, eq(checklists.projectId, projects.id))
+      .innerJoin(projects, eq(checklists.projectId, projects.id))
       .leftJoin(users, eq(checklists.assignedToId, users.id))
+      .where(eq(projects.accountId, accountId))
       .orderBy(desc(checklists.createdAt));
 
     const result = [];
@@ -438,7 +441,7 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
-  async getAllReports() {
+  async getAllReports(accountId: string) {
     const rows = await db
       .select({
         report: reports,
@@ -450,8 +453,9 @@ export class DatabaseStorage implements IStorage {
         },
       })
       .from(reports)
-      .leftJoin(projects, eq(reports.projectId, projects.id))
+      .innerJoin(projects, eq(reports.projectId, projects.id))
       .leftJoin(users, eq(reports.createdById, users.id))
+      .where(eq(projects.accountId, accountId))
       .orderBy(desc(reports.createdAt));
 
     return rows.map(r => ({
@@ -484,8 +488,8 @@ export class DatabaseStorage implements IStorage {
     await db.delete(reports).where(eq(reports.id, id));
   }
 
-  async getUsers(): Promise<User[]> {
-    return db.select().from(users).orderBy(desc(users.createdAt));
+  async getUsers(accountId: string): Promise<User[]> {
+    return db.select().from(users).where(eq(users.accountId, accountId)).orderBy(desc(users.createdAt));
   }
 
   async createSharedGallery(gallery: InsertSharedGallery): Promise<SharedGallery> {
@@ -498,8 +502,8 @@ export class DatabaseStorage implements IStorage {
     return gallery;
   }
 
-  async getAllChecklistTemplates(): Promise<(ChecklistTemplate & { itemCount: number })[]> {
-    const templates = await db.select().from(checklistTemplates).orderBy(desc(checklistTemplates.createdAt));
+  async getAllChecklistTemplates(accountId: string): Promise<(ChecklistTemplate & { itemCount: number })[]> {
+    const templates = await db.select().from(checklistTemplates).where(eq(checklistTemplates.accountId, accountId)).orderBy(desc(checklistTemplates.createdAt));
     const result = [];
     for (const t of templates) {
       const items = await db.select().from(checklistTemplateItems).where(eq(checklistTemplateItems.templateId, t.id));
@@ -533,8 +537,8 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
-  async getAllReportTemplates(): Promise<ReportTemplate[]> {
-    return db.select().from(reportTemplates).orderBy(desc(reportTemplates.createdAt));
+  async getAllReportTemplates(accountId: string): Promise<ReportTemplate[]> {
+    return db.select().from(reportTemplates).where(eq(reportTemplates.accountId, accountId)).orderBy(desc(reportTemplates.createdAt));
   }
 
   async getReportTemplate(id: number): Promise<ReportTemplate | undefined> {

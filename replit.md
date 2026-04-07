@@ -41,11 +41,22 @@ Field View is a photo documentation and project management tool designed for fie
   - `schema.ts` - Drizzle ORM schema definitions (projects, media, comments, tasks, checklists, reports, galleries)
   - `models/auth.ts` - Auth-related schemas (users with password/subscription fields, sessions, passwordResetTokens)
 
+## Multi-Tenancy (Account Isolation)
+- **Accounts table**: `accounts` (id UUID, name, createdAt) — each organization is an account
+- **Users**: `accountId` field links each user to their account
+- **Projects**: `accountId` field links each project to its account
+- **Templates**: `checklistTemplates` and `reportTemplates` have `accountId`
+- **Child data** (media, tasks, checklists, reports, comments): Isolated via project joins — no direct accountId, filtered through `projects.accountId`
+- **Registration**: Every new user auto-creates an account and is set as `role: "admin"` of that account
+- **Storage layer**: All collection-fetching methods accept `accountId` and filter accordingly
+- **Routes**: All API endpoints extract `req.user.accountId` and verify ownership; helper functions (`verifyProjectAccess`, `verifyMediaAccess`, `verifyChecklistAccess`, `verifyTaskAccess`, `verifyReportAccess`) prevent cross-account access on all mutation/by-ID routes
+- **Access control**: Users can only see/modify data belonging to their account; admin role changes and subscription updates are account-scoped
+
 ## Authentication
 - Custom email/password auth using Passport.js local strategy
 - Passwords hashed with bcryptjs (12 rounds)
 - Sessions stored in PostgreSQL via connect-pg-simple
-- User schema includes: id (UUID), email, password (hashed), firstName, lastName, profileImageUrl, stripeCustomerId, stripeSubscriptionId, subscriptionStatus, trialEndsAt
+- User schema includes: id (UUID), email, password (hashed), firstName, lastName, profileImageUrl, accountId, stripeCustomerId, stripeSubscriptionId, subscriptionStatus, trialEndsAt
 - New users register with subscriptionStatus: "none" — must enter credit card via Stripe Checkout to start 14-day free trial
 - Stripe manages the trial period (subscriptionStatus: "trialing" after checkout)
 - Password reset: POST /api/forgot-password generates token (logged to console in dev), POST /api/reset-password validates token and updates password

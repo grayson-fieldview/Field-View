@@ -4,7 +4,7 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
 export * from "./models/auth";
-import { users } from "./models/auth";
+import { users, accounts } from "./models/auth";
 
 export const projectStatusEnum = pgEnum("project_status", ["active", "completed", "on_hold", "archived"]);
 export const taskStatusEnum = pgEnum("task_status", ["todo", "in_progress", "done"]);
@@ -22,6 +22,7 @@ export const projects = pgTable("projects", {
   longitude: real("longitude"),
   color: text("color").default("#3B82F6"),
   coverPhotoId: integer("cover_photo_id"),
+  accountId: varchar("account_id").references(() => accounts.id),
   createdById: varchar("created_by_id").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -103,6 +104,7 @@ export const checklistTemplates = pgTable("checklist_templates", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   title: text("title").notNull(),
   description: text("description"),
+  accountId: varchar("account_id").references(() => accounts.id),
   createdById: varchar("created_by_id").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -121,6 +123,7 @@ export const reportTemplates = pgTable("report_templates", {
   content: text("content"),
   findings: text("findings"),
   recommendations: text("recommendations"),
+  accountId: varchar("account_id").references(() => accounts.id),
   createdById: varchar("created_by_id").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

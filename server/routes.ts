@@ -11,8 +11,49 @@ import fs from "fs";
 import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertReportSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertReportTemplateSchema, projects, media, comments, tasks, checklists, reports } from "@shared/schema";
 import { users } from "@shared/models/auth";
 import { db } from "./db";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, and } from "drizzle-orm";
 import { uploadToS3 } from "./s3";
+
+async function verifyProjectAccess(projectId: number, accountId: string): Promise<boolean> {
+  const project = await storage.getProject(projectId);
+  return !!project && project.accountId === accountId;
+}
+
+async function verifyMediaAccess(mediaId: number, accountId: string): Promise<boolean> {
+  const item = await db.select({ accountId: projects.accountId })
+    .from(media)
+    .innerJoin(projects, eq(media.projectId, projects.id))
+    .where(eq(media.id, mediaId))
+    .limit(1);
+  return item.length > 0 && item[0].accountId === accountId;
+}
+
+async function verifyChecklistAccess(checklistId: number, accountId: string): Promise<boolean> {
+  const result = await db.select({ accountId: projects.accountId })
+    .from(checklists)
+    .innerJoin(projects, eq(checklists.projectId, projects.id))
+    .where(eq(checklists.id, checklistId))
+    .limit(1);
+  return result.length > 0 && result[0].accountId === accountId;
+}
+
+async function verifyTaskAccess(taskId: number, accountId: string): Promise<boolean> {
+  const result = await db.select({ accountId: projects.accountId })
+    .from(tasks)
+    .innerJoin(projects, eq(tasks.projectId, projects.id))
+    .where(eq(tasks.id, taskId))
+    .limit(1);
+  return result.length > 0 && result[0].accountId === accountId;
+}
+
+async function verifyReportAccess(reportId: number, accountId: string): Promise<boolean> {
+  const result = await db.select({ accountId: projects.accountId })
+    .from(reports)
+    .innerJoin(projects, eq(reports.projectId, projects.id))
+    .where(eq(reports.id, reportId))
+    .limit(1);
+  return result.length > 0 && result[0].accountId === accountId;
+}
 
 const uploadDir = path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadDir)) {
@@ -50,20 +91,23 @@ export async function registerRoutes(
     res.json({ apiKey });
   });
 
-  app.get("/api/projects", requireActiveSubscription, async (_req, res) => {
+  app.get("/api/projects", requireActiveSubscription, async (req: any, res) => {
     try {
-      const projects = await storage.getProjectsWithDetails();
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const projects = await storage.getProjectsWithDetails(accountId);
       res.json(projects);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch projects" });
     }
   });
 
-  app.get("/api/projects/:id", requireActiveSubscription, async (req, res) => {
+  app.get("/api/projects/:id", requireActiveSubscription, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
       const project = await storage.getProject(id);
       if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
 
       const mediaItems = await storage.getMediaByProject(id);
       const taskItems = await storage.getTasksByProject(id);
@@ -80,6 +124,7 @@ export async function registerRoutes(
     try {
       const parsed = insertProjectSchema.safeParse({
         ...req.body,
+        accountId: req.user.accountId,
         createdById: req.user.id,
       });
       if (!parsed.success) {
@@ -92,9 +137,12 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/projects/:id", requireActiveSubscription, async (req, res) => {
+  app.patch("/api/projects/:id", requireActiveSubscription, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
+      const project = await storage.getProject(id);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
       const allowed = ["name", "description", "status", "address", "latitude", "longitude", "color", "coverPhotoId"];
       const filtered: Record<string, any> = {};
       for (const key of allowed) {
@@ -108,9 +156,12 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/projects/:id", requireActiveSubscription, async (req, res) => {
+  app.delete("/api/projects/:id", requireActiveSubscription, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
+      const project = await storage.getProject(id);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
       await storage.deleteProject(id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -123,6 +174,7 @@ export async function registerRoutes(
       const projectId = parseInt(req.params.id as string);
       const project = await storage.getProject(projectId);
       if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
 
       const files = req.files as Express.Multer.File[];
       if (!files || files.length === 0) {
@@ -157,27 +209,32 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/tasks", requireActiveSubscription, async (_req, res) => {
+  app.get("/api/tasks", requireActiveSubscription, async (req: any, res) => {
     try {
-      const allTasks = await storage.getAllTasks();
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const allTasks = await storage.getAllTasks(accountId);
       res.json(allTasks);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch tasks" });
     }
   });
 
-  app.get("/api/media", requireActiveSubscription, async (_req, res) => {
+  app.get("/api/media", requireActiveSubscription, async (req: any, res) => {
     try {
-      const allMedia = await storage.getAllMedia();
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const allMedia = await storage.getAllMedia(accountId);
       res.json(allMedia);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch media" });
     }
   });
 
-  app.get("/api/media/:id/comments", requireActiveSubscription, async (req, res) => {
+  app.get("/api/media/:id/comments", requireActiveSubscription, async (req: any, res) => {
     try {
       const mediaId = parseInt(req.params.id as string);
+      if (!(await verifyMediaAccess(mediaId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
       const mediaComments = await storage.getCommentsByMedia(mediaId);
       res.json(mediaComments);
     } catch (error) {
@@ -188,6 +245,7 @@ export async function registerRoutes(
   app.post("/api/media/:id/comments", requireActiveSubscription, async (req: any, res) => {
     try {
       const mediaId = parseInt(req.params.id as string);
+      if (!(await verifyMediaAccess(mediaId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
       const parsed = insertCommentSchema.safeParse({
         mediaId,
         userId: req.user.id,
@@ -206,6 +264,9 @@ export async function registerRoutes(
   app.post("/api/projects/:id/tasks", requireActiveSubscription, async (req: any, res) => {
     try {
       const projectId = parseInt(req.params.id as string);
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
       const parsed = insertTaskSchema.safeParse({
         projectId,
         title: req.body.title,
@@ -225,9 +286,10 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/tasks/:id", requireActiveSubscription, async (req, res) => {
+  app.patch("/api/tasks/:id", requireActiveSubscription, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
+      if (!(await verifyTaskAccess(id, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
       const allowed = ["title", "description", "status", "priority", "assignedToId", "dueDate"];
       const filtered: Record<string, any> = {};
       for (const key of allowed) {
@@ -242,9 +304,11 @@ export async function registerRoutes(
   });
 
   // Checklists
-  app.get("/api/checklists", requireActiveSubscription, async (_req, res) => {
+  app.get("/api/checklists", requireActiveSubscription, async (req: any, res) => {
     try {
-      const allChecklists = await storage.getAllChecklists();
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const allChecklists = await storage.getAllChecklists(accountId);
       res.json(allChecklists);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch checklists" });
@@ -254,6 +318,7 @@ export async function registerRoutes(
   app.post("/api/projects/:id/checklists", requireActiveSubscription, async (req: any, res) => {
     try {
       const projectId = parseInt(req.params.id as string);
+      if (!(await verifyProjectAccess(projectId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
       const parsed = insertChecklistSchema.safeParse({
         projectId,
         title: req.body.title,
@@ -283,9 +348,10 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/checklists/:id", requireActiveSubscription, async (req, res) => {
+  app.patch("/api/checklists/:id", requireActiveSubscription, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
+      if (!(await verifyChecklistAccess(id, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
       const allowed = ["title", "description", "status", "assignedToId", "dueDate"];
       const filtered: Record<string, any> = {};
       for (const key of allowed) {
@@ -299,9 +365,10 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/checklists/:id", requireActiveSubscription, async (req, res) => {
+  app.delete("/api/checklists/:id", requireActiveSubscription, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
+      if (!(await verifyChecklistAccess(id, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
       await storage.deleteChecklist(id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -309,9 +376,10 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/checklists/:id/items", requireActiveSubscription, async (req, res) => {
+  app.get("/api/checklists/:id/items", requireActiveSubscription, async (req: any, res) => {
     try {
       const checklistId = parseInt(req.params.id as string);
+      if (!(await verifyChecklistAccess(checklistId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
       const items = await storage.getChecklistItems(checklistId);
       res.json(items);
     } catch (error) {
@@ -319,9 +387,10 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/checklists/:id/items", requireActiveSubscription, async (req, res) => {
+  app.post("/api/checklists/:id/items", requireActiveSubscription, async (req: any, res) => {
     try {
       const checklistId = parseInt(req.params.id as string);
+      if (!(await verifyChecklistAccess(checklistId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
       const parsed = insertChecklistItemSchema.safeParse({
         checklistId,
         label: req.body.label,
@@ -337,9 +406,12 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/checklist-items/:id", requireActiveSubscription, async (req, res) => {
+  app.patch("/api/checklist-items/:id", requireActiveSubscription, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
+      const item = await db.select({ checklistId: sql<number>`checklist_items.checklist_id` }).from(sql`checklist_items`).where(sql`checklist_items.id = ${id}`).limit(1);
+      if (item.length === 0) return res.status(404).json({ message: "Item not found" });
+      if (!(await verifyChecklistAccess(item[0].checklistId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
       const allowed = ["label", "checked", "sortOrder"];
       const filtered: Record<string, any> = {};
       for (const key of allowed) {
@@ -353,9 +425,12 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/checklist-items/:id", requireActiveSubscription, async (req, res) => {
+  app.delete("/api/checklist-items/:id", requireActiveSubscription, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
+      const item = await db.select({ checklistId: sql<number>`checklist_items.checklist_id` }).from(sql`checklist_items`).where(sql`checklist_items.id = ${id}`).limit(1);
+      if (item.length === 0) return res.status(404).json({ message: "Item not found" });
+      if (!(await verifyChecklistAccess(item[0].checklistId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
       await storage.deleteChecklistItem(id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -364,9 +439,11 @@ export async function registerRoutes(
   });
 
   // Reports
-  app.get("/api/reports", requireActiveSubscription, async (_req, res) => {
+  app.get("/api/reports", requireActiveSubscription, async (req: any, res) => {
     try {
-      const allReports = await storage.getAllReports();
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const allReports = await storage.getAllReports(accountId);
       res.json(allReports);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch reports" });
@@ -376,6 +453,7 @@ export async function registerRoutes(
   app.post("/api/projects/:id/reports", requireActiveSubscription, async (req: any, res) => {
     try {
       const projectId = parseInt(req.params.id as string);
+      if (!(await verifyProjectAccess(projectId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
       const parsed = insertReportSchema.safeParse({
         projectId,
         title: req.body.title,
@@ -395,9 +473,10 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/reports/:id", requireActiveSubscription, async (req, res) => {
+  app.patch("/api/reports/:id", requireActiveSubscription, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
+      if (!(await verifyReportAccess(id, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
       const allowed = ["title", "type", "status", "content", "findings", "recommendations"];
       const filtered: Record<string, any> = {};
       for (const key of allowed) {
@@ -411,9 +490,10 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/reports/:id", requireActiveSubscription, async (req, res) => {
+  app.delete("/api/reports/:id", requireActiveSubscription, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
+      if (!(await verifyReportAccess(id, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
       await storage.deleteReport(id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -421,9 +501,11 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/users", requireActiveSubscription, async (_req, res) => {
+  app.get("/api/users", requireActiveSubscription, async (req: any, res) => {
     try {
-      const usersList = await storage.getUsers();
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const usersList = await storage.getUsers(accountId);
       const safeUsers = usersList.map(({ password, ...rest }) => rest);
       res.json(safeUsers);
     } catch (error) {
@@ -457,13 +539,16 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/users/:userId/subscription", isAuthenticated, async (req, res) => {
+  app.patch("/api/users/:userId/subscription", isAuthenticated, async (req: any, res) => {
     try {
       const currentUser = req.user;
       if (currentUser.role !== "admin") {
         return res.status(403).json({ message: "Only admins can update subscriptions" });
       }
       const { userId } = req.params;
+      const targetUser = await authStorage.getUser(userId);
+      if (!targetUser) return res.status(404).json({ message: "User not found" });
+      if (targetUser.accountId !== currentUser.accountId) return res.status(403).json({ message: "Access denied" });
       const { subscriptionStatus } = req.body;
       const validStatuses = ["none", "trial", "trialing", "active", "past_due", "canceled"];
       if (!validStatuses.includes(subscriptionStatus)) {
@@ -478,13 +563,16 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/users/:userId/role", requireActiveSubscription, async (req, res) => {
+  app.patch("/api/users/:userId/role", requireActiveSubscription, async (req: any, res) => {
     try {
       const currentUser = req.user;
       if (currentUser.role !== "admin") {
         return res.status(403).json({ message: "Only admins can change roles" });
       }
       const { userId } = req.params;
+      const targetUser = await authStorage.getUser(userId);
+      if (!targetUser) return res.status(404).json({ message: "User not found" });
+      if (targetUser.accountId !== currentUser.accountId) return res.status(403).json({ message: "Access denied" });
       const { role } = req.body;
       const validRoles = ["admin", "manager", "standard", "restricted"];
       if (!validRoles.includes(role)) {
@@ -500,18 +588,22 @@ export async function registerRoutes(
   });
 
   // Checklist Templates
-  app.get("/api/checklist-templates", requireActiveSubscription, async (_req, res) => {
+  app.get("/api/checklist-templates", requireActiveSubscription, async (req: any, res) => {
     try {
-      const templates = await storage.getAllChecklistTemplates();
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const templates = await storage.getAllChecklistTemplates(accountId);
       res.json(templates);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch checklist templates" });
     }
   });
 
-  app.get("/api/checklist-templates/:id/items", requireActiveSubscription, async (req, res) => {
+  app.get("/api/checklist-templates/:id/items", requireActiveSubscription, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
+      const template = await storage.getChecklistTemplate(id);
+      if (!template || template.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
       const items = await storage.getChecklistTemplateItems(id);
       res.json(items);
     } catch (error) {
@@ -524,6 +616,7 @@ export async function registerRoutes(
       const parsed = insertChecklistTemplateSchema.safeParse({
         title: req.body.title,
         description: req.body.description || null,
+        accountId: req.user.accountId,
         createdById: req.user.id,
       });
       if (!parsed.success) {
@@ -548,9 +641,11 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/checklist-templates/:id", requireActiveSubscription, async (req, res) => {
+  app.delete("/api/checklist-templates/:id", requireActiveSubscription, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
+      const template = await storage.getChecklistTemplate(id);
+      if (!template || template.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
       await storage.deleteChecklistTemplate(id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -559,9 +654,11 @@ export async function registerRoutes(
   });
 
   // Report Templates
-  app.get("/api/report-templates", requireActiveSubscription, async (_req, res) => {
+  app.get("/api/report-templates", requireActiveSubscription, async (req: any, res) => {
     try {
-      const templates = await storage.getAllReportTemplates();
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const templates = await storage.getAllReportTemplates(accountId);
       res.json(templates);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch report templates" });
@@ -576,6 +673,7 @@ export async function registerRoutes(
         content: req.body.content || null,
         findings: req.body.findings || null,
         recommendations: req.body.recommendations || null,
+        accountId: req.user.accountId,
         createdById: req.user.id,
       });
       if (!parsed.success) {
@@ -588,9 +686,11 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/report-templates/:id", requireActiveSubscription, async (req, res) => {
+  app.delete("/api/report-templates/:id", requireActiveSubscription, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
+      const template = await storage.getReportTemplate(id);
+      if (!template || template.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
       await storage.deleteReportTemplate(id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -598,12 +698,13 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/galleries", requireActiveSubscription, async (req, res) => {
+  app.post("/api/galleries", requireActiveSubscription, async (req: any, res) => {
     try {
       const { projectId, mediaIds, includeMetadata, includeDescriptions } = req.body;
       if (!projectId || !Array.isArray(mediaIds) || mediaIds.length === 0) {
         return res.status(400).json({ message: "projectId and mediaIds are required" });
       }
+      if (!(await verifyProjectAccess(projectId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
       const token = crypto.randomBytes(12).toString("base64url");
       const gallery = await storage.createSharedGallery({
         token,
@@ -653,9 +754,11 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/activity", requireActiveSubscription, async (req, res) => {
+  app.get("/api/activity", requireActiveSubscription, async (req: any, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
 
       const recentMedia = await db
         .select({
@@ -671,8 +774,9 @@ export async function registerRoutes(
           projectName: projects.name,
         })
         .from(media)
+        .innerJoin(projects, eq(media.projectId, projects.id))
         .leftJoin(users, eq(media.uploadedById, users.id))
-        .leftJoin(projects, eq(media.projectId, projects.id))
+        .where(eq(projects.accountId, accountId))
         .orderBy(sql`${media.createdAt} DESC`)
         .limit(limit);
 
@@ -692,8 +796,9 @@ export async function registerRoutes(
           projectName: projects.name,
         })
         .from(tasks)
+        .innerJoin(projects, eq(tasks.projectId, projects.id))
         .leftJoin(users, eq(tasks.createdById, users.id))
-        .leftJoin(projects, eq(tasks.projectId, projects.id))
+        .where(eq(projects.accountId, accountId))
         .orderBy(sql`${tasks.updatedAt} DESC`)
         .limit(limit);
 
@@ -708,7 +813,10 @@ export async function registerRoutes(
           userImage: users.profileImageUrl,
         })
         .from(comments)
+        .innerJoin(media, eq(comments.mediaId, media.id))
+        .innerJoin(projects, eq(media.projectId, projects.id))
         .leftJoin(users, eq(comments.userId, users.id))
+        .where(eq(projects.accountId, accountId))
         .orderBy(sql`${comments.createdAt} DESC`)
         .limit(limit);
 
@@ -773,22 +881,22 @@ export async function registerRoutes(
       const activeProjectCount = await db
         .select({ count: sql<number>`count(*)` })
         .from(projects)
-        .where(eq(projects.status, "active"));
-      const weekAgo = new Date(Date.now() - 7 * 86400000);
-      const allMediaThisWeek = await db
-        .select({ count: sql<number>`count(*)` })
-        .from(media);
+        .where(and(eq(projects.status, "active"), eq(projects.accountId, accountId)));
       const openTaskCount = await db
         .select({ count: sql<number>`count(*)` })
         .from(tasks)
-        .where(sql`${tasks.status} != 'done'`);
+        .innerJoin(projects, eq(tasks.projectId, projects.id))
+        .where(and(sql`${tasks.status} != 'done'`, eq(projects.accountId, accountId)));
       const overdueTaskCount = await db
         .select({ count: sql<number>`count(*)` })
         .from(tasks)
-        .where(sql`${tasks.status} != 'done' AND ${tasks.dueDate} IS NOT NULL AND ${tasks.dueDate} < NOW()`);
+        .innerJoin(projects, eq(tasks.projectId, projects.id))
+        .where(and(sql`${tasks.status} != 'done' AND ${tasks.dueDate} IS NOT NULL AND ${tasks.dueDate} < NOW()`, eq(projects.accountId, accountId)));
       const totalMediaCount = await db
         .select({ count: sql<number>`count(*)` })
-        .from(media);
+        .from(media)
+        .innerJoin(projects, eq(media.projectId, projects.id))
+        .where(eq(projects.accountId, accountId));
 
       res.json({
         activities: activities.slice(0, limit),
@@ -805,7 +913,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/projects/:id/daily-log", requireActiveSubscription, async (req, res) => {
+  app.get("/api/projects/:id/daily-log", requireActiveSubscription, async (req: any, res) => {
     try {
       const projectId = parseInt(req.params.id);
       const dateStr = (req.query.date as string) || new Date().toISOString().split("T")[0];
@@ -814,6 +922,7 @@ export async function registerRoutes(
 
       const project = await storage.getProject(projectId);
       if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
 
       const dayMedia = await db
         .select({
@@ -907,8 +1016,10 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/analytics", requireActiveSubscription, async (req, res) => {
+  app.get("/api/analytics", requireActiveSubscription, async (req: any, res) => {
     try {
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
       const { from, to } = req.query;
       const fromDate = from ? new Date(from as string) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
       const toDate = to ? new Date(to as string) : new Date();
@@ -925,7 +1036,9 @@ export async function registerRoutes(
           uploaderLast: users.lastName,
         })
         .from(media)
-        .leftJoin(users, eq(media.uploadedById, users.id));
+        .innerJoin(projects, eq(media.projectId, projects.id))
+        .leftJoin(users, eq(media.uploadedById, users.id))
+        .where(eq(projects.accountId, accountId));
 
       const filteredMedia = allMedia.filter((m) => {
         const d = new Date(m.createdAt);
@@ -964,7 +1077,7 @@ export async function registerRoutes(
         }));
 
       const photosByProject: Record<number, { name: string; count: number }> = {};
-      const allProjects = await db.select({ id: projects.id, name: projects.name }).from(projects);
+      const allProjects = await db.select({ id: projects.id, name: projects.name }).from(projects).where(eq(projects.accountId, accountId));
       const projectMap = Object.fromEntries(allProjects.map((p) => [p.id, p.name]));
       for (const m of filteredMedia) {
         if (!photosByProject[m.projectId]) {
@@ -975,7 +1088,9 @@ export async function registerRoutes(
 
       const allTasks = await db
         .select({ id: tasks.id, status: tasks.status, projectId: tasks.projectId, createdAt: tasks.createdAt })
-        .from(tasks);
+        .from(tasks)
+        .innerJoin(projects, eq(tasks.projectId, projects.id))
+        .where(eq(projects.accountId, accountId));
       const filteredTasks = allTasks.filter((t) => {
         const d = new Date(t.createdAt);
         return d >= fromDate && d <= toDate;
@@ -987,7 +1102,9 @@ export async function registerRoutes(
 
       const allChecklistRows = await db
         .select({ id: checklists.id, projectId: checklists.projectId, createdAt: checklists.createdAt })
-        .from(checklists);
+        .from(checklists)
+        .innerJoin(projects, eq(checklists.projectId, projects.id))
+        .where(eq(projects.accountId, accountId));
       const filteredChecklists = allChecklistRows.filter((c) => {
         const d = new Date(c.createdAt);
         return d >= fromDate && d <= toDate;
@@ -995,7 +1112,9 @@ export async function registerRoutes(
 
       const allReportRows = await db
         .select({ id: reports.id, projectId: reports.projectId, createdAt: reports.createdAt })
-        .from(reports);
+        .from(reports)
+        .innerJoin(projects, eq(reports.projectId, projects.id))
+        .where(eq(projects.accountId, accountId));
       const filteredReports = allReportRows.filter((r) => {
         const d = new Date(r.createdAt);
         return d >= fromDate && d <= toDate;
@@ -1003,7 +1122,10 @@ export async function registerRoutes(
 
       const allCommentRows = await db
         .select({ id: comments.id, createdAt: comments.createdAt })
-        .from(comments);
+        .from(comments)
+        .innerJoin(media, eq(comments.mediaId, media.id))
+        .innerJoin(projects, eq(media.projectId, projects.id))
+        .where(eq(projects.accountId, accountId));
       const filteredComments = allCommentRows.filter((c) => {
         const d = new Date(c.createdAt);
         return d >= fromDate && d <= toDate;
