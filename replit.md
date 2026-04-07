@@ -18,7 +18,7 @@ Field View is a photo documentation and project management tool designed for fie
 - **Auth**: Custom email/password authentication (Passport.js local strategy, bcryptjs, session-based with connect-pg-simple)
 - **Payments**: Stripe integration via stripe-replit-sync (subscription billing)
 - **Map**: Leaflet with react-leaflet
-- **File Upload**: Multer (stored in /uploads directory)
+- **File Upload**: Multer + AWS S3 (@aws-sdk/client-s3, bucket: fieldview-storage, region: us-east-2)
 - **Routing**: wouter (frontend), Express (backend)
 - **State Management**: TanStack React Query v5
 
@@ -101,6 +101,14 @@ Field View is a photo documentation and project management tool designed for fie
 - `GET /api/subscription` - Get current subscription status
 - `GET /api/stripe/prices` - Get available prices from stripe schema
 - `GET /api/stripe/publishable-key` - Get Stripe publishable key
+
+## AWS S3 Photo Storage
+- Photos uploaded to AWS S3 bucket `fieldview-storage` in `us-east-2`
+- S3 service in `server/s3.ts` (uploadToS3, deleteFromS3, extractS3KeyFromUrl)
+- Photo URLs: `https://fieldview-storage.s3.us-east-2.amazonaws.com/photos/...`
+- Multer uses memory storage (buffers) → uploaded to S3 via @aws-sdk/client-s3
+- Old locally-stored photos (`/uploads/...`) still served via express.static for backward compatibility
+- Required env vars: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_BUCKET, AWS_REGION
 
 ## Key Features
 - Photo annotations: 5 drawing tools (freehand, arrow, circle, rectangle, line), 8 colors (#F09000 orange standardized), adjustable stroke width
