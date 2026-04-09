@@ -141,22 +141,7 @@ export default function ProjectsPage() {
               Create
             </Button>
           </DialogTrigger>
-          <DialogContent className="sm:max-w-lg" onInteractOutside={(e) => {
-              const target = e.target as HTMLElement;
-              if (target.closest(".pac-container")) {
-                e.preventDefault();
-              }
-            }} onPointerDownOutside={(e) => {
-              const target = e.target as HTMLElement;
-              if (target.closest(".pac-container")) {
-                e.preventDefault();
-              }
-            }} onFocusOutside={(e) => {
-              const target = e.target as HTMLElement;
-              if (target.closest && target.closest(".pac-container")) {
-                e.preventDefault();
-              }
-            }}>
+          <DialogContent className="sm:max-w-lg">
             <DialogHeader>
               <DialogTitle>Create New Project</DialogTitle>
             </DialogHeader>

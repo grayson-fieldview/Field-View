@@ -1,4 +1,5 @@
-import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import path from "path";
 import crypto from "crypto";
 
@@ -14,6 +15,15 @@ const BUCKET = process.env.AWS_S3_BUCKET || "fieldview-storage";
 
 export function getS3Url(key: string): string {
   return `https://${BUCKET}.s3.${process.env.AWS_REGION || "us-east-2"}.amazonaws.com/${key}`;
+}
+
+export async function getPresignedUrl(key: string): Promise<string> {
+  const command = new GetObjectCommand({ Bucket: BUCKET, Key: key });
+  return getSignedUrl(s3Client, command, { expiresIn: 3600 });
+}
+
+export function isS3Url(url: string): boolean {
+  return url.includes(".s3.") && url.includes("amazonaws.com");
 }
 
 export async function uploadToS3(

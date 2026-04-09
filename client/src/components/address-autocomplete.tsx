@@ -25,6 +25,7 @@ export function AddressAutocomplete({
   placeholder = "Search for an address...",
   "data-testid": testId,
 }: AddressAutocompleteProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const autocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
   const onChangeRef = useRef(onChange);
@@ -32,17 +33,36 @@ export function AddressAutocomplete({
   const [scriptLoaded, setScriptLoaded] = useState(false);
   const [scriptLoading, setScriptLoading] = useState(false);
   const [scriptError, setScriptError] = useState(false);
-  const [internalValue, setInternalValue] = useState(value);
-  const isSelectingRef = useRef(false);
 
   onChangeRef.current = onChange;
   onTextChangeRef.current = onTextChange;
 
   useEffect(() => {
-    if (!isSelectingRef.current) {
-      setInternalValue(value);
+    if (inputRef.current && inputRef.current.value !== value) {
+      inputRef.current.value = value;
     }
   }, [value]);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const observer = new MutationObserver(() => {
+      const pacContainers = document.querySelectorAll(".pac-container");
+      const dialogContent = containerRef.current?.closest("[role='dialog']");
+      if (!dialogContent) return;
+
+      pacContainers.forEach((pac) => {
+        if (!dialogContent.contains(pac)) {
+          dialogContent.appendChild(pac);
+          (pac as HTMLElement).style.position = "fixed";
+        }
+      });
+    });
+
+    observer.observe(document.body, { childList: true, subtree: false });
+
+    return () => observer.disconnect();
+  }, []);
 
   const { data: config, isError: configError } = useQuery<{ apiKey: string }>({
     queryKey: ["/api/config/maps"],
@@ -52,7 +72,9 @@ export function AddressAutocomplete({
   const initAutocomplete = useCallback(() => {
     if (!inputRef.current || autocompleteRef.current) return;
 
-    const autocomplete = new google.maps.places.Autocomplete(inputRef.current, {
+    const input = inputRef.current;
+
+    const autocomplete = new google.maps.places.Autocomplete(input, {
       types: ["address"],
       fields: ["formatted_address", "geometry"],
     });
@@ -60,21 +82,14 @@ export function AddressAutocomplete({
     autocomplete.addListener("place_changed", () => {
       const place = autocomplete.getPlace();
       if (place.formatted_address && place.geometry?.location) {
-        isSelectingRef.current = true;
         const address = place.formatted_address;
-        setInternalValue(address);
+        input.value = address;
         onTextChangeRef.current(address);
         onChangeRef.current({
           address,
           latitude: place.geometry.location.lat(),
           longitude: place.geometry.location.lng(),
         });
-        if (inputRef.current) {
-          inputRef.current.value = address;
-        }
-        setTimeout(() => {
-          isSelectingRef.current = false;
-        }, 300);
       }
     });
 
@@ -131,10 +146,7 @@ export function AddressAutocomplete({
   }, []);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (isSelectingRef.current) return;
-    const text = e.target.value;
-    setInternalValue(text);
-    onTextChangeRef.current(text);
+    onTextChangeRef.current(e.target.value);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -146,11 +158,11 @@ export function AddressAutocomplete({
   const showFallback = configError || scriptError;
 
   return (
-    <div className="relative">
+    <div ref={containerRef} className="relative">
       <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
       <Input
         ref={inputRef}
-        value={internalValue}
+        defaultValue={value}
         onChange={handleInputChange}
         onKeyDown={handleKeyDown}
         placeholder={showFallback ? "Enter address manually" : placeholder}

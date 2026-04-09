@@ -12,7 +12,7 @@ import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertCheck
 import { users, invitations } from "@shared/models/auth";
 import { db } from "./db";
 import { eq, sql, and, or, inArray } from "drizzle-orm";
-import { uploadToS3 } from "./s3";
+import { uploadToS3, getPresignedUrl, isS3Url, extractS3KeyFromUrl } from "./s3";
 
 async function verifyProjectAccess(projectId: number, accountId: string): Promise<boolean> {
   const project = await storage.getProject(projectId);
@@ -53,6 +53,18 @@ async function verifyReportAccess(reportId: number, accountId: string): Promise<
     .where(eq(reports.id, reportId))
     .limit(1);
   return result.length > 0 && result[0].accountId === accountId;
+}
+
+async function presignMediaUrls<T extends { url: string }>(items: T[]): Promise<T[]> {
+  return Promise.all(items.map(async (item) => {
+    if (isS3Url(item.url)) {
+      const key = extractS3KeyFromUrl(item.url);
+      if (key) {
+        return { ...item, url: await getPresignedUrl(key) };
+      }
+    }
+    return item;
+  }));
 }
 
 const uploadDir = path.join(process.cwd(), "uploads");
@@ -102,7 +114,11 @@ export async function registerRoutes(
         const assignedSet = new Set(assignedIds.map(a => a.projectId));
         allProjects = allProjects.filter(p => p.createdById === req.user.id || assignedSet.has(p.id));
       }
-      res.json(allProjects);
+      const presignedProjects = await Promise.all(allProjects.map(async (p) => ({
+        ...p,
+        recentPhotos: await presignMediaUrls(p.recentPhotos),
+      })));
+      res.json(presignedProjects);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch projects" });
     }
@@ -122,7 +138,7 @@ export async function registerRoutes(
         }
       }
 
-      const mediaItems = await storage.getMediaByProject(id);
+      const mediaItems = await presignMediaUrls(await storage.getMediaByProject(id));
       const taskItems = await storage.getTasksByProject(id);
       const checklistItems = await storage.getChecklistsByProject(id);
       const reportItems = await storage.getReportsByProject(id);
@@ -215,7 +231,7 @@ export async function registerRoutes(
         })
       );
 
-      res.status(201).json(created);
+      res.status(201).json(await presignMediaUrls(created));
     } catch (error: any) {
       console.error("Upload error:", error?.message || error);
       res.status(500).json({ message: "Failed to upload media" });
@@ -237,7 +253,7 @@ export async function registerRoutes(
     try {
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
-      const allMedia = await storage.getAllMedia(accountId);
+      const allMedia = await presignMediaUrls(await storage.getAllMedia(accountId));
       res.json(allMedia);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch media" });
@@ -924,7 +940,7 @@ export async function registerRoutes(
         return res.status(404).json({ message: "Gallery not found" });
       }
       const project = await storage.getProject(gallery.projectId);
-      const allMedia = await storage.getMediaByProject(gallery.projectId);
+      const allMedia = await presignMediaUrls(await storage.getMediaByProject(gallery.projectId));
       const galleryMedia = allMedia.filter(m => gallery.mediaIds.includes(m.id));
       res.json({
         token: gallery.token,
@@ -1032,6 +1048,11 @@ export async function registerRoutes(
       const activities: ActivityItem[] = [];
 
       for (const m of recentMedia) {
+        let photoUrl = m.url;
+        if (isS3Url(photoUrl)) {
+          const key = extractS3KeyFromUrl(photoUrl);
+          if (key) photoUrl = await getPresignedUrl(key);
+        }
         activities.push({
           type: "photo",
           id: m.id,
@@ -1041,7 +1062,7 @@ export async function registerRoutes(
           projectName: m.projectName,
           projectId: m.projectId,
           detail: m.caption || m.originalName,
-          extra: { url: m.url },
+          extra: { url: photoUrl },
         });
       }
 
@@ -1185,13 +1206,20 @@ export async function registerRoutes(
           activeTeamMembers: uniqueUsers.size,
           teamMembers: Array.from(uniqueUsers),
         },
-        photos: dayMedia.map((m) => ({
-          id: m.id,
-          url: m.url,
-          caption: m.caption,
-          originalName: m.originalName,
-          uploadedBy: [m.uploaderFirst, m.uploaderLast].filter(Boolean).join(" "),
-          time: new Date(m.createdAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }),
+        photos: await Promise.all(dayMedia.map(async (m) => {
+          let photoUrl = m.url;
+          if (isS3Url(photoUrl)) {
+            const key = extractS3KeyFromUrl(photoUrl);
+            if (key) photoUrl = await getPresignedUrl(key);
+          }
+          return {
+            id: m.id,
+            url: photoUrl,
+            caption: m.caption,
+            originalName: m.originalName,
+            uploadedBy: [m.uploaderFirst, m.uploaderLast].filter(Boolean).join(" "),
+            time: new Date(m.createdAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }),
+          };
         })),
         tasks: dayTasks.map((t) => ({
           id: t.id,
