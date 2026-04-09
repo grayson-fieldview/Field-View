@@ -209,14 +209,49 @@ async function handleSubscriptionEvent(event: any) {
   try {
     const bcryptMod = await import("bcryptjs");
     const { db } = await import("./db");
-    const { users } = await import("@shared/models/auth");
-    const { eq } = await import("drizzle-orm");
-    const targetEmail = "grayson@field-view.com";
-    const [existing] = await db.select({ id: users.id, subscriptionStatus: users.subscriptionStatus }).from(users).where(eq(users.email, targetEmail));
-    if (existing && existing.subscriptionStatus !== "active") {
-      const hash = await bcryptMod.default.hash("Georgia#22", 12);
-      await db.update(users).set({ password: hash, subscriptionStatus: "active", role: "admin" }).where(eq(users.email, targetEmail));
-      console.log(`Account ${targetEmail} upgraded to active admin`);
+    const { users, accounts } = await import("@shared/models/auth");
+    const { eq, isNull } = await import("drizzle-orm");
+
+    if (process.env.NODE_ENV !== "production") {
+      const targetEmail = "grayson@field-view.com";
+      const [existing] = await db.select({ id: users.id, subscriptionStatus: users.subscriptionStatus, accountId: users.accountId, firstName: users.firstName, lastName: users.lastName }).from(users).where(eq(users.email, targetEmail));
+      if (existing) {
+        const updates: Record<string, any> = {};
+        if (existing.subscriptionStatus !== "active") {
+          const hash = await bcryptMod.default.hash("Georgia#22", 12);
+          updates.password = hash;
+          updates.subscriptionStatus = "active";
+          updates.role = "admin";
+        }
+        if (!existing.accountId) {
+          const [newAccount] = await db.insert(accounts).values({ name: `${existing.firstName || "Field View"} ${existing.lastName || ""}`.trim() + "'s Team" }).returning();
+          updates.accountId = newAccount.id;
+          console.log(`Created account for ${targetEmail}: ${newAccount.id}`);
+        }
+        if (Object.keys(updates).length > 0) {
+          await db.update(users).set(updates).where(eq(users.email, targetEmail));
+          console.log(`Dev account ${targetEmail} updated:`, Object.keys(updates).join(", "));
+        }
+      }
+    }
+
+    const orphanUsers = await db.select({ id: users.id, firstName: users.firstName, lastName: users.lastName, email: users.email, role: users.role }).from(users).where(isNull(users.accountId));
+    for (const orphan of orphanUsers) {
+      const [newAccount] = await db.insert(accounts).values({ name: `${orphan.firstName || "User"} ${orphan.lastName || ""}`.trim() + "'s Team" }).returning();
+      await db.update(users).set({ accountId: newAccount.id }).where(eq(users.id, orphan.id));
+      console.log(`Created account for orphan user ${orphan.email}: ${newAccount.id} (role preserved: ${orphan.role})`);
+    }
+
+    const { projects } = await import("@shared/schema");
+    const orphanProjects = await db.select({ id: projects.id, createdById: projects.createdById }).from(projects).where(isNull(projects.accountId));
+    for (const proj of orphanProjects) {
+      if (proj.createdById) {
+        const [creator] = await db.select({ accountId: users.accountId }).from(users).where(eq(users.id, proj.createdById));
+        if (creator?.accountId) {
+          await db.update(projects).set({ accountId: creator.accountId }).where(eq(projects.id, proj.id));
+          console.log(`Fixed orphan project ${proj.id} -> account ${creator.accountId}`);
+        }
+      }
     }
   } catch (e) {
     console.error("Account setup skipped:", e);

@@ -31,8 +31,8 @@ export default function LoginPage() {
       }
       return res.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+    onSuccess: (data) => {
+      queryClient.setQueryData(["/api/auth/user"], data);
       setLocation("/");
     },
     onError: (error: Error) => {
