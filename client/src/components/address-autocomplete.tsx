@@ -46,6 +46,19 @@ export function AddressAutocomplete({
   useEffect(() => {
     if (!containerRef.current) return;
 
+    const repositionPac = () => {
+      const input = inputRef.current;
+      if (!input) return;
+      const pacContainers = document.querySelectorAll(".pac-container");
+      pacContainers.forEach((pac) => {
+        const el = pac as HTMLElement;
+        const rect = input.getBoundingClientRect();
+        el.style.top = `${rect.bottom}px`;
+        el.style.left = `${rect.left}px`;
+        el.style.width = `${rect.width}px`;
+      });
+    };
+
     const observer = new MutationObserver(() => {
       const pacContainers = document.querySelectorAll(".pac-container");
       const dialogContent = containerRef.current?.closest("[role='dialog']");
@@ -55,13 +68,29 @@ export function AddressAutocomplete({
         if (!dialogContent.contains(pac)) {
           dialogContent.appendChild(pac);
           (pac as HTMLElement).style.position = "fixed";
+          (pac as HTMLElement).style.zIndex = "10000";
         }
       });
+
+      repositionPac();
     });
 
     observer.observe(document.body, { childList: true, subtree: false });
 
-    return () => observer.disconnect();
+    const styleObserver = new MutationObserver(repositionPac);
+    const pacCheck = setInterval(() => {
+      const pac = document.querySelector(".pac-container");
+      if (pac) {
+        styleObserver.observe(pac, { attributes: true, attributeFilter: ["style"] });
+        clearInterval(pacCheck);
+      }
+    }, 200);
+
+    return () => {
+      observer.disconnect();
+      styleObserver.disconnect();
+      clearInterval(pacCheck);
+    };
   }, []);
 
   const { data: config, isError: configError } = useQuery<{ apiKey: string }>({

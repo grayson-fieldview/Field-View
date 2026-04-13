@@ -15,6 +15,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -242,12 +243,13 @@ export default function DashboardPage() {
       const res = await apiRequest("POST", "/api/projects", data);
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: { id: number }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
       queryClient.invalidateQueries({ queryKey: ["/api/activity"] });
       setDialogOpen(false);
       form.reset();
       toast({ title: "Project created", description: "Your new project is ready." });
+      navigate(`/projects/${data.id}`);
     },
     onError: (error: Error) => {
       if (isUnauthorizedError(error)) {
@@ -290,6 +292,7 @@ export default function DashboardPage() {
           <DialogContent className="sm:max-w-lg">
             <DialogHeader>
               <DialogTitle>Create New Project</DialogTitle>
+              <DialogDescription className="sr-only">Fill in the details to create a new project.</DialogDescription>
             </DialogHeader>
             <Form {...form}>
               <form onSubmit={form.handleSubmit((d) => createProject.mutate(d))} className="space-y-4">
