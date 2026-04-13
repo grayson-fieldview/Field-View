@@ -2,6 +2,7 @@ import { useState, useRef, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -75,6 +76,7 @@ import {
   Grid2X2,
   Square,
   Calendar,
+  Camera,
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { LayoutTemplate } from "lucide-react";
@@ -243,6 +245,8 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const [showCompareDialog, setShowCompareDialog] = useState(false);
   const [photoSize, setPhotoSize] = useState<"small" | "medium" | "large">("medium");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const isMobile = useIsMobile();
   const [stagedFiles, setStagedFiles] = useState<File[]>([]);
   const [stagedPreviews, setStagedPreviews] = useState<string[]>([]);
 
@@ -724,20 +728,20 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                 </div>
               </div>
 
-              <div className="flex items-center gap-3 sm:gap-4 shrink-0">
+              <div className="flex items-center gap-2 sm:gap-4 shrink-0">
                 <div className="text-center" data-testid="stat-project-photos">
-                  <div className="text-lg font-bold text-[#F09000]">{projectMedia.length}</div>
-                  <div className="text-[11px] text-muted-foreground font-medium uppercase tracking-wide">Photos</div>
+                  <div className="text-base sm:text-lg font-bold text-[#F09000]">{projectMedia.length}</div>
+                  <div className="text-[10px] sm:text-[11px] text-muted-foreground font-medium uppercase tracking-wide">Photos</div>
                 </div>
                 <div className="w-px h-8 bg-border" />
                 <div className="text-center" data-testid="stat-project-tasks">
-                  <div className="text-lg font-bold">{projectTasks.length}</div>
-                  <div className="text-[11px] text-muted-foreground font-medium uppercase tracking-wide">Tasks</div>
+                  <div className="text-base sm:text-lg font-bold">{projectTasks.length}</div>
+                  <div className="text-[10px] sm:text-[11px] text-muted-foreground font-medium uppercase tracking-wide">Tasks</div>
                 </div>
                 <div className="w-px h-8 bg-border" />
                 <div className="text-center" data-testid="stat-project-checklists">
-                  <div className="text-lg font-bold text-[#267D32]">{checklistProgress}%</div>
-                  <div className="text-[11px] text-muted-foreground font-medium uppercase tracking-wide">Complete</div>
+                  <div className="text-base sm:text-lg font-bold text-[#267D32]">{checklistProgress}%</div>
+                  <div className="text-[10px] sm:text-[11px] text-muted-foreground font-medium uppercase tracking-wide">Done</div>
                 </div>
                 {projectUsers.length > 0 && (
                   <>
@@ -854,7 +858,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                 </div>
               )}
 
-              <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-3 overflow-hidden">
                 <div className="flex flex-wrap items-center gap-2">
                   <Button variant="outline" size="sm" data-testid="button-filter-start-date">
                     Start Date
@@ -862,10 +866,10 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                   <Button variant="outline" size="sm" data-testid="button-filter-end-date">
                     End Date
                   </Button>
-                  <Button variant="outline" size="sm" data-testid="button-filter-users">
+                  <Button variant="outline" size="sm" className="hidden sm:inline-flex" data-testid="button-filter-users">
                     Users
                   </Button>
-                  <Button variant="outline" size="sm" data-testid="button-filter-groups">
+                  <Button variant="outline" size="sm" className="hidden sm:inline-flex" data-testid="button-filter-groups">
                     Groups
                   </Button>
                 </div>
@@ -906,6 +910,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                         setCompareMode(true);
                         setComparePhotos([null, null]);
                       }}
+                      className="hidden sm:inline-flex"
                       data-testid="button-enter-compare"
                     >
                       <SplitSquareHorizontal className="h-4 w-4 mr-2" />
@@ -927,7 +932,6 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                     type="file"
                     multiple
                     accept="image/*,video/*"
-                    capture="environment"
                     className="hidden"
                     onChange={(e) => {
                       handleFilesSelected(e.target.files);
@@ -935,13 +939,35 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                     }}
                     data-testid="input-file-upload"
                   />
+                  <input
+                    ref={cameraInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    className="hidden"
+                    onChange={(e) => {
+                      handleFilesSelected(e.target.files);
+                      e.target.value = "";
+                    }}
+                    data-testid="input-camera-capture"
+                  />
+                  {isMobile && (
+                    <Button
+                      variant="default"
+                      onClick={() => cameraInputRef.current?.click()}
+                      data-testid="button-take-photo"
+                    >
+                      <Camera className="h-4 w-4 mr-2" />
+                      Take Photo
+                    </Button>
+                  )}
                   <Button
                     variant="outline"
                     onClick={() => fileInputRef.current?.click()}
                     data-testid="button-add-photos"
                   >
                     <Plus className="h-4 w-4 mr-2" />
-                    Add Photos
+                    {isMobile ? "Gallery" : "Add Photos"}
                   </Button>
                   {stagedFiles.length > 0 && (
                     <Button
@@ -1058,7 +1084,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                                 <img
                                   src={item.url}
                                   alt={item.caption || item.originalName}
-                                  className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                                  className="w-full h-full object-cover md:transition-transform md:duration-300 md:group-hover:scale-105"
                                 />
                                 {selectionMode && (
                                   <div className="absolute top-2 left-2">

@@ -37,9 +37,9 @@ function AuthenticatedLayout() {
 
   return (
     <SidebarProvider style={style as React.CSSProperties}>
-      <div className="flex h-screen w-full">
+      <div className="flex h-screen w-full overflow-x-hidden">
         <AppSidebar />
-        <div className="flex flex-col flex-1 min-w-0">
+        <div className="flex flex-col flex-1 min-w-0 overflow-x-hidden">
           <div className="md:hidden flex items-center gap-2 px-3 py-2 border-b bg-background">
             <SidebarTrigger data-testid="button-mobile-menu" />
             <span className="text-sm font-medium text-foreground">Field View</span>

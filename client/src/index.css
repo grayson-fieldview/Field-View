@@ -8,6 +8,12 @@
   z-index: 10000 !important;
 }
 
+@media (max-width: 767px) {
+  .group[data-testid^="card-media-"] {
+    touch-action: manipulation;
+  }
+}
+
 /* LIGHT MODE - Orange/Green/Charcoal (Procore-inspired) */
 :root {
   --button-outline: rgba(0,0,0, .10);

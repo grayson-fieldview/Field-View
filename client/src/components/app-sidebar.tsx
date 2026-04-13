@@ -8,6 +8,7 @@ import {
   SidebarMenuItem,
   SidebarHeader,
   SidebarFooter,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -45,6 +46,7 @@ const navItems = [
 export function AppSidebar() {
   const [location] = useLocation();
   const { user, logout } = useAuth();
+  const { isMobile, setOpenMobile } = useSidebar();
 
   const initials = user
     ? `${(user.firstName || "")[0] || ""}${(user.lastName || "")[0] || ""}`.toUpperCase() || "U"
@@ -81,7 +83,7 @@ export function AppSidebar() {
                       isActive={isActive}
                       data-testid={`nav-${item.title.toLowerCase()}`}
                     >
-                      <Link href={item.url}>
+                      <Link href={item.url} onClick={() => { if (isMobile) setOpenMobile(false); }}>
                         <item.icon className="h-4 w-4" />
                         <span>{item.title}</span>
                       </Link>

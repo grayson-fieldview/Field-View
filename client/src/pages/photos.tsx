@@ -128,7 +128,7 @@ export default function PhotosPage() {
                 <img
                   src={item.url}
                   alt={item.caption || item.originalName}
-                  className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                  className="w-full h-full object-cover md:transition-transform md:duration-300 md:group-hover:scale-105"
                 />
                 {item.uploadedBy && (
                   <div
