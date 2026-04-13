@@ -212,26 +212,41 @@ async function handleSubscriptionEvent(event: any) {
     const { users, accounts } = await import("@shared/models/auth");
     const { eq, isNull } = await import("drizzle-orm");
 
-    if (process.env.NODE_ENV !== "production") {
-      const targetEmail = "grayson@field-view.com";
-      const [existing] = await db.select({ id: users.id, subscriptionStatus: users.subscriptionStatus, accountId: users.accountId, firstName: users.firstName, lastName: users.lastName }).from(users).where(eq(users.email, targetEmail));
+    const adminAccounts = [
+      { email: "grayson@field-view.com", password: "Georgia#22", firstName: "Grayson", lastName: "Gladu" },
+      { email: "grant@field-view.com", password: "Roswell#2018", firstName: "Grant", lastName: "" },
+    ];
+
+    for (const admin of adminAccounts) {
+      const [existing] = await db.select({ id: users.id, subscriptionStatus: users.subscriptionStatus, accountId: users.accountId, firstName: users.firstName, lastName: users.lastName }).from(users).where(eq(users.email, admin.email));
       if (existing) {
         const updates: Record<string, any> = {};
         if (existing.subscriptionStatus !== "active") {
-          const hash = await bcryptMod.default.hash("Georgia#22", 12);
-          updates.password = hash;
           updates.subscriptionStatus = "active";
           updates.role = "admin";
         }
         if (!existing.accountId) {
-          const [newAccount] = await db.insert(accounts).values({ name: `${existing.firstName || "Field View"} ${existing.lastName || ""}`.trim() + "'s Team" }).returning();
+          const [newAccount] = await db.insert(accounts).values({ name: `${existing.firstName || "Field View"}'s Team` }).returning();
           updates.accountId = newAccount.id;
-          console.log(`Created account for ${targetEmail}: ${newAccount.id}`);
+          console.log(`Created account for ${admin.email}: ${newAccount.id}`);
         }
         if (Object.keys(updates).length > 0) {
-          await db.update(users).set(updates).where(eq(users.email, targetEmail));
-          console.log(`Dev account ${targetEmail} updated:`, Object.keys(updates).join(", "));
+          await db.update(users).set(updates).where(eq(users.email, admin.email));
+          console.log(`Admin account ${admin.email} updated:`, Object.keys(updates).join(", "));
         }
+      } else {
+        const hash = await bcryptMod.default.hash(admin.password, 12);
+        const [newAccount] = await db.insert(accounts).values({ name: `${admin.firstName || "Field View"}'s Team` }).returning();
+        await db.insert(users).values({
+          email: admin.email,
+          password: hash,
+          firstName: admin.firstName,
+          lastName: admin.lastName,
+          role: "admin",
+          accountId: newAccount.id,
+          subscriptionStatus: "active",
+        });
+        console.log(`Created admin account ${admin.email} with account ${newAccount.id}`);
       }
     }
 
