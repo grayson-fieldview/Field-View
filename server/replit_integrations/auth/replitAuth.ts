@@ -6,7 +6,7 @@ import connectPg from "connect-pg-simple";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { authStorage } from "./storage";
-import { db } from "../../db";
+import { db, pool } from "../../db";
 import { eq, and } from "drizzle-orm";
 import { passwordResetTokens, accounts, invitations } from "@shared/models/auth";
 
@@ -14,7 +14,7 @@ export function getSession() {
   const sessionTtlSeconds = 7 * 24 * 60 * 60;
   const pgStore = connectPg(session);
   const sessionStore = new pgStore({
-    conString: process.env.DATABASE_URL,
+    pool,
     createTableIfMissing: false,
     ttl: sessionTtlSeconds,
     tableName: "sessions",

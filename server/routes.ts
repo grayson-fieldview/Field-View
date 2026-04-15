@@ -1509,26 +1509,39 @@ export async function registerRoutes(
 
   app.get("/api/stripe/prices", isAuthenticated, async (_req, res) => {
     try {
-      const result = await db.execute(sql`
-        SELECT 
-          p.id as product_id,
-          p.name as product_name,
-          p.description,
-          p.metadata,
-          pr.id as price_id,
-          pr.unit_amount,
-          pr.currency,
-          pr.recurring->>'interval' as recurring_interval,
-          (pr.recurring->>'interval_count')::int as recurring_interval_count,
-          pr.active as price_active
-        FROM stripe.products p
-        JOIN stripe.prices pr ON pr.product = p.id
-        WHERE p.active = true AND pr.active = true
-        ORDER BY pr.unit_amount ASC
-      `);
-      res.json(result.rows || []);
-    } catch (error) {
-      console.error("Error fetching prices:", error);
+      const stripe = await getUncachableStripeClient();
+      const products = await stripe.products.list({ active: true, limit: 100 });
+      const prices = await stripe.prices.list({ active: true, limit: 100, expand: ["data.product"] });
+
+      const rows = prices.data
+        .filter((price) => {
+          const product = typeof price.product === "string"
+            ? products.data.find((p) => p.id === price.product)
+            : price.product;
+          return product && (product as any).active;
+        })
+        .map((price) => {
+          const product = typeof price.product === "string"
+            ? products.data.find((p) => p.id === price.product)
+            : price.product as any;
+          return {
+            product_id: product?.id || "",
+            product_name: product?.name || "",
+            description: product?.description || "",
+            metadata: product?.metadata || {},
+            price_id: price.id,
+            unit_amount: price.unit_amount,
+            currency: price.currency,
+            recurring_interval: price.recurring?.interval || null,
+            recurring_interval_count: price.recurring?.interval_count || null,
+            price_active: price.active,
+          };
+        })
+        .sort((a, b) => (a.unit_amount || 0) - (b.unit_amount || 0));
+
+      res.json(rows);
+    } catch (error: any) {
+      console.error("Error fetching prices:", error.message);
       res.status(500).json({ message: "Failed to fetch prices" });
     }
   });

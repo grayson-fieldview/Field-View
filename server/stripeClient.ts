@@ -80,7 +80,6 @@ export async function getStripeSync() {
       connectionString: process.env.DATABASE_URL!,
       max: 2,
     };
-
     if (process.env.DATABASE_URL?.includes("rds.amazonaws.com")) {
       poolConfig.ssl = { rejectUnauthorized: false };
     }
