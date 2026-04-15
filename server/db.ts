@@ -10,5 +10,13 @@ if (!process.env.DATABASE_URL) {
   );
 }
 
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const connectionConfig: pg.PoolConfig = {
+  connectionString: process.env.DATABASE_URL,
+};
+
+if (process.env.DATABASE_URL?.includes("rds.amazonaws.com")) {
+  connectionConfig.ssl = { rejectUnauthorized: false };
+}
+
+export const pool = new Pool(connectionConfig);
 export const db = drizzle(pool, { schema });
