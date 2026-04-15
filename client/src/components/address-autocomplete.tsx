@@ -135,28 +135,17 @@ export function AddressAutocomplete({
 
     setScriptLoading(true);
 
-    const existingScript = document.querySelector('script[src*="maps.googleapis.com"]');
-    if (existingScript) {
-      existingScript.addEventListener("load", () => {
+    (async () => {
+      try {
+        const { loadGoogleMaps } = await import("@/lib/google-maps");
+        await loadGoogleMaps(config.apiKey);
         setScriptLoaded(true);
         setScriptLoading(false);
-      });
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${config.apiKey}&libraries=places`;
-    script.async = true;
-    script.defer = true;
-    script.onload = () => {
-      setScriptLoaded(true);
-      setScriptLoading(false);
-    };
-    script.onerror = () => {
-      setScriptLoading(false);
-      setScriptError(true);
-    };
-    document.head.appendChild(script);
+      } catch {
+        setScriptLoading(false);
+        setScriptError(true);
+      }
+    })();
   }, [config?.apiKey, scriptLoaded, scriptLoading]);
 
   useEffect(() => {

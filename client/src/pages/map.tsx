@@ -1,12 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { MapPin, FolderKanban, Calendar } from "lucide-react";
+import { MapPin, Calendar } from "lucide-react";
 import { useLocation } from "wouter";
 import type { Project } from "@shared/schema";
-import L from "leaflet";
+import { loadGoogleMaps } from "@/lib/google-maps";
 
 const statusLabels: Record<string, string> = {
   active: "Active",
@@ -24,70 +24,115 @@ const statusColors: Record<string, string> = {
 
 export default function MapPage() {
   const mapRef = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<L.Map | null>(null);
+  const mapInstanceRef = useRef<google.maps.Map | null>(null);
+  const markersRef = useRef<google.maps.marker.AdvancedMarkerElement[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [mapReady, setMapReady] = useState(false);
   const [, navigate] = useLocation();
 
   const { data: projects, isLoading } = useQuery<Project[]>({
     queryKey: ["/api/projects"],
   });
 
+  const { data: mapsConfig } = useQuery<{ apiKey: string }>({
+    queryKey: ["/api/config/maps"],
+  });
+
   const projectsWithLocation = (projects || []).filter(
     (p) => p.latitude != null && p.longitude != null
   );
 
+  const initMap = useCallback(async () => {
+    if (!mapsConfig?.apiKey || !mapRef.current || mapInstanceRef.current) return;
+
+    try {
+      await loadGoogleMaps(mapsConfig.apiKey);
+
+      const map = new google.maps.Map(mapRef.current, {
+        center: { lat: 39.8283, lng: -98.5795 },
+        zoom: 4,
+        mapId: "fieldview-map",
+        disableDefaultUI: false,
+        zoomControl: true,
+        mapTypeControl: true,
+        streetViewControl: false,
+        fullscreenControl: true,
+      });
+
+      mapInstanceRef.current = map;
+      setMapReady(true);
+    } catch (err) {
+      console.error("Failed to initialize Google Maps:", err);
+    }
+  }, [mapsConfig?.apiKey]);
+
   useEffect(() => {
-    if (!mapRef.current || mapInstanceRef.current) return;
-
-    const map = L.map(mapRef.current, {
-      center: [39.8283, -98.5795],
-      zoom: 4,
-      zoomControl: true,
-    });
-
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-      maxZoom: 19,
-    }).addTo(map);
-
-    mapInstanceRef.current = map;
-
+    initMap();
     return () => {
-      map.remove();
+      markersRef.current.forEach((m) => (m.map = null));
+      markersRef.current = [];
       mapInstanceRef.current = null;
+      setMapReady(false);
     };
-  }, []);
+  }, [initMap]);
 
   useEffect(() => {
     const map = mapInstanceRef.current;
-    if (!map || !projectsWithLocation.length) return;
+    if (!map || !mapReady) return;
 
-    map.eachLayer((layer) => {
-      if (layer instanceof L.Marker) map.removeLayer(layer);
-    });
+    markersRef.current.forEach((m) => (m.map = null));
+    markersRef.current = [];
 
-    const bounds: L.LatLngBoundsExpression = [];
+    if (!projectsWithLocation.length) return;
+
+    const bounds = new google.maps.LatLngBounds();
+
     projectsWithLocation.forEach((project) => {
       const lat = project.latitude!;
       const lng = project.longitude!;
-      bounds.push([lat, lng]);
+      const position = { lat, lng };
+      bounds.extend(position);
 
       const color = project.color || "#F09000";
-      const icon = L.divIcon({
-        className: "custom-marker",
-        html: `<div style="background-color: ${color}; width: 32px; height: 32px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); border: 3px solid white; box-shadow: 0 2px 8px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center;"><div style="transform: rotate(45deg); color: white; font-size: 14px; font-weight: bold;">${project.name[0]}</div></div>`,
-        iconSize: [32, 32],
-        iconAnchor: [16, 32],
+
+      const pinEl = document.createElement("div");
+      pinEl.style.cssText = `
+        width: 36px; height: 36px; border-radius: 50% 50% 50% 0;
+        transform: rotate(-45deg); background: ${color};
+        border: 3px solid white; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        display: flex; align-items: center; justify-content: center;
+        cursor: pointer; transition: transform 0.15s;
+      `;
+      const label = document.createElement("span");
+      label.style.cssText = `transform: rotate(45deg); color: white; font-size: 14px; font-weight: bold;`;
+      label.textContent = project.name[0];
+      pinEl.appendChild(label);
+
+      pinEl.addEventListener("mouseenter", () => {
+        pinEl.style.transform = "rotate(-45deg) scale(1.15)";
+      });
+      pinEl.addEventListener("mouseleave", () => {
+        pinEl.style.transform = "rotate(-45deg) scale(1)";
       });
 
-      const marker = L.marker([lat, lng], { icon }).addTo(map);
-      marker.on("click", () => setSelectedProject(project));
+      const marker = new google.maps.marker.AdvancedMarkerElement({
+        map,
+        position,
+        content: pinEl,
+        title: project.name,
+      });
+
+      marker.addListener("click", () => setSelectedProject(project));
+      markersRef.current.push(marker);
     });
 
-    if (bounds.length > 0) {
-      map.fitBounds(bounds as L.LatLngBoundsExpression, { padding: [50, 50], maxZoom: 12 });
+    if (projectsWithLocation.length === 1) {
+      map.setCenter(bounds.getCenter());
+      map.setZoom(12);
+    } else {
+      map.fitBounds(bounds, { top: 50, right: 50, bottom: 50, left: 50 });
     }
-  }, [projectsWithLocation]);
+  }, [projectsWithLocation, mapReady]);
 
   return (
     <div className="relative h-full flex flex-col">
@@ -99,21 +144,14 @@ export default function MapPage() {
       </div>
 
       <div className="flex-1 p-4 sm:p-6 pt-4 relative">
-        {isLoading ? (
+        {isLoading || !mapsConfig ? (
           <Skeleton className="w-full h-full rounded-md" />
         ) : (
-          <>
-            <link
-              rel="stylesheet"
-              href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-              crossOrigin=""
-            />
-            <div
-              ref={mapRef}
-              className="w-full h-full rounded-md border overflow-hidden min-h-[400px]"
-              data-testid="map-container"
-            />
-          </>
+          <div
+            ref={mapRef}
+            className="w-full h-full rounded-md border overflow-hidden min-h-[400px]"
+            data-testid="map-container"
+          />
         )}
 
         {selectedProject && (
@@ -164,7 +202,7 @@ export default function MapPage() {
                 </div>
                 <h3 className="text-lg font-semibold">No locations to display</h3>
                 <p className="text-sm text-muted-foreground max-w-sm">
-                  Add latitude and longitude to your projects to see them on the map.
+                  Add an address when creating projects to see them on the map.
                 </p>
               </div>
             </Card>

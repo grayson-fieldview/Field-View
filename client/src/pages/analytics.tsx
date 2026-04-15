@@ -1,5 +1,6 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { loadGoogleMaps } from "@/lib/google-maps";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -37,8 +38,6 @@ import {
   Pie,
   Cell,
 } from "recharts";
-import { MapContainer, TileLayer, CircleMarker, Popup } from "react-leaflet";
-import "leaflet/dist/leaflet.css";
 
 type PeriodPreset = "7d" | "30d" | "90d" | "365d" | "all" | "custom";
 
@@ -123,6 +122,70 @@ function StatCard({
       </div>
     </Card>
   );
+}
+
+function AnalyticsMap({ photoLocations, center }: { photoLocations: { id: number; latitude: number; longitude: number }[]; center: [number, number] }) {
+  const mapRef = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<google.maps.Map | null>(null);
+  const markersRef = useRef<google.maps.marker.AdvancedMarkerElement[]>([]);
+
+  const { data: mapsConfig } = useQuery<{ apiKey: string }>({
+    queryKey: ["/api/config/maps"],
+  });
+
+  const locKey = JSON.stringify(photoLocations.map(l => l.id));
+
+  useEffect(() => {
+    if (!mapRef.current || !mapsConfig?.apiKey) return;
+
+    const init = async () => {
+      await loadGoogleMaps(mapsConfig.apiKey);
+
+      markersRef.current.forEach(m => (m.map = null));
+      markersRef.current = [];
+
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current = null;
+        mapRef.current!.innerHTML = "";
+      }
+
+      const map = new google.maps.Map(mapRef.current!, {
+        center: { lat: center[0], lng: center[1] },
+        zoom: photoLocations.length > 0 ? 10 : 4,
+        mapId: "fieldview-analytics-map",
+        disableDefaultUI: false,
+        zoomControl: true,
+        mapTypeControl: false,
+        streetViewControl: false,
+        fullscreenControl: false,
+      });
+
+      photoLocations.forEach(loc => {
+        const dot = document.createElement("div");
+        dot.style.cssText = "width:12px;height:12px;background:#F09000;border:2px solid #c67200;border-radius:50%;opacity:0.85;";
+        dot.title = `Photo #${loc.id}`;
+
+        const marker = new google.maps.marker.AdvancedMarkerElement({
+          map,
+          position: { lat: loc.latitude, lng: loc.longitude },
+          content: dot,
+        });
+        markersRef.current.push(marker);
+      });
+
+      mapInstanceRef.current = map;
+    };
+
+    init().catch(console.error);
+
+    return () => {
+      markersRef.current.forEach(m => (m.map = null));
+      markersRef.current = [];
+      mapInstanceRef.current = null;
+    };
+  }, [locKey, mapsConfig?.apiKey, center]);
+
+  return <div ref={mapRef} className="h-[300px] rounded-md overflow-hidden" />;
 }
 
 export default function AnalyticsPage() {
@@ -337,36 +400,7 @@ export default function AnalyticsPage() {
                   {data.photoLocations.length} geotagged
                 </span>
               </div>
-              <div className="h-[300px] rounded-md overflow-hidden">
-                <MapContainer
-                  center={mapCenter}
-                  zoom={data.photoLocations.length > 0 ? 10 : 4}
-                  className="h-full w-full"
-                  scrollWheelZoom={true}
-                >
-                  <TileLayer
-                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                  />
-                  {data.photoLocations.map((loc) => (
-                    <CircleMarker
-                      key={loc.id}
-                      center={[loc.latitude, loc.longitude]}
-                      radius={6}
-                      pathOptions={{
-                        fillColor: "hsl(36, 100%, 47%)",
-                        color: "hsl(36, 100%, 35%)",
-                        weight: 1,
-                        fillOpacity: 0.8,
-                      }}
-                    >
-                      <Popup>
-                        <span className="text-xs">Photo #{loc.id}</span>
-                      </Popup>
-                    </CircleMarker>
-                  ))}
-                </MapContainer>
-              </div>
+              <AnalyticsMap photoLocations={data.photoLocations} center={mapCenter} />
             </Card>
 
             <div className="space-y-6">

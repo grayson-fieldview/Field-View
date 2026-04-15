@@ -46,8 +46,7 @@ import type { Project } from "@shared/schema";
 import { insertProjectSchema } from "@shared/schema";
 import { z } from "zod";
 import { AddressAutocomplete } from "@/components/address-autocomplete";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
+import { loadGoogleMaps } from "@/lib/google-maps";
 
 interface ActivityItem {
   type: "photo" | "task" | "comment";
@@ -133,56 +132,69 @@ const priorityBadge: Record<string, { label: string; variant: "default" | "secon
 
 function MiniMap({ projects }: { projects: ProjectWithDetails[] }) {
   const mapRef = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<L.Map | null>(null);
+  const mapInstanceRef = useRef<google.maps.Map | null>(null);
 
   const geoProjects = projects.filter(p => p.latitude && p.longitude && p.status === "active");
   const mapKey = JSON.stringify(geoProjects.map(p => ({ id: p.id, lat: p.latitude, lng: p.longitude })));
 
+  const { data: mapsConfig } = useQuery<{ apiKey: string }>({
+    queryKey: ["/api/config/maps"],
+  });
+
+  const markersRef = useRef<google.maps.marker.AdvancedMarkerElement[]>([]);
+
   useEffect(() => {
-    if (!mapRef.current || geoProjects.length === 0) return;
+    if (!mapRef.current || geoProjects.length === 0 || !mapsConfig?.apiKey) return;
 
-    if (mapInstanceRef.current) {
-      mapInstanceRef.current.remove();
-      mapInstanceRef.current = null;
-    }
+    const init = async () => {
+      await loadGoogleMaps(mapsConfig.apiKey);
 
-    const map = L.map(mapRef.current, {
-      zoomControl: false,
-      attributionControl: false,
-      dragging: false,
-      scrollWheelZoom: false,
-      doubleClickZoom: false,
-      touchZoom: false,
-    });
+      markersRef.current.forEach(m => (m.map = null));
+      markersRef.current = [];
 
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current = null;
+        mapRef.current!.innerHTML = "";
+      }
 
-    const orangeIcon = L.divIcon({
-      className: "",
-      html: `<div style="width:14px;height:14px;background:#F09000;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,0.3);"></div>`,
-      iconSize: [14, 14],
-      iconAnchor: [7, 7],
-    });
+      const map = new google.maps.Map(mapRef.current!, {
+        center: { lat: 39.8283, lng: -98.5795 },
+        zoom: 4,
+        mapId: "fieldview-mini-map",
+        disableDefaultUI: true,
+        gestureHandling: "none",
+      });
 
-    const bounds = L.latLngBounds([]);
-    geoProjects.forEach(p => {
-      const latLng = L.latLng(p.latitude!, p.longitude!);
-      bounds.extend(latLng);
-      L.marker(latLng, { icon: orangeIcon })
-        .bindTooltip(p.name, { direction: "top", offset: [0, -8] })
-        .addTo(map);
-    });
+      const bounds = new google.maps.LatLngBounds();
+      geoProjects.forEach(p => {
+        const position = { lat: p.latitude!, lng: p.longitude! };
+        bounds.extend(position);
 
-    map.fitBounds(bounds, { padding: [20, 20], maxZoom: 12 });
-    mapInstanceRef.current = map;
+        const dot = document.createElement("div");
+        dot.style.cssText = "width:14px;height:14px;background:#F09000;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,0.3);";
+        dot.title = p.name;
+
+        const marker = new google.maps.marker.AdvancedMarkerElement({ map, position, content: dot });
+        markersRef.current.push(marker);
+      });
+
+      if (geoProjects.length === 1) {
+        map.setCenter(bounds.getCenter());
+        map.setZoom(10);
+      } else {
+        map.fitBounds(bounds, 20);
+      }
+      mapInstanceRef.current = map;
+    };
+
+    init().catch(console.error);
 
     return () => {
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove();
-        mapInstanceRef.current = null;
-      }
+      markersRef.current.forEach(m => (m.map = null));
+      markersRef.current = [];
+      mapInstanceRef.current = null;
     };
-  }, [mapKey]);
+  }, [mapKey, mapsConfig?.apiKey]);
 
   if (geoProjects.length === 0) {
     return (
