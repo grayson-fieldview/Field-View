@@ -77,6 +77,7 @@ import {
   Square,
   Calendar,
   Camera,
+  Pencil,
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { LayoutTemplate } from "lucide-react";
@@ -223,6 +224,9 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const { toast } = useToast();
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<DetailTab>("photos");
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const renameInputRef = useRef<HTMLInputElement>(null);
   const [selectedMedia, setSelectedMedia] = useState<(Media & { uploadedBy?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } }) | null>(null);
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [newTaskPriority, setNewTaskPriority] = useState<string>("medium");
@@ -465,6 +469,35 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     },
   });
 
+  const renameProject = useMutation({
+    mutationFn: async (newName: string) => {
+      const res = await apiRequest("PATCH", `/api/projects/${id}`, { name: newName });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects"], exact: true });
+      setIsRenaming(false);
+      toast({ title: "Project renamed" });
+    },
+    onError: (error: Error) => {
+      if (isUnauthorizedError(error)) {
+        toast({ title: "Unauthorized", variant: "destructive" });
+        return;
+      }
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const handleRenameSubmit = () => {
+    const trimmed = renameValue.trim();
+    if (!trimmed || trimmed === project?.name) {
+      setIsRenaming(false);
+      return;
+    }
+    renameProject.mutate(trimmed);
+  };
+
   const createGallery = useMutation({
     mutationFn: async (params: { mediaIds: number[]; includeMetadata: boolean; includeDescriptions: boolean }) => {
       const res = await apiRequest("POST", "/api/galleries", {
@@ -696,9 +729,38 @@ export default function ProjectDetailPage({ id }: { id: string }) {
             <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2.5 mb-1.5">
-                  <h1 className="text-xl sm:text-2xl font-bold tracking-tight truncate" data-testid="text-project-name">
-                    {project.name}
-                  </h1>
+                  {isRenaming ? (
+                    <form
+                      className="flex items-center gap-2"
+                      onSubmit={(e) => { e.preventDefault(); handleRenameSubmit(); }}
+                    >
+                      <Input
+                        ref={renameInputRef}
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onBlur={handleRenameSubmit}
+                        onKeyDown={(e) => { if (e.key === "Escape") { setIsRenaming(false); } }}
+                        className="text-xl sm:text-2xl font-bold h-9 w-64 sm:w-80"
+                        autoFocus
+                        data-testid="input-rename-project"
+                      />
+                    </form>
+                  ) : (
+                    <button
+                      className="group flex items-center gap-1.5 text-left"
+                      onClick={() => {
+                        setRenameValue(project.name);
+                        setIsRenaming(true);
+                        setTimeout(() => renameInputRef.current?.select(), 0);
+                      }}
+                      data-testid="button-rename-project"
+                    >
+                      <h1 className="text-xl sm:text-2xl font-bold tracking-tight truncate" data-testid="text-project-name">
+                        {project.name}
+                      </h1>
+                      <Pencil className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                    </button>
+                  )}
                   <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border shrink-0 ${currentStatus.className}`} data-testid="badge-project-status">
                     {currentStatus.label}
                   </span>
