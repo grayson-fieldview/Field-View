@@ -49,47 +49,54 @@ export function AddressAutocomplete({
     const repositionPac = () => {
       const input = inputRef.current;
       if (!input) return;
+      const rect = input.getBoundingClientRect();
       const pacContainers = document.querySelectorAll(".pac-container");
       pacContainers.forEach((pac) => {
         const el = pac as HTMLElement;
-        const rect = input.getBoundingClientRect();
-        el.style.top = `${rect.bottom}px`;
+        el.style.position = "fixed";
+        el.style.top = `${rect.bottom + 2}px`;
         el.style.left = `${rect.left}px`;
         el.style.width = `${rect.width}px`;
+        el.style.zIndex = "10000";
       });
     };
 
-    const observer = new MutationObserver(() => {
-      const pacContainers = document.querySelectorAll(".pac-container");
-      const dialogContent = containerRef.current?.closest("[role='dialog']");
-      if (!dialogContent) return;
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of Array.from(mutation.addedNodes)) {
+          if (node instanceof HTMLElement && node.classList.contains("pac-container")) {
+            node.style.position = "fixed";
+            node.style.zIndex = "10000";
+            repositionPac();
 
-      pacContainers.forEach((pac) => {
-        if (!dialogContent.contains(pac)) {
-          dialogContent.appendChild(pac);
-          (pac as HTMLElement).style.position = "fixed";
-          (pac as HTMLElement).style.zIndex = "10000";
+            const styleObs = new MutationObserver(() => {
+              repositionPac();
+            });
+            styleObs.observe(node, { attributes: true, attributeFilter: ["style"] });
+          }
         }
-      });
-
-      repositionPac();
+      }
     });
 
-    observer.observe(document.body, { childList: true, subtree: false });
+    observer.observe(document.body, { childList: true, subtree: true });
 
-    const styleObserver = new MutationObserver(repositionPac);
-    const pacCheck = setInterval(() => {
-      const pac = document.querySelector(".pac-container");
-      if (pac) {
-        styleObserver.observe(pac, { attributes: true, attributeFilter: ["style"] });
-        clearInterval(pacCheck);
-      }
-    }, 200);
+    const inputEl = inputRef.current;
+    if (inputEl) {
+      inputEl.addEventListener("focus", repositionPac);
+      inputEl.addEventListener("input", repositionPac);
+    }
+
+    window.addEventListener("scroll", repositionPac, true);
+    window.addEventListener("resize", repositionPac);
 
     return () => {
       observer.disconnect();
-      styleObserver.disconnect();
-      clearInterval(pacCheck);
+      if (inputEl) {
+        inputEl.removeEventListener("focus", repositionPac);
+        inputEl.removeEventListener("input", repositionPac);
+      }
+      window.removeEventListener("scroll", repositionPac, true);
+      window.removeEventListener("resize", repositionPac);
     };
   }, []);
 

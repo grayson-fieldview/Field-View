@@ -26,7 +26,9 @@ export default function MapPage() {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<google.maps.Map | null>(null);
   const markersRef = useRef<google.maps.marker.AdvancedMarkerElement[]>([]);
+  const overlayRef = useRef<google.maps.OverlayView | null>(null);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [cardPosition, setCardPosition] = useState<{ x: number; y: number } | null>(null);
   const [mapReady, setMapReady] = useState(false);
   const [, navigate] = useLocation();
 
@@ -59,6 +61,16 @@ export default function MapPage() {
         fullscreenControl: true,
       });
 
+      map.addListener("click", () => {
+        setSelectedProject(null);
+        setCardPosition(null);
+      });
+
+      const overlay = new google.maps.OverlayView();
+      overlay.draw = function () {};
+      overlay.setMap(map);
+      overlayRef.current = overlay;
+
       mapInstanceRef.current = map;
       setMapReady(true);
     } catch (err) {
@@ -71,6 +83,10 @@ export default function MapPage() {
     return () => {
       markersRef.current.forEach((m) => (m.map = null));
       markersRef.current = [];
+      if (overlayRef.current) {
+        overlayRef.current.setMap(null);
+        overlayRef.current = null;
+      }
       mapInstanceRef.current = null;
       setMapReady(false);
     };
@@ -122,7 +138,18 @@ export default function MapPage() {
         title: project.name,
       });
 
-      marker.addListener("click", () => setSelectedProject(project));
+      marker.addListener("click", () => {
+        const overlay = overlayRef.current;
+        if (!overlay) return;
+        const projection = overlay.getProjection();
+        if (projection) {
+          const point = projection.fromLatLngToContainerPixel(new google.maps.LatLng(lat, lng));
+          if (point) {
+            setCardPosition({ x: point.x, y: point.y });
+          }
+        }
+        setSelectedProject(project);
+      });
       markersRef.current.push(marker);
     });
 
@@ -154,9 +181,14 @@ export default function MapPage() {
           />
         )}
 
-        {selectedProject && (
+        {selectedProject && cardPosition && (
           <Card
-            className="absolute bottom-8 left-8 right-8 sm:left-auto sm:right-8 sm:w-80 p-4 z-[1000] cursor-pointer hover-elevate"
+            className="absolute sm:w-80 w-72 p-4 z-[1000] cursor-pointer hover-elevate shadow-lg"
+            style={{
+              left: `${cardPosition.x}px`,
+              top: `${cardPosition.y - 16}px`,
+              transform: "translate(-50%, -100%)",
+            }}
             onClick={() => navigate(`/projects/${selectedProject.id}`)}
             data-testid="card-map-preview"
           >
