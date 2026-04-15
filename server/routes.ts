@@ -1403,9 +1403,19 @@ export async function registerRoutes(
 
   app.post("/api/create-checkout-session", isAuthenticated, async (req: any, res) => {
     try {
-      const { priceId } = req.body;
-      if (!priceId) {
-        return res.status(400).json({ message: "Price ID is required" });
+      const { lineItems, priceId } = req.body;
+
+      let stripeLineItems: { price: string; quantity: number }[];
+
+      if (lineItems && Array.isArray(lineItems) && lineItems.length > 0) {
+        stripeLineItems = lineItems.map((item: any) => ({
+          price: item.priceId,
+          quantity: item.quantity || 1,
+        }));
+      } else if (priceId) {
+        stripeLineItems = [{ price: priceId, quantity: 1 }];
+      } else {
+        return res.status(400).json({ message: "Price ID or line items required" });
       }
 
       const stripe = await getUncachableStripeClient();
@@ -1428,7 +1438,7 @@ export async function registerRoutes(
       const sessionConfig: any = {
         customer: customerId,
         mode: "subscription",
-        line_items: [{ price: priceId, quantity: 1 }],
+        line_items: stripeLineItems,
         success_url: `${baseUrl}/?checkout=success`,
         cancel_url: `${baseUrl}/?checkout=canceled`,
         payment_method_collection: "always",

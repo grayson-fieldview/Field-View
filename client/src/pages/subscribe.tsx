@@ -44,12 +44,12 @@ export default function SubscribePage() {
   });
 
   const checkoutMutation = useMutation({
-    mutationFn: async (priceId: string) => {
+    mutationFn: async (lineItems: { priceId: string; quantity: number }[]) => {
       const res = await fetch("/api/create-checkout-session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ priceId }),
+        body: JSON.stringify({ lineItems }),
       });
       if (!res.ok) {
         const data = await res.json();
@@ -108,24 +108,33 @@ export default function SubscribePage() {
     }
 
     const interval = billingCycle === "annual" ? "year" : "month";
-    const matchingPrice = priceList.find(
+    const basePlan = priceList.find(
       (p: any) => p.recurring_interval === interval && p.product_name?.toLowerCase().includes("field view")
-    );
+    ) || priceList.find((p: any) => p.recurring_interval === interval && !p.product_name?.toLowerCase().includes("additional") && !p.product_name?.toLowerCase().includes("seat"));
 
-    if (matchingPrice) {
-      checkoutMutation.mutate(matchingPrice.price_id);
-    } else {
-      const fallback = priceList.find((p: any) => p.recurring_interval === interval);
-      if (fallback) {
-        checkoutMutation.mutate(fallback.price_id);
-      } else {
-        toast({
-          title: "Plan not found",
-          description: "Please try again in a moment.",
-          variant: "destructive",
-        });
+    if (!basePlan) {
+      toast({
+        title: "Plan not found",
+        description: "Please try again in a moment.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const items: { priceId: string; quantity: number }[] = [
+      { priceId: basePlan.price_id, quantity: 1 },
+    ];
+
+    if (extraUsers > 0) {
+      const seatPrice = priceList.find(
+        (p: any) => p.product_name?.toLowerCase().includes("additional") || p.product_name?.toLowerCase().includes("seat")
+      );
+      if (seatPrice) {
+        items.push({ priceId: seatPrice.price_id, quantity: extraUsers });
       }
     }
+
+    checkoutMutation.mutate(items);
   };
 
   const status = user?.subscriptionStatus;
