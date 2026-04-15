@@ -109,13 +109,22 @@ export default function SubscribePage() {
 
     const interval = billingCycle === "annual" ? "year" : "month";
     const matchingPrice = priceList.find(
-      (p: any) => p.recurring_interval === interval
+      (p: any) => p.recurring_interval === interval && p.product_name?.toLowerCase().includes("field view")
     );
 
     if (matchingPrice) {
       checkoutMutation.mutate(matchingPrice.price_id);
-    } else if (priceList.length > 0) {
-      checkoutMutation.mutate(priceList[0].price_id);
+    } else {
+      const fallback = priceList.find((p: any) => p.recurring_interval === interval);
+      if (fallback) {
+        checkoutMutation.mutate(fallback.price_id);
+      } else {
+        toast({
+          title: "Plan not found",
+          description: "Please try again in a moment.",
+          variant: "destructive",
+        });
+      }
     }
   };
 
