@@ -29,9 +29,13 @@ export function log(message: string, source = "express") {
 }
 
 async function initStripe() {
-  const databaseUrl = process.env.DATABASE_URL;
+  let databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
     throw new Error('DATABASE_URL environment variable is required for Stripe integration.');
+  }
+
+  if (databaseUrl.includes("rds.amazonaws.com") && !databaseUrl.includes("sslmode=")) {
+    databaseUrl += (databaseUrl.includes("?") ? "&" : "?") + "sslmode=no-verify";
   }
 
   try {
