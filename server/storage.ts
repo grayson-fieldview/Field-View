@@ -10,6 +10,7 @@ import {
   checklistTemplates,
   checklistTemplateItems,
   reportTemplates,
+  accountTags,
   type Project,
   type InsertProject,
   type Media,
@@ -32,6 +33,8 @@ import {
   type InsertChecklistTemplateItem,
   type ReportTemplate,
   type InsertReportTemplate,
+  type AccountTag,
+  type InsertAccountTag,
 } from "@shared/schema";
 import { users, type User } from "@shared/models/auth";
 import { db } from "./db";
@@ -55,7 +58,12 @@ export interface IStorage {
   getAllMedia(accountId: string): Promise<(Media & { project?: { name: string; color: string | null }; uploadedBy?: { firstName: string | null; lastName: string | null } })[]>;
   getMedia(id: number): Promise<Media | undefined>;
   createMedia(item: InsertMedia): Promise<Media>;
+  updateMedia(id: number, data: { caption?: string; tags?: string[] }): Promise<Media | undefined>;
   deleteMedia(id: number): Promise<void>;
+
+  getAccountTags(accountId: string, type?: string): Promise<AccountTag[]>;
+  createAccountTag(tag: InsertAccountTag): Promise<AccountTag>;
+  deleteAccountTag(id: number): Promise<void>;
 
   getCommentsByMedia(mediaId: number): Promise<(Comment & { user?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } })[]>;
   createComment(comment: InsertComment): Promise<Comment>;
@@ -227,8 +235,32 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
+  async updateMedia(id: number, data: { caption?: string; tags?: string[] }): Promise<Media | undefined> {
+    const updateData: any = {};
+    if (data.caption !== undefined) updateData.caption = data.caption;
+    if (data.tags !== undefined) updateData.tags = data.tags;
+    const [updated] = await db.update(media).set(updateData).where(eq(media.id, id)).returning();
+    return updated;
+  }
+
   async deleteMedia(id: number): Promise<void> {
     await db.delete(media).where(eq(media.id, id));
+  }
+
+  async getAccountTags(accountId: string, type?: string): Promise<AccountTag[]> {
+    if (type) {
+      return db.select().from(accountTags).where(and(eq(accountTags.accountId, accountId), eq(accountTags.type, type as any))).orderBy(asc(accountTags.name));
+    }
+    return db.select().from(accountTags).where(eq(accountTags.accountId, accountId)).orderBy(asc(accountTags.name));
+  }
+
+  async createAccountTag(tag: InsertAccountTag): Promise<AccountTag> {
+    const [created] = await db.insert(accountTags).values(tag).returning();
+    return created;
+  }
+
+  async deleteAccountTag(id: number): Promise<void> {
+    await db.delete(accountTags).where(eq(accountTags.id, id));
   }
 
   async getCommentsByMedia(mediaId: number) {

@@ -7,6 +7,14 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/auth-utils";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   X,
   ChevronLeft,
@@ -25,6 +33,8 @@ import {
   Circle as CircleIcon,
   Square,
   Minus,
+  Check,
+  Plus,
 } from "lucide-react";
 import type { Media, Comment, Task, Project } from "@shared/schema";
 
@@ -128,6 +138,62 @@ export default function PhotoViewer({
       toast({ title: "Error", description: error.message, variant: "destructive" });
     },
   });
+
+  const [editingDescription, setEditingDescription] = useState(false);
+  const [descriptionText, setDescriptionText] = useState(media.caption || "");
+  const [editingTags, setEditingTags] = useState(false);
+  const [selectedTags, setSelectedTags] = useState<string[]>(media.tags || []);
+
+  const { data: accountPhotoTags } = useQuery<{ id: number; name: string; type: string }[]>({
+    queryKey: ["/api/tags", { type: "photo" }],
+    queryFn: async () => {
+      const res = await fetch("/api/tags?type=photo", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
+  useEffect(() => {
+    setDescriptionText(media.caption || "");
+    setSelectedTags(media.tags || []);
+    setEditingDescription(false);
+    setEditingTags(false);
+  }, [media.id, media.caption, media.tags]);
+
+  const updateMedia = useMutation({
+    mutationFn: async (data: { caption?: string; tags?: string[] }) => {
+      const res = await apiRequest("PATCH", `/api/media/${media.id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", project.id.toString(), "media"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", project.id.toString()] });
+      queryClient.invalidateQueries({ queryKey: ["/api/media"] });
+      toast({ title: "Updated" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const saveDescription = () => {
+    updateMedia.mutate({ caption: descriptionText });
+    setEditingDescription(false);
+  };
+
+  const toggleTag = (tagName: string) => {
+    const newTags = selectedTags.includes(tagName)
+      ? selectedTags.filter(t => t !== tagName)
+      : [...selectedTags, tagName];
+    setSelectedTags(newTags);
+    updateMedia.mutate({ tags: newTags });
+  };
+
+  const removeTag = (tagName: string) => {
+    const newTags = selectedTags.filter(t => t !== tagName);
+    setSelectedTags(newTags);
+    updateMedia.mutate({ tags: newTags });
+  };
 
   const getInitials = (firstName: string | null, lastName: string | null) => {
     return `${(firstName || "")[0] || ""}${(lastName || "")[0] || ""}`.toUpperCase() || "U";
@@ -632,21 +698,59 @@ export default function PhotoViewer({
             </div>
           )}
 
-          {media.tags && media.tags.length > 0 ? (
-            <div className="flex flex-wrap items-center gap-1.5">
-              <Tag className="h-3.5 w-3.5 text-muted-foreground" />
-              {media.tags.map((tag) => (
-                <Badge key={tag} variant="secondary" className="text-xs">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold flex items-center gap-1.5">
+                <Tag className="h-3.5 w-3.5" />
+                Tags
+              </h3>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-primary h-7 text-xs"
+                onClick={() => setEditingTags(!editingTags)}
+                data-testid="button-edit-tags"
+              >
+                {editingTags ? "Done" : "Edit"}
+              </Button>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {selectedTags.map((tag) => (
+                <Badge key={tag} variant="secondary" className="text-xs gap-1" data-testid={`badge-tag-${tag}`}>
                   {tag}
+                  {editingTags && (
+                    <X className="h-3 w-3 cursor-pointer hover:text-destructive" onClick={() => removeTag(tag)} />
+                  )}
                 </Badge>
               ))}
+              {selectedTags.length === 0 && !editingTags && (
+                <span className="text-xs text-muted-foreground">No tags</span>
+              )}
             </div>
-          ) : (
-            <Button variant="ghost" size="sm" className="text-primary" data-testid="button-add-tags">
-              <Tag className="h-3.5 w-3.5 mr-1" />
-              Add Tags
-            </Button>
-          )}
+            {editingTags && (
+              <div className="space-y-1.5">
+                {(accountPhotoTags || []).filter(t => !selectedTags.includes(t.name)).length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {(accountPhotoTags || []).filter(t => !selectedTags.includes(t.name)).map(t => (
+                      <Badge
+                        key={t.id}
+                        variant="outline"
+                        className="text-xs cursor-pointer hover:bg-primary/10"
+                        onClick={() => toggleTag(t.name)}
+                        data-testid={`badge-add-tag-${t.name}`}
+                      >
+                        <Plus className="h-2.5 w-2.5 mr-0.5" />
+                        {t.name}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+                {(accountPhotoTags || []).length === 0 && (
+                  <p className="text-[10px] text-muted-foreground">No photo tags defined. Add them in Settings.</p>
+                )}
+              </div>
+            )}
+          </div>
 
           <div className="border-t pt-4 space-y-2">
             <h3 className="text-sm font-semibold flex items-center gap-1.5">
@@ -675,13 +779,34 @@ export default function PhotoViewer({
           <div className="border-t pt-4 space-y-2">
             <div className="flex items-center justify-between gap-2">
               <h3 className="text-sm font-semibold">Description</h3>
-              <Button variant="ghost" size="sm" className="text-primary" data-testid="button-edit-description">
-                Edit
-              </Button>
+              {editingDescription ? (
+                <div className="flex items-center gap-1">
+                  <Button variant="ghost" size="sm" className="text-primary h-7 text-xs" onClick={saveDescription} data-testid="button-save-description">
+                    <Check className="h-3 w-3 mr-0.5" /> Save
+                  </Button>
+                  <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => { setEditingDescription(false); setDescriptionText(media.caption || ""); }} data-testid="button-cancel-description">
+                    Cancel
+                  </Button>
+                </div>
+              ) : (
+                <Button variant="ghost" size="sm" className="text-primary h-7 text-xs" onClick={() => setEditingDescription(true)} data-testid="button-edit-description">
+                  Edit
+                </Button>
+              )}
             </div>
-            <p className="text-sm text-muted-foreground">
-              {media.caption || "Add a description..."}
-            </p>
+            {editingDescription ? (
+              <Textarea
+                value={descriptionText}
+                onChange={(e) => setDescriptionText(e.target.value)}
+                placeholder="Add a description..."
+                className="text-sm min-h-[60px] resize-none"
+                data-testid="input-photo-description"
+              />
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                {media.caption || "No description"}
+              </p>
+            )}
           </div>
 
           {(media.latitude || media.longitude) && (

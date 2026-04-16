@@ -1,7 +1,10 @@
+import { useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
-import { useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
@@ -21,6 +24,11 @@ import {
   Calendar,
   CreditCard,
   Loader2,
+  Tag,
+  Plus,
+  X,
+  Camera,
+  FolderKanban,
 } from "lucide-react";
 
 function BillingCard() {
@@ -106,6 +114,106 @@ function BillingCard() {
             </Button>
           )}
         </div>
+      </div>
+    </Card>
+  );
+}
+
+function TagManagerCard({ type, title, icon: Icon }: { type: "photo" | "project"; title: string; icon: any }) {
+  const { toast } = useToast();
+  const [newTagName, setNewTagName] = useState("");
+
+  const { data: tags, isLoading } = useQuery<{ id: number; name: string; type: string }[]>({
+    queryKey: ["/api/tags", { type }],
+    queryFn: async () => {
+      const res = await fetch(`/api/tags?type=${type}`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
+  const createTag = useMutation({
+    mutationFn: async (name: string) => {
+      const res = await apiRequest("POST", "/api/tags", { name, type });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/tags", { type }] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tags"] });
+      setNewTagName("");
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const deleteTag = useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("DELETE", `/api/tags/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/tags", { type }] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tags"] });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const handleAdd = () => {
+    const name = newTagName.trim();
+    if (!name) return;
+    if ((tags || []).some(t => t.name.toLowerCase() === name.toLowerCase())) {
+      toast({ title: "Tag already exists", variant: "destructive" });
+      return;
+    }
+    createTag.mutate(name);
+  };
+
+  return (
+    <Card className="p-6" data-testid={`card-${type}-tags`}>
+      <div className="flex items-center gap-2 mb-4">
+        <Icon className="h-5 w-5 text-primary" />
+        <h2 className="text-lg font-semibold">{title}</h2>
+      </div>
+      <p className="text-xs text-muted-foreground mb-4">
+        Define the tags your team can use when tagging {type === "photo" ? "photos" : "projects"}. Tags help organize and filter your content.
+      </p>
+      <div className="flex items-center gap-2 mb-4">
+        <Input
+          value={newTagName}
+          onChange={(e) => setNewTagName(e.target.value)}
+          placeholder={`Add a ${type} tag...`}
+          className="flex-1"
+          onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); }}
+          data-testid={`input-new-${type}-tag`}
+        />
+        <Button
+          size="sm"
+          onClick={handleAdd}
+          disabled={!newTagName.trim() || createTag.isPending}
+          data-testid={`button-add-${type}-tag`}
+        >
+          <Plus className="h-4 w-4 mr-1" />
+          Add
+        </Button>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {isLoading ? (
+          <p className="text-sm text-muted-foreground">Loading...</p>
+        ) : (tags || []).length === 0 ? (
+          <p className="text-sm text-muted-foreground">No tags defined yet</p>
+        ) : (
+          (tags || []).map((tag) => (
+            <Badge key={tag.id} variant="secondary" className="text-sm gap-1.5 py-1 px-3" data-testid={`badge-${type}-tag-${tag.id}`}>
+              {tag.name}
+              <X
+                className="h-3.5 w-3.5 cursor-pointer hover:text-destructive transition-colors"
+                onClick={() => deleteTag.mutate(tag.id)}
+              />
+            </Badge>
+          ))
+        )}
       </div>
     </Card>
   );
@@ -210,6 +318,9 @@ export default function SettingsPage() {
           </div>
         </div>
       </Card>
+
+      <TagManagerCard type="photo" title="Photo Tags" icon={Camera} />
+      <TagManagerCard type="project" title="Project Tags" icon={FolderKanban} />
 
       <BillingCard />
 

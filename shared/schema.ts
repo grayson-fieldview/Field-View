@@ -6,6 +6,7 @@ import { z } from "zod";
 export * from "./models/auth";
 import { users, accounts, invitations } from "./models/auth";
 
+export const tagTypeEnum = pgEnum("tag_type", ["photo", "project"]);
 export const projectStatusEnum = pgEnum("project_status", ["active", "completed", "on_hold", "archived"]);
 export const taskStatusEnum = pgEnum("task_status", ["todo", "in_progress", "done"]);
 export const taskPriorityEnum = pgEnum("task_priority", ["low", "medium", "high"]);
@@ -21,6 +22,7 @@ export const projects = pgTable("projects", {
   latitude: real("latitude"),
   longitude: real("longitude"),
   color: text("color").default("#3B82F6"),
+  tags: text("tags").array().default(sql`'{}'::text[]`),
   coverPhotoId: integer("cover_photo_id"),
   accountId: varchar("account_id").references(() => accounts.id),
   createdById: varchar("created_by_id").references(() => users.id),
@@ -155,6 +157,21 @@ export const insertSharedGallerySchema = createInsertSchema(sharedGalleries).omi
 export type InsertSharedGallery = z.infer<typeof insertSharedGallerySchema>;
 export type SharedGallery = typeof sharedGalleries.$inferSelect;
 export type ProjectAssignment = typeof projectAssignments.$inferSelect;
+
+export const accountTags = pgTable("account_tags", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  accountId: varchar("account_id").references(() => accounts.id).notNull(),
+  name: text("name").notNull(),
+  type: tagTypeEnum("type").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertAccountTagSchema = createInsertSchema(accountTags).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertAccountTag = z.infer<typeof insertAccountTagSchema>;
+export type AccountTag = typeof accountTags.$inferSelect;
 
 export const projectsRelations = relations(projects, ({ one, many }) => ({
   createdBy: one(users, { fields: [projects.createdById], references: [users.id] }),

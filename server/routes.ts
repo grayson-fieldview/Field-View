@@ -172,7 +172,7 @@ export async function registerRoutes(
       const project = await storage.getProject(id);
       if (!project) return res.status(404).json({ message: "Project not found" });
       if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
-      const allowed = ["name", "description", "status", "address", "latitude", "longitude", "color", "coverPhotoId"];
+      const allowed = ["name", "description", "status", "address", "latitude", "longitude", "color", "coverPhotoId", "tags"];
       const filtered: Record<string, any> = {};
       for (const key of allowed) {
         if (key in req.body) filtered[key] = req.body[key];
@@ -246,6 +246,67 @@ export async function registerRoutes(
       res.json(allTasks);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch tasks" });
+    }
+  });
+
+  app.patch("/api/media/:id", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const mediaId = parseInt(req.params.id as string);
+      if (!(await verifyMediaAccess(mediaId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      const { caption, tags } = req.body;
+      const updateData: { caption?: string; tags?: string[] } = {};
+      if (caption !== undefined) updateData.caption = caption;
+      if (tags !== undefined) updateData.tags = Array.isArray(tags) ? tags : [];
+      const updated = await storage.updateMedia(mediaId, updateData);
+      if (!updated) return res.status(404).json({ message: "Media not found" });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update media" });
+    }
+  });
+
+  app.get("/api/tags", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const type = req.query.type as string | undefined;
+      if (type && !["photo", "project"].includes(type)) {
+        return res.status(400).json({ message: "Invalid type. Must be 'photo' or 'project'" });
+      }
+      const tags = await storage.getAccountTags(accountId, type);
+      res.json(tags);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch tags" });
+    }
+  });
+
+  app.post("/api/tags", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const { name, type } = req.body;
+      if (!name || !type || !["photo", "project"].includes(type)) {
+        return res.status(400).json({ message: "Name and type (photo/project) are required" });
+      }
+      const tag = await storage.createAccountTag({ accountId, name: name.trim(), type });
+      res.status(201).json(tag);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create tag" });
+    }
+  });
+
+  app.delete("/api/tags/:id", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const tags = await storage.getAccountTags(accountId);
+      const tag = tags.find(t => t.id === id);
+      if (!tag) return res.status(404).json({ message: "Tag not found" });
+      await storage.deleteAccountTag(id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete tag" });
     }
   });
 

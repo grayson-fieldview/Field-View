@@ -220,6 +220,90 @@ function BeforeAfterSlider({
   );
 }
 
+function ProjectTagsInline({ project }: { project: Project }) {
+  const { toast } = useToast();
+  const [editing, setEditing] = useState(false);
+  const currentTags: string[] = (project as any).tags || [];
+
+  const { data: accountProjectTags } = useQuery<{ id: number; name: string; type: string }[]>({
+    queryKey: ["/api/tags", { type: "project" }],
+    queryFn: async () => {
+      const res = await fetch("/api/tags?type=project", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
+  const updateProjectTags = useMutation({
+    mutationFn: async (tags: string[]) => {
+      const res = await apiRequest("PATCH", `/api/projects/${project.id}`, { tags });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", project.id.toString()] });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const toggleTag = (name: string) => {
+    const newTags = currentTags.includes(name)
+      ? currentTags.filter(t => t !== name)
+      : [...currentTags, name];
+    updateProjectTags.mutate(newTags);
+  };
+
+  const removeTag = (name: string) => {
+    updateProjectTags.mutate(currentTags.filter(t => t !== name));
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <Tag className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+      {currentTags.map((tag) => (
+        <Badge key={tag} variant="secondary" className="text-xs gap-1" data-testid={`badge-project-tag-${tag}`}>
+          {tag}
+          {editing && (
+            <X className="h-3 w-3 cursor-pointer hover:text-destructive" onClick={(e) => { e.stopPropagation(); removeTag(tag); }} />
+          )}
+        </Badge>
+      ))}
+      {currentTags.length === 0 && !editing && (
+        <span className="text-xs text-muted-foreground">No tags</span>
+      )}
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-6 text-xs text-primary px-2"
+        onClick={(e) => { e.stopPropagation(); setEditing(!editing); }}
+        data-testid="button-edit-project-tags"
+      >
+        {editing ? "Done" : "Edit Tags"}
+      </Button>
+      {editing && (accountProjectTags || []).filter(t => !currentTags.includes(t.name)).length > 0 && (
+        <div className="flex flex-wrap gap-1 w-full mt-1">
+          {(accountProjectTags || []).filter(t => !currentTags.includes(t.name)).map(t => (
+            <Badge
+              key={t.id}
+              variant="outline"
+              className="text-xs cursor-pointer hover:bg-primary/10"
+              onClick={(e) => { e.stopPropagation(); toggleTag(t.name); }}
+              data-testid={`badge-add-project-tag-${t.name}`}
+            >
+              <Plus className="h-2.5 w-2.5 mr-0.5" />
+              {t.name}
+            </Badge>
+          ))}
+        </div>
+      )}
+      {editing && (accountProjectTags || []).length === 0 && (
+        <span className="text-[10px] text-muted-foreground ml-1">No project tags defined. Add them in Settings.</span>
+      )}
+    </div>
+  );
+}
+
 export default function ProjectDetailPage({ id }: { id: string }) {
   const [, navigate] = useLocation();
   const { toast } = useToast();
@@ -875,6 +959,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                       {project.description.length > 80 ? project.description.slice(0, 80) + "..." : project.description}
                     </span>
                   )}
+                  <ProjectTagsInline project={project} />
                 </div>
               </div>
 

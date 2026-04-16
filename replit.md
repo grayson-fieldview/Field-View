@@ -16,8 +16,9 @@ Field View utilizes a modern web application architecture with a clear separatio
 - Features include:
     - **UI/UX**: Orange primary (#F09000), green accents (#267D32), charcoal sidebar (#1E1E1E), warm cream backgrounds (#F0EDEA). Fonts are Inter (sans) and DM Serif Display (serif headings).
     - **Core Pages**: Landing, Login, Register, Forgot Password, Subscribe, Dashboard, Project Detail (Photos, Tasks, Checklists, Reports, Daily Log tabs), Photos (global gallery), Map, Team, Settings, Checklists (global), Reports (global), Gallery (public).
-    - **Photo Features**: Annotations (5 tools, 8 colors), batch upload with preview, mobile camera capture support.
-    - **Project Management**: Project creation/management with status, address, color, cover photo. Task management, Checklist management with templates, Report generation with templates.
+    - **Photo Features**: Annotations (5 tools, 8 colors), batch upload with preview, mobile camera capture support. Inline description (caption) editing, tag management from account-defined photo tags.
+    - **Tagging System**: Account-level custom tags for photos and projects. Managed in Settings. Tags are `text[]` arrays on both `media` and `projects` tables. Account tag definitions stored in `account_tags` table with `type` enum (photo/project).
+    - **Project Management**: Project creation/management with status, address, color, cover photo, project tags. Task management, Checklist management with templates, Report generation with templates.
     - **Collaboration**: User roles (Admin, Manager, Standard, Restricted), user invitations, project assignments.
     - **Analytics**: Dashboard with KPI strip, various charts (photos by user, over time, by project, task status), mini-map, activity feed, time period filtering.
     - **Unique Features**: Before/After Photo Comparison slider, Daily Log auto-generation, shareable photo galleries.
