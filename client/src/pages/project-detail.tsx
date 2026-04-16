@@ -230,6 +230,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const renameInputRef = useRef<HTMLInputElement>(null);
   const [isEditingAddress, setIsEditingAddress] = useState(false);
   const [addressText, setAddressText] = useState("");
+  const [showCoverPicker, setShowCoverPicker] = useState(false);
   const [selectedMedia, setSelectedMedia] = useState<(Media & { uploadedBy?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } }) | null>(null);
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [newTaskPriority, setNewTaskPriority] = useState<string>("medium");
@@ -704,6 +705,16 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                 data-testid="img-project-cover"
               />
               <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/30 to-black/10" />
+              {projectMedia.length > 1 && (
+                <button
+                  className="absolute bottom-3 right-3 z-10 flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-black/40 hover:bg-black/60 backdrop-blur-sm text-white text-xs font-medium transition-colors"
+                  onClick={() => setShowCoverPicker(true)}
+                  data-testid="button-change-cover"
+                >
+                  <Camera className="h-3.5 w-3.5" />
+                  Change Cover
+                </button>
+              )}
             </div>
           ) : (
             <div className="relative h-28 sm:h-36 overflow-hidden bg-gradient-to-br from-[#1E1E1E] to-[#2a2a2a]" data-testid="project-hero-banner">
@@ -733,6 +744,16 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
+                  {projectMedia.length > 0 && (
+                    <DropdownMenuItem
+                      onClick={() => setShowCoverPicker(true)}
+                      data-testid="menu-item-change-cover"
+                    >
+                      <ImageIcon className="h-4 w-4 mr-2" />
+                      Change Cover Photo
+                    </DropdownMenuItem>
+                  )}
+                  {projectMedia.length > 0 && <DropdownMenuSeparator />}
                   <DropdownMenuItem
                     className="text-destructive focus:text-destructive"
                     onClick={() => setShowDeleteDialog(true)}
@@ -1741,6 +1762,44 @@ export default function ProjectDetailPage({ id }: { id: string }) {
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showCoverPicker} onOpenChange={setShowCoverPicker}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ImageIcon className="h-5 w-5" />
+              Choose Cover Photo
+            </DialogTitle>
+            <DialogDescription>
+              Select a photo to use as the project banner
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-[400px] overflow-y-auto">
+            {projectMedia.map((media) => (
+              <button
+                key={media.id}
+                className={`relative aspect-video rounded-md overflow-hidden border-2 transition-all hover:opacity-90 ${project.coverPhotoId === media.id ? "border-[#F09000] ring-2 ring-[#F09000]/30" : "border-transparent hover:border-muted-foreground/30"}`}
+                onClick={() => {
+                  setCoverPhoto.mutate(media.id);
+                  setShowCoverPicker(false);
+                }}
+                data-testid={`button-cover-option-${media.id}`}
+              >
+                <img
+                  src={media.url}
+                  alt={media.caption || "Photo"}
+                  className="absolute inset-0 w-full h-full object-cover"
+                />
+                {project.coverPhotoId === media.id && (
+                  <div className="absolute top-1 right-1 h-5 w-5 rounded-full bg-[#F09000] flex items-center justify-center">
+                    <Check className="h-3 w-3 text-white" />
+                  </div>
+                )}
+              </button>
+            ))}
+          </div>
         </DialogContent>
       </Dialog>
 
