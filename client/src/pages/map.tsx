@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { MapPin, Calendar } from "lucide-react";
+import { MapPin } from "lucide-react";
 import { useLocation } from "wouter";
 import type { Project } from "@shared/schema";
 import { loadGoogleMaps } from "@/lib/google-maps";
@@ -15,20 +14,12 @@ const statusLabels: Record<string, string> = {
   archived: "Archived",
 };
 
-const statusColors: Record<string, string> = {
-  active: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
-  completed: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
-  on_hold: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
-  archived: "bg-gray-100 text-gray-600 dark:bg-gray-800/30 dark:text-gray-400",
-};
 
 export default function MapPage() {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<google.maps.Map | null>(null);
   const markersRef = useRef<google.maps.marker.AdvancedMarkerElement[]>([]);
-  const overlayRef = useRef<google.maps.OverlayView | null>(null);
-  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
-  const [cardPosition, setCardPosition] = useState<{ x: number; y: number } | null>(null);
+  const infoWindowRef = useRef<google.maps.InfoWindow | null>(null);
   const [mapReady, setMapReady] = useState(false);
   const [, navigate] = useLocation();
 
@@ -61,15 +52,9 @@ export default function MapPage() {
         fullscreenControl: true,
       });
 
-      map.addListener("click", () => {
-        setSelectedProject(null);
-        setCardPosition(null);
-      });
-
-      const overlay = new google.maps.OverlayView();
-      overlay.draw = function () {};
-      overlay.setMap(map);
-      overlayRef.current = overlay;
+      if (infoWindowRef.current) infoWindowRef.current.close();
+      const infoWindow = new google.maps.InfoWindow();
+      infoWindowRef.current = infoWindow;
 
       mapInstanceRef.current = map;
       setMapReady(true);
@@ -83,10 +68,7 @@ export default function MapPage() {
     return () => {
       markersRef.current.forEach((m) => (m.map = null));
       markersRef.current = [];
-      if (overlayRef.current) {
-        overlayRef.current.setMap(null);
-        overlayRef.current = null;
-      }
+      if (infoWindowRef.current) infoWindowRef.current.close();
       mapInstanceRef.current = null;
       setMapReady(false);
     };
@@ -139,16 +121,30 @@ export default function MapPage() {
       });
 
       marker.addListener("click", () => {
-        const overlay = overlayRef.current;
-        if (!overlay) return;
-        const projection = overlay.getProjection();
-        if (projection) {
-          const point = projection.fromLatLngToContainerPixel(new google.maps.LatLng(lat, lng));
-          if (point) {
-            setCardPosition({ x: point.x, y: point.y });
+        const infoWindow = infoWindowRef.current;
+        if (!infoWindow) return;
+        const statusLabel = statusLabels[project.status] || project.status;
+        infoWindow.setContent(`
+          <div style="padding:8px;min-width:200px;max-width:300px;cursor:pointer" id="iw-project-${project.id}">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+              <div style="width:12px;height:12px;border-radius:50%;background:${color};flex-shrink:0"></div>
+              <strong style="font-size:14px">${project.name}</strong>
+            </div>
+            <div style="font-size:12px;color:#666;margin-bottom:4px">${statusLabel}</div>
+            ${project.address ? `<div style="font-size:12px;color:#666;margin-bottom:4px">${project.address}</div>` : ""}
+            ${project.description ? `<div style="font-size:12px;color:#888;margin-bottom:6px">${project.description}</div>` : ""}
+            <div style="font-size:11px;color:#F09000;font-weight:500">Click to view project details</div>
+          </div>
+        `);
+        infoWindow.open(map, marker);
+        google.maps.event.addListenerOnce(infoWindow, "domready", () => {
+          const el = document.getElementById(`iw-project-${project.id}`);
+          if (el) {
+            el.addEventListener("click", () => {
+              navigate(`/projects/${project.id}`);
+            });
           }
-        }
-        setSelectedProject(project);
+        });
       });
       markersRef.current.push(marker);
     });
@@ -181,49 +177,6 @@ export default function MapPage() {
           />
         )}
 
-        {selectedProject && cardPosition && (
-          <Card
-            className="absolute sm:w-80 w-72 p-4 z-[1000] cursor-pointer hover-elevate shadow-lg"
-            style={{
-              left: `${cardPosition.x}px`,
-              top: `${cardPosition.y - 16}px`,
-              transform: "translate(-50%, -100%)",
-            }}
-            onClick={() => navigate(`/projects/${selectedProject.id}`)}
-            data-testid="card-map-preview"
-          >
-            <div className="space-y-2">
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  <div
-                    className="h-3 w-3 rounded-full shrink-0"
-                    style={{ backgroundColor: selectedProject.color || "#F09000" }}
-                  />
-                  <h3 className="font-semibold truncate text-sm">{selectedProject.name}</h3>
-                </div>
-                <Badge variant="secondary" className={`shrink-0 text-xs no-default-hover-elevate no-default-active-elevate ${statusColors[selectedProject.status]}`}>
-                  {statusLabels[selectedProject.status]}
-                </Badge>
-              </div>
-              {selectedProject.description && (
-                <p className="text-xs text-muted-foreground line-clamp-2">{selectedProject.description}</p>
-              )}
-              <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                {selectedProject.address && (
-                  <span className="flex items-center gap-1">
-                    <MapPin className="h-3 w-3" />
-                    <span className="truncate max-w-[180px]">{selectedProject.address}</span>
-                  </span>
-                )}
-                <span className="flex items-center gap-1">
-                  <Calendar className="h-3 w-3" />
-                  {new Date(selectedProject.createdAt).toLocaleDateString()}
-                </span>
-              </div>
-              <p className="text-xs text-primary font-medium">Click to view project details</p>
-            </div>
-          </Card>
-        )}
 
         {!isLoading && projectsWithLocation.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">

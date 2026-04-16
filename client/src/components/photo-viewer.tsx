@@ -181,6 +181,8 @@ export default function PhotoViewer({
     setEditingDescription(false);
   };
 
+  const displayCaption = editingDescription ? descriptionText : (descriptionText || media.caption || "");
+
   const toggleTag = (tagName: string) => {
     const newTags = selectedTags.includes(tagName)
       ? selectedTags.filter(t => t !== tagName)
@@ -804,7 +806,7 @@ export default function PhotoViewer({
               />
             ) : (
               <p className="text-sm text-muted-foreground">
-                {media.caption || "No description"}
+                {displayCaption || "No description"}
               </p>
             )}
           </div>
