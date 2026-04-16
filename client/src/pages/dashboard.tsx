@@ -130,9 +130,11 @@ const priorityBadge: Record<string, { label: string; variant: "default" | "secon
   urgent: { label: "Urgent", variant: "destructive" },
 };
 
-function MiniMap({ projects }: { projects: ProjectWithDetails[] }) {
+function MiniMap({ projects, onProjectClick }: { projects: ProjectWithDetails[]; onProjectClick?: (id: number) => void }) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<google.maps.Map | null>(null);
+  const markersRef = useRef<google.maps.marker.AdvancedMarkerElement[]>([]);
+  const infoWindowRef = useRef<google.maps.InfoWindow | null>(null);
 
   const geoProjects = projects.filter(p => p.latitude && p.longitude && p.status === "active");
   const mapKey = JSON.stringify(geoProjects.map(p => ({ id: p.id, lat: p.latitude, lng: p.longitude })));
@@ -140,8 +142,6 @@ function MiniMap({ projects }: { projects: ProjectWithDetails[] }) {
   const { data: mapsConfig } = useQuery<{ apiKey: string }>({
     queryKey: ["/api/config/maps"],
   });
-
-  const markersRef = useRef<google.maps.marker.AdvancedMarkerElement[]>([]);
 
   useEffect(() => {
     if (!mapRef.current || geoProjects.length === 0 || !mapsConfig?.apiKey) return;
@@ -151,6 +151,7 @@ function MiniMap({ projects }: { projects: ProjectWithDetails[] }) {
 
       markersRef.current.forEach(m => (m.map = null));
       markersRef.current = [];
+      if (infoWindowRef.current) infoWindowRef.current.close();
 
       if (mapInstanceRef.current) {
         mapInstanceRef.current = null;
@@ -162,8 +163,12 @@ function MiniMap({ projects }: { projects: ProjectWithDetails[] }) {
         zoom: 4,
         mapId: "fieldview-mini-map",
         disableDefaultUI: true,
-        gestureHandling: "none",
+        zoomControl: true,
+        gestureHandling: "cooperative",
       });
+
+      const infoWindow = new google.maps.InfoWindow();
+      infoWindowRef.current = infoWindow;
 
       const bounds = new google.maps.LatLngBounds();
       geoProjects.forEach(p => {
@@ -171,10 +176,28 @@ function MiniMap({ projects }: { projects: ProjectWithDetails[] }) {
         bounds.extend(position);
 
         const dot = document.createElement("div");
-        dot.style.cssText = "width:14px;height:14px;background:#F09000;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,0.3);";
+        dot.style.cssText = "width:14px;height:14px;background:#F09000;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,0.3);cursor:pointer;";
         dot.title = p.name;
 
         const marker = new google.maps.marker.AdvancedMarkerElement({ map, position, content: dot });
+        marker.addListener("click", () => {
+          const photoHtml = p.recentPhotos.length > 0
+            ? `<img src="${p.recentPhotos[0].url}" style="width:100%;height:60px;object-fit:cover;border-radius:4px;margin-bottom:4px;" />`
+            : "";
+          infoWindow.setContent(`
+            <div style="min-width:140px;max-width:200px;cursor:pointer;" id="iw-proj-${p.id}">
+              ${photoHtml}
+              <div style="font-weight:600;font-size:13px;margin-bottom:2px;">${p.name}</div>
+              <div style="font-size:11px;color:#666;">${p.address || "No address"}</div>
+              <div style="font-size:11px;color:#999;margin-top:2px;">${p.photoCount} photos</div>
+            </div>
+          `);
+          infoWindow.open(map, marker);
+          google.maps.event.addListenerOnce(infoWindow, "domready", () => {
+            const el = document.getElementById(`iw-proj-${p.id}`);
+            if (el) el.addEventListener("click", () => onProjectClick?.(p.id));
+          });
+        });
         markersRef.current.push(marker);
       });
 
@@ -192,6 +215,7 @@ function MiniMap({ projects }: { projects: ProjectWithDetails[] }) {
     return () => {
       markersRef.current.forEach(m => (m.map = null));
       markersRef.current = [];
+      if (infoWindowRef.current) infoWindowRef.current.close();
       mapInstanceRef.current = null;
     };
   }, [mapKey, mapsConfig?.apiKey]);
@@ -284,8 +308,8 @@ export default function DashboardPage() {
   ];
 
   return (
-    <div className="p-4 sm:p-6 space-y-4 max-w-7xl mx-auto">
-      <div className="flex flex-wrap items-center justify-between gap-4">
+    <div className="p-4 sm:p-6 space-y-4 max-w-7xl mx-auto h-[calc(100vh-2rem)] flex flex-col">
+      <div className="flex flex-wrap items-center justify-between gap-4 shrink-0">
         <div>
           <h1 className="text-2xl font-bold tracking-tight" data-testid="text-dashboard-title">
             Welcome back{user?.firstName ? `, ${user.firstName}` : ""}
@@ -411,12 +435,12 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <Card className="flex flex-col">
-          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2 px-4 pt-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 flex-1 min-h-0">
+        <Card className="flex flex-col min-h-0">
+          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2 px-4 pt-4 shrink-0">
             <CardTitle className="text-sm font-semibold">Recent Activity</CardTitle>
           </CardHeader>
-          <CardContent className="flex-1 px-4 pb-4">
+          <CardContent className="flex-1 px-4 pb-4 min-h-0 overflow-hidden">
             {activityLoading ? (
               <div className="space-y-3">
                 {[1, 2, 3].map((i) => (
@@ -434,7 +458,7 @@ export default function DashboardPage() {
                 <p className="text-xs text-muted-foreground">No recent activity</p>
               </div>
             ) : (
-              <div className="space-y-0.5 max-h-[260px] overflow-y-auto pr-1">
+              <div className="space-y-0.5 h-full overflow-y-auto pr-1">
                 {activities.slice(0, 8).map((activity) => {
                   const config = activityConfig[activity.type];
                   const Icon = config.icon;
@@ -509,8 +533,8 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
 
-        <Card className="flex flex-col">
-          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2 px-4 pt-4">
+        <Card className="flex flex-col min-h-0">
+          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2 px-4 pt-4 shrink-0">
             <CardTitle className="text-sm font-semibold">Recent Projects</CardTitle>
             <Button variant="ghost" size="sm" className="h-7 text-xs" asChild data-testid="link-view-all-projects">
               <Link href="/projects">
@@ -519,7 +543,7 @@ export default function DashboardPage() {
               </Link>
             </Button>
           </CardHeader>
-          <CardContent className="flex-1 px-4 pb-4">
+          <CardContent className="flex-1 px-4 pb-4 min-h-0 overflow-hidden">
             {projectsLoading ? (
               <div className="space-y-2">
                 {[1, 2, 3].map((i) => (
@@ -538,8 +562,8 @@ export default function DashboardPage() {
                 <p className="text-xs text-muted-foreground">No projects yet</p>
               </div>
             ) : (
-              <div className="space-y-0.5 max-h-[260px] overflow-y-auto pr-1">
-                {(projects || []).filter(p => p.status === "active").slice(0, 6).map((project) => (
+              <div className="space-y-0.5 h-full overflow-y-auto pr-1">
+                {(projects || []).filter(p => p.status === "active").slice(0, 8).map((project) => (
                   <div
                     key={project.id}
                     className="flex items-center gap-2 p-1.5 rounded-md cursor-pointer hover-elevate"
@@ -565,8 +589,8 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
 
-        <Card className="flex flex-col">
-          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2 px-4 pt-4">
+        <Card className="flex flex-col min-h-0">
+          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2 px-4 pt-4 shrink-0">
             <CardTitle className="text-sm font-semibold">Project Locations</CardTitle>
             <Button variant="ghost" size="sm" className="h-7 text-xs" asChild data-testid="link-view-map">
               <Link href="/map">
@@ -575,19 +599,19 @@ export default function DashboardPage() {
               </Link>
             </Button>
           </CardHeader>
-          <CardContent className="px-4 pb-4">
-            <div className="h-[140px] rounded-md overflow-hidden bg-muted" data-testid="dashboard-mini-map">
+          <CardContent className="flex-1 px-4 pb-4 min-h-0">
+            <div className="h-full min-h-[120px] rounded-md overflow-hidden bg-muted" data-testid="dashboard-mini-map">
               {projectsLoading ? (
                 <Skeleton className="w-full h-full" />
               ) : (
-                <MiniMap projects={projects || []} />
+                <MiniMap projects={projects || []} onProjectClick={(id) => navigate(`/projects/${id}`)} />
               )}
             </div>
           </CardContent>
         </Card>
 
-        <Card className="flex flex-col">
-          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2 px-4 pt-4">
+        <Card className="flex flex-col min-h-0">
+          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2 px-4 pt-4 shrink-0">
             <CardTitle className="text-sm font-semibold">Recent Photos</CardTitle>
           </CardHeader>
           <CardContent className="px-4 pb-4">
