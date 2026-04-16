@@ -284,7 +284,7 @@ export default function DashboardPage() {
   ];
 
   return (
-    <div className="p-4 sm:p-6 space-y-6 max-w-7xl mx-auto">
+    <div className="p-4 sm:p-6 space-y-4 max-w-7xl mx-auto">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight" data-testid="text-dashboard-title">
@@ -386,7 +386,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-3 gap-3">
         {kpiItems.map((kpi) => (
           <Card
             key={kpi.label}
@@ -394,293 +394,236 @@ export default function DashboardPage() {
             onClick={() => navigate(kpi.href)}
             data-testid={`card-kpi-${kpi.label.toLowerCase().replace(/\s+/g, "-")}`}
           >
-            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">{kpi.label}</CardTitle>
+            <CardContent className="flex items-center justify-between p-4">
+              <div>
+                <p className="text-xs font-medium text-muted-foreground">{kpi.label}</p>
+                {activityLoading ? (
+                  <Skeleton className="h-7 w-12 mt-1" />
+                ) : (
+                  <p className="text-2xl font-bold mt-0.5" data-testid={`text-kpi-${kpi.label.toLowerCase().replace(/\s+/g, "-")}`}>
+                    {kpi.value ?? 0}
+                  </p>
+                )}
+              </div>
               <kpi.icon className="h-4 w-4 text-primary" />
-            </CardHeader>
-            <CardContent>
-              {activityLoading ? (
-                <Skeleton className="h-8 w-16" />
-              ) : (
-                <p className="text-3xl font-bold" data-testid={`text-kpi-${kpi.label.toLowerCase().replace(/\s+/g, "-")}`}>
-                  {kpi.value ?? 0}
-                </p>
-              )}
             </CardContent>
           </Card>
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-        <div className="lg:col-span-3 space-y-6">
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-lg">Recent Activity</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {activityLoading ? (
-                <div className="space-y-4">
-                  {[1, 2, 3, 4].map((i) => (
-                    <div key={i} className="flex items-start gap-3">
-                      <Skeleton className="h-8 w-8 rounded-full shrink-0" />
-                      <div className="flex-1 space-y-1.5">
-                        <Skeleton className="h-4 w-3/4" />
-                        <Skeleton className="h-3 w-20" />
-                      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Card className="flex flex-col">
+          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2 px-4 pt-4">
+            <CardTitle className="text-sm font-semibold">Recent Activity</CardTitle>
+          </CardHeader>
+          <CardContent className="flex-1 px-4 pb-4">
+            {activityLoading ? (
+              <div className="space-y-3">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="flex items-start gap-2">
+                    <Skeleton className="h-6 w-6 rounded-full shrink-0" />
+                    <div className="flex-1 space-y-1">
+                      <Skeleton className="h-3 w-3/4" />
+                      <Skeleton className="h-2 w-16" />
                     </div>
-                  ))}
-                </div>
-              ) : activities.length === 0 ? (
-                <div className="text-center py-8">
-                  <p className="text-sm text-muted-foreground">No recent activity</p>
-                </div>
-              ) : (
-                <div className="space-y-1 max-h-[400px] overflow-y-auto pr-1">
-                  {activities.map((activity) => {
-                    const config = activityConfig[activity.type];
-                    const Icon = config.icon;
-                    const isTask = activity.type === "task";
-                    const taskStatus = isTask ? activity.extra?.status : null;
-                    const taskPriority = isTask ? activity.extra?.priority : null;
-                    const taskDueDate = isTask ? (activity.extra as any)?.dueDate : null;
-                    const isOverdue = taskDueDate && taskStatus !== "done" && new Date(taskDueDate) < new Date();
-
-                    return (
-                      <div
-                        key={`${activity.type}-${activity.id}`}
-                        className="flex items-start gap-3 p-2 rounded-md"
-                        data-testid={`activity-item-${activity.type}-${activity.id}`}
-                      >
-                        <Avatar className="h-8 w-8 shrink-0">
-                          <AvatarImage src={activity.userImage || undefined} />
-                          <AvatarFallback className="text-[10px] bg-primary/10 text-primary">
-                            {getInitialsFromName(activity.userName)}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm leading-snug">
-                            <span className="font-medium">{activity.userName}</span>{" "}
-                            <span className="text-muted-foreground">{activity.detail}</span>
-                            {activity.projectName && (
-                              <span className="text-muted-foreground">
-                                {" "}in{" "}
-                                <Link
-                                  href={`/projects/${activity.projectId}`}
-                                  className="font-medium text-foreground"
-                                  data-testid={`link-activity-project-${activity.id}`}
-                                >
-                                  {activity.projectName}
-                                </Link>
-                              </span>
-                            )}
-                          </p>
-                          <div className="flex items-center gap-2 mt-1 flex-wrap">
-                            <div className="flex items-center gap-1">
-                              <Icon className="h-3 w-3 text-muted-foreground" />
-                              <span className="text-xs text-muted-foreground">{relativeTime(activity.timestamp)}</span>
-                            </div>
-                            {isTask && taskStatus && (
-                              <Badge variant={taskStatusBadge[taskStatus]?.variant || "outline"} className="text-[10px]" data-testid={`badge-activity-status-${activity.id}`}>
-                                {taskStatusBadge[taskStatus]?.label || taskStatus}
-                              </Badge>
-                            )}
-                            {isTask && taskPriority && taskPriority !== "medium" && (
-                              <Badge variant={priorityBadge[taskPriority]?.variant || "outline"} className="text-[10px]" data-testid={`badge-activity-priority-${activity.id}`}>
-                                {priorityBadge[taskPriority]?.label || taskPriority}
-                              </Badge>
-                            )}
-                            {isTask && taskDueDate && (
-                              <span className={`text-[10px] flex items-center gap-0.5 ${isOverdue ? "text-destructive font-medium" : "text-muted-foreground"}`} data-testid={`text-activity-due-${activity.id}`}>
-                                <Clock className="h-2.5 w-2.5" />
-                                {formatDueDate(taskDueDate)}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        {activity.type === "photo" && activity.extra?.url && (
-                          <div className="h-10 w-14 rounded-md overflow-hidden shrink-0 bg-muted">
-                            <img
-                              src={activity.extra.url}
-                              alt=""
-                              className="w-full h-full object-cover"
-                            />
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        <div className="lg:col-span-2 space-y-6">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-3">
-              <CardTitle className="text-lg">Project Locations</CardTitle>
-              <Button variant="ghost" size="sm" asChild data-testid="link-view-map">
-                <Link href="/map">
-                  <MapPin className="h-3.5 w-3.5 mr-1" />
-                  Full Map
-                </Link>
-              </Button>
-            </CardHeader>
-            <CardContent>
-              <div className="h-[200px] rounded-md overflow-hidden bg-muted" data-testid="dashboard-mini-map">
-                {projectsLoading ? (
-                  <Skeleton className="w-full h-full" />
-                ) : (
-                  <MiniMap projects={projects || []} />
-                )}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-lg">Recent Photos</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {activityLoading ? (
-                <div className="grid grid-cols-3 gap-2">
-                  {[1, 2, 3, 4, 5, 6].map((i) => (
-                    <Skeleton key={i} className="aspect-square rounded-md" />
-                  ))}
-                </div>
-              ) : recentPhotos.length === 0 ? (
-                <div className="text-center py-8">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-md bg-muted mx-auto mb-2">
-                    <Camera className="h-5 w-5 text-muted-foreground" />
                   </div>
-                  <p className="text-sm text-muted-foreground">No photos yet</p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-3 gap-2">
-                  {recentPhotos.map((photo) => (
+                ))}
+              </div>
+            ) : activities.length === 0 ? (
+              <div className="text-center py-6">
+                <p className="text-xs text-muted-foreground">No recent activity</p>
+              </div>
+            ) : (
+              <div className="space-y-0.5 max-h-[260px] overflow-y-auto pr-1">
+                {activities.slice(0, 8).map((activity) => {
+                  const config = activityConfig[activity.type];
+                  const Icon = config.icon;
+                  const isTask = activity.type === "task";
+                  const taskStatus = isTask ? activity.extra?.status : null;
+                  const taskPriority = isTask ? activity.extra?.priority : null;
+                  const taskDueDate = isTask ? (activity.extra as any)?.dueDate : null;
+                  const isOverdue = taskDueDate && taskStatus !== "done" && new Date(taskDueDate) < new Date();
+
+                  return (
                     <div
-                      key={photo.id}
-                      className="relative group aspect-square rounded-md overflow-hidden bg-muted cursor-pointer"
-                      onClick={() => photo.projectId && navigate(`/projects/${photo.projectId}`)}
-                      data-testid={`photo-thumb-${photo.id}`}
+                      key={`${activity.type}-${activity.id}`}
+                      className="flex items-start gap-2 py-1.5 rounded-md"
+                      data-testid={`activity-item-${activity.type}-${activity.id}`}
                     >
-                      <img
-                        src={photo.extra!.url!}
-                        alt=""
-                        className="w-full h-full object-cover"
-                      />
-                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/50 transition-colors flex flex-col items-center justify-center" style={{ visibility: "visible" }}>
-                        <span className="text-white text-[10px] font-medium opacity-0 group-hover:opacity-100 transition-opacity text-center px-1 truncate max-w-full" data-testid={`text-photo-project-${photo.id}`}>
-                          {photo.projectName || ""}
-                        </span>
-                        <span className="text-white/70 text-[9px] opacity-0 group-hover:opacity-100 transition-opacity" data-testid={`text-photo-user-${photo.id}`}>
-                          {photo.userName}
-                        </span>
+                      <Avatar className="h-6 w-6 shrink-0">
+                        <AvatarImage src={activity.userImage || undefined} />
+                        <AvatarFallback className="text-[9px] bg-primary/10 text-primary">
+                          {getInitialsFromName(activity.userName)}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs leading-snug">
+                          <span className="font-medium">{activity.userName}</span>{" "}
+                          <span className="text-muted-foreground">{activity.detail}</span>
+                          {activity.projectName && (
+                            <span className="text-muted-foreground">
+                              {" "}in{" "}
+                              <Link
+                                href={`/projects/${activity.projectId}`}
+                                className="font-medium text-foreground"
+                                data-testid={`link-activity-project-${activity.id}`}
+                              >
+                                {activity.projectName}
+                              </Link>
+                            </span>
+                          )}
+                        </p>
+                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                          <div className="flex items-center gap-0.5">
+                            <Icon className="h-2.5 w-2.5 text-muted-foreground" />
+                            <span className="text-[10px] text-muted-foreground">{relativeTime(activity.timestamp)}</span>
+                          </div>
+                          {isTask && taskStatus && (
+                            <Badge variant={taskStatusBadge[taskStatus]?.variant || "outline"} className="text-[9px] px-1 py-0" data-testid={`badge-activity-status-${activity.id}`}>
+                              {taskStatusBadge[taskStatus]?.label || taskStatus}
+                            </Badge>
+                          )}
+                          {isTask && taskPriority && taskPriority !== "medium" && (
+                            <Badge variant={priorityBadge[taskPriority]?.variant || "outline"} className="text-[9px] px-1 py-0" data-testid={`badge-activity-priority-${activity.id}`}>
+                              {priorityBadge[taskPriority]?.label || taskPriority}
+                            </Badge>
+                          )}
+                          {isTask && taskDueDate && (
+                            <span className={`text-[9px] flex items-center gap-0.5 ${isOverdue ? "text-destructive font-medium" : "text-muted-foreground"}`} data-testid={`text-activity-due-${activity.id}`}>
+                              <Clock className="h-2 w-2" />
+                              {formatDueDate(taskDueDate)}
+                            </span>
+                          )}
+                        </div>
                       </div>
+                      {activity.type === "photo" && activity.extra?.url && (
+                        <div className="h-8 w-11 rounded overflow-hidden shrink-0 bg-muted">
+                          <img src={activity.extra.url} alt="" className="w-full h-full object-cover" />
+                        </div>
+                      )}
                     </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-lg">Quick Actions</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              <Button
-                className="w-full justify-start"
-                variant="outline"
-                onClick={() => setDialogOpen(true)}
-                data-testid="button-quick-new-project"
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                New Project
-              </Button>
-              <Button
-                className="w-full justify-start"
-                variant="outline"
-                onClick={() => navigate("/projects")}
-                data-testid="button-quick-view-projects"
-              >
-                <FolderKanban className="h-4 w-4 mr-2" />
-                View All Projects
-              </Button>
-              <Button
-                className="w-full justify-start"
-                variant="outline"
-                onClick={() => navigate("/photos")}
-                data-testid="button-quick-view-photos"
-              >
-                <Camera className="h-4 w-4 mr-2" />
-                View All Photos
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-3">
-          <CardTitle className="text-lg">Recent Projects</CardTitle>
-          <Button variant="ghost" asChild data-testid="link-view-all-projects">
-            <Link href="/projects">
-              View All
-              <ArrowRight className="h-4 w-4 ml-1" />
-            </Link>
-          </Button>
-        </CardHeader>
-        <CardContent>
-          {projectsLoading ? (
-            <div className="space-y-3">
-              {[1, 2, 3].map((i) => (
-                <div key={i} className="flex items-center gap-3">
-                  <Skeleton className="h-10 w-10 rounded-md shrink-0" />
-                  <div className="flex-1 space-y-1.5">
-                    <Skeleton className="h-4 w-40" />
-                    <Skeleton className="h-3 w-24" />
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (projects || []).length === 0 ? (
-            <div className="text-center py-6">
-              <div className="flex h-10 w-10 items-center justify-center rounded-md bg-muted mx-auto mb-2">
-                <FolderKanban className="h-5 w-5 text-muted-foreground" />
+                  );
+                })}
               </div>
-              <p className="text-sm text-muted-foreground">No projects yet</p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="flex flex-col">
+          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2 px-4 pt-4">
+            <CardTitle className="text-sm font-semibold">Recent Projects</CardTitle>
+            <Button variant="ghost" size="sm" className="h-7 text-xs" asChild data-testid="link-view-all-projects">
+              <Link href="/projects">
+                View All
+                <ArrowRight className="h-3 w-3 ml-1" />
+              </Link>
+            </Button>
+          </CardHeader>
+          <CardContent className="flex-1 px-4 pb-4">
+            {projectsLoading ? (
+              <div className="space-y-2">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <Skeleton className="h-8 w-8 rounded shrink-0" />
+                    <div className="flex-1 space-y-1">
+                      <Skeleton className="h-3 w-32" />
+                      <Skeleton className="h-2 w-20" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (projects || []).length === 0 ? (
+              <div className="text-center py-6">
+                <FolderKanban className="h-5 w-5 text-muted-foreground mx-auto mb-1" />
+                <p className="text-xs text-muted-foreground">No projects yet</p>
+              </div>
+            ) : (
+              <div className="space-y-0.5 max-h-[260px] overflow-y-auto pr-1">
+                {(projects || []).filter(p => p.status === "active").slice(0, 6).map((project) => (
+                  <div
+                    key={project.id}
+                    className="flex items-center gap-2 p-1.5 rounded-md cursor-pointer hover-elevate"
+                    onClick={() => navigate(`/projects/${project.id}`)}
+                    data-testid={`card-project-${project.id}`}
+                  >
+                    <div className="h-8 w-8 rounded overflow-hidden shrink-0 bg-muted flex items-center justify-center">
+                      {project.recentPhotos.length > 0 ? (
+                        <img src={project.recentPhotos[0].url} alt={project.name} className="w-full h-full object-cover" />
+                      ) : (
+                        <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h3 className="text-xs font-medium truncate" data-testid={`text-project-name-${project.id}`}>{project.name}</h3>
+                      <p className="text-[10px] text-muted-foreground truncate">{project.address || "No address"}</p>
+                    </div>
+                    <span className="text-[10px] text-muted-foreground shrink-0">{project.photoCount} photos</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="flex flex-col">
+          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2 px-4 pt-4">
+            <CardTitle className="text-sm font-semibold">Project Locations</CardTitle>
+            <Button variant="ghost" size="sm" className="h-7 text-xs" asChild data-testid="link-view-map">
+              <Link href="/map">
+                <MapPin className="h-3 w-3 mr-1" />
+                Full Map
+              </Link>
+            </Button>
+          </CardHeader>
+          <CardContent className="px-4 pb-4">
+            <div className="h-[140px] rounded-md overflow-hidden bg-muted" data-testid="dashboard-mini-map">
+              {projectsLoading ? (
+                <Skeleton className="w-full h-full" />
+              ) : (
+                <MiniMap projects={projects || []} />
+              )}
             </div>
-          ) : (
-            <div className="space-y-1">
-              {(projects || []).filter(p => p.status === "active").slice(0, 5).map((project) => (
-                <div
-                  key={project.id}
-                  className="flex items-center gap-3 p-2 rounded-md cursor-pointer hover-elevate"
-                  onClick={() => navigate(`/projects/${project.id}`)}
-                  data-testid={`card-project-${project.id}`}
-                >
-                  <div className="h-10 w-10 rounded-md overflow-hidden shrink-0 bg-muted flex items-center justify-center">
-                    {project.recentPhotos.length > 0 ? (
-                      <img src={project.recentPhotos[0].url} alt={project.name} className="w-full h-full object-cover" />
-                    ) : (
-                      <ImageIcon className="h-4 w-4 text-muted-foreground" />
-                    )}
+          </CardContent>
+        </Card>
+
+        <Card className="flex flex-col">
+          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2 px-4 pt-4">
+            <CardTitle className="text-sm font-semibold">Recent Photos</CardTitle>
+          </CardHeader>
+          <CardContent className="px-4 pb-4">
+            {activityLoading ? (
+              <div className="grid grid-cols-4 gap-1.5">
+                {[1, 2, 3, 4].map((i) => (
+                  <Skeleton key={i} className="aspect-square rounded" />
+                ))}
+              </div>
+            ) : recentPhotos.length === 0 ? (
+              <div className="text-center py-6">
+                <Camera className="h-5 w-5 text-muted-foreground mx-auto mb-1" />
+                <p className="text-xs text-muted-foreground">No photos yet</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-4 gap-1.5">
+                {recentPhotos.slice(0, 8).map((photo) => (
+                  <div
+                    key={photo.id}
+                    className="relative group aspect-square rounded overflow-hidden bg-muted cursor-pointer"
+                    onClick={() => photo.projectId && navigate(`/projects/${photo.projectId}`)}
+                    data-testid={`photo-thumb-${photo.id}`}
+                  >
+                    <img src={photo.extra!.url!} alt="" className="w-full h-full object-cover" />
+                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center">
+                      <span className="text-white text-[9px] font-medium opacity-0 group-hover:opacity-100 transition-opacity text-center px-0.5 truncate max-w-full" data-testid={`text-photo-project-${photo.id}`}>
+                        {photo.projectName || ""}
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="text-sm font-medium truncate" data-testid={`text-project-name-${project.id}`}>{project.name}</h3>
-                    <p className="text-xs text-muted-foreground truncate">{project.address || "No address"}</p>
-                  </div>
-                  <div className="flex items-center gap-3 shrink-0">
-                    <span className="text-xs text-muted-foreground">{project.photoCount} photos</span>
-                    <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
