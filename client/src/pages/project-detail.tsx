@@ -81,6 +81,7 @@ import {
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { LayoutTemplate } from "lucide-react";
+import { AddressAutocomplete } from "@/components/address-autocomplete";
 import type { Project, Media, Comment, Task, Checklist, ChecklistItem, Report, ChecklistTemplate, ChecklistTemplateItem, ReportTemplate } from "@shared/schema";
 
 type ChecklistWithDetails = Checklist & {
@@ -227,6 +228,8 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
+  const [isEditingAddress, setIsEditingAddress] = useState(false);
+  const [addressText, setAddressText] = useState("");
   const [selectedMedia, setSelectedMedia] = useState<(Media & { uploadedBy?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } }) | null>(null);
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [newTaskPriority, setNewTaskPriority] = useState<string>("medium");
@@ -498,6 +501,26 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     renameProject.mutate(trimmed);
   };
 
+  const updateAddress = useMutation({
+    mutationFn: async (data: { address: string; latitude?: number; longitude?: number }) => {
+      const res = await apiRequest("PATCH", `/api/projects/${id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects"], exact: true });
+      setIsEditingAddress(false);
+      toast({ title: "Address updated" });
+    },
+    onError: (error: Error) => {
+      if (isUnauthorizedError(error)) {
+        toast({ title: "Unauthorized", variant: "destructive" });
+        return;
+      }
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
   const createGallery = useMutation({
     mutationFn: async (params: { mediaIds: number[]; includeMetadata: boolean; includeDescriptions: boolean }) => {
       const res = await apiRequest("POST", "/api/galleries", {
@@ -766,17 +789,61 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                   </span>
                 </div>
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                  {project.address && (
-                    <a
-                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(project.address)}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-sm text-muted-foreground hover:text-[#F09000] flex items-center gap-1 transition-colors"
-                      data-testid="link-project-address"
-                    >
-                      <MapPin className="h-3.5 w-3.5 shrink-0" />
-                      <span className="underline-offset-2 hover:underline">{project.address}</span>
-                    </a>
+                  {isEditingAddress ? (
+                    <div className="flex items-center gap-2 w-full max-w-md">
+                      <div className="flex-1">
+                        <AddressAutocomplete
+                          value={addressText}
+                          onChange={(result) => {
+                            updateAddress.mutate({
+                              address: result.address,
+                              latitude: result.latitude,
+                              longitude: result.longitude,
+                            });
+                          }}
+                          onTextChange={setAddressText}
+                          placeholder="Search for an address..."
+                          data-testid="input-edit-address"
+                        />
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setIsEditingAddress(false)}
+                        data-testid="button-cancel-address"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <>
+                      {project.address ? (
+                        <button
+                          className="group text-sm text-muted-foreground hover:text-[#F09000] flex items-center gap-1 transition-colors"
+                          onClick={() => {
+                            setAddressText(project.address || "");
+                            setIsEditingAddress(true);
+                          }}
+                          data-testid="button-edit-address"
+                        >
+                          <MapPin className="h-3.5 w-3.5 shrink-0" />
+                          <span className="underline-offset-2 group-hover:underline">{project.address}</span>
+                          <Pencil className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                        </button>
+                      ) : (
+                        <button
+                          className="text-sm text-muted-foreground hover:text-[#F09000] flex items-center gap-1 transition-colors"
+                          onClick={() => {
+                            setAddressText("");
+                            setIsEditingAddress(true);
+                          }}
+                          data-testid="button-add-address"
+                        >
+                          <MapPin className="h-3.5 w-3.5 shrink-0" />
+                          <span>Add address</span>
+                        </button>
+                      )}
+                    </>
                   )}
                   <span className="text-sm text-muted-foreground flex items-center gap-1" data-testid="text-project-created">
                     <Calendar className="h-3.5 w-3.5 shrink-0" />
