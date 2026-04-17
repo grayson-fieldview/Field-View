@@ -1,25 +1,46 @@
 import { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { ChevronLeft, ChevronRight, ClipboardList, ClipboardCheck, Calendar as CalendarIcon } from "lucide-react";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useToast } from "@/hooks/use-toast";
+import {
+  ChevronLeft, ChevronRight, ClipboardList, ClipboardCheck, Calendar as CalendarIcon,
+  Plus, X, Users, Clock, Repeat, MapPin, AlignLeft, FolderKanban, Loader2, RefreshCw, AlertCircle, Trash2,
+} from "lucide-react";
 
-type CalendarEvent = {
+type CalendarEventItem = {
   id: string;
-  type: "task" | "checklist";
+  rawId?: number;
+  type: "task" | "checklist" | "event";
   title: string;
   date: string;
+  endsAt?: string | null;
+  allDay?: boolean;
+  location?: string | null;
+  description?: string | null;
+  attendees?: string[];
+  repeat?: string;
   status: string;
   priority: string | null;
-  projectId: number;
+  projectId: number | null;
   projectName: string;
   color: string;
   assignedTo: string | null;
+  syncMessage?: string | null;
 };
+
+type ProjectLite = { id: number; name: string; color: string | null };
 
 const statusLabels: Record<string, string> = {
   todo: "To Do",
@@ -27,6 +48,18 @@ const statusLabels: Record<string, string> = {
   done: "Done",
   not_started: "Not Started",
   completed: "Completed",
+  pending: "Sync pending",
+  synced: "Synced",
+  failed: "Sync failed",
+  disabled: "Local only",
+};
+
+const repeatLabels: Record<string, string> = {
+  none: "Does not repeat",
+  daily: "Every day",
+  weekly: "Every week",
+  monthly: "Every month",
+  yearly: "Every year",
 };
 
 function startOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth(), 1); }
@@ -34,7 +67,6 @@ function addMonths(d: Date, n: number) { return new Date(d.getFullYear(), d.getM
 function isSameDay(a: Date, b: Date) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
-
 function buildMonthGrid(viewDate: Date): Date[] {
   const first = startOfMonth(viewDate);
   const startWeekday = first.getDay();
@@ -48,23 +80,365 @@ function buildMonthGrid(viewDate: Date): Date[] {
   }
   return days;
 }
+function toDateInputValue(d: Date) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+function combineDateAndTime(dateStr: string, timeStr: string): Date {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const [hh, mm] = timeStr.split(":").map(Number);
+  return new Date(y, (m || 1) - 1, d || 1, hh || 0, mm || 0, 0, 0);
+}
+function nextHalfHour(d: Date): Date {
+  const out = new Date(d);
+  out.setMinutes(d.getMinutes() < 30 ? 30 : 60, 0, 0);
+  return out;
+}
+function formatTime(d: string | Date) {
+  const date = typeof d === "string" ? new Date(d) : d;
+  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
+type ConnectionLite = { id: number; provider: string; status: string };
+
+function NewEventDialog({
+  open,
+  onOpenChange,
+  initialDate,
+  projects,
+  connections,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  initialDate: Date;
+  projects: ProjectLite[];
+  connections: ConnectionLite[];
+}) {
+  const { toast } = useToast();
+  const startSeed = nextHalfHour(initialDate);
+  const endSeed = new Date(startSeed.getTime() + 30 * 60 * 1000);
+
+  const [title, setTitle] = useState("");
+  const [attendeesInput, setAttendeesInput] = useState("");
+  const [attendees, setAttendees] = useState<string[]>([]);
+  const [date, setDate] = useState(toDateInputValue(startSeed));
+  const [startTime, setStartTime] = useState(`${String(startSeed.getHours()).padStart(2, "0")}:${String(startSeed.getMinutes()).padStart(2, "0")}`);
+  const [endTime, setEndTime] = useState(`${String(endSeed.getHours()).padStart(2, "0")}:${String(endSeed.getMinutes()).padStart(2, "0")}`);
+  const [allDay, setAllDay] = useState(false);
+  const [repeat, setRepeat] = useState("none");
+  const [location, setLocation] = useState("");
+  const [description, setDescription] = useState("");
+  const [projectId, setProjectId] = useState<string>("none");
+  const [pushToConnected, setPushToConnected] = useState(true);
+
+  const reset = () => {
+    setTitle(""); setAttendeesInput(""); setAttendees([]);
+    setDate(toDateInputValue(startSeed));
+    setStartTime(`${String(startSeed.getHours()).padStart(2, "0")}:${String(startSeed.getMinutes()).padStart(2, "0")}`);
+    setEndTime(`${String(endSeed.getHours()).padStart(2, "0")}:${String(endSeed.getMinutes()).padStart(2, "0")}`);
+    setAllDay(false); setRepeat("none"); setLocation(""); setDescription(""); setProjectId("none"); setPushToConnected(true);
+  };
+
+  const addAttendee = () => {
+    const trimmed = attendeesInput.trim().replace(/,$/, "");
+    if (!trimmed) return;
+    if (!/.+@.+\..+/.test(trimmed)) {
+      toast({ title: "Invalid email", description: trimmed, variant: "destructive" });
+      return;
+    }
+    if (!attendees.includes(trimmed)) setAttendees([...attendees, trimmed]);
+    setAttendeesInput("");
+  };
+
+  const createEvent = useMutation({
+    mutationFn: async () => {
+      const startsAt = allDay ? combineDateAndTime(date, "00:00") : combineDateAndTime(date, startTime);
+      const endsAt = allDay ? combineDateAndTime(date, "23:59") : combineDateAndTime(date, endTime);
+      const body = {
+        title: title.trim(),
+        description: description.trim() || null,
+        location: location.trim() || null,
+        startsAt: startsAt.toISOString(),
+        endsAt: endsAt.toISOString(),
+        allDay,
+        repeat,
+        attendees,
+        projectId: projectId === "none" ? null : Number(projectId),
+        pushToConnected,
+      };
+      const res = await apiRequest("POST", "/api/calendar-events", body);
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar/events"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar-events"] });
+      const msg = data?.syncMessage || "Event saved.";
+      toast({ title: "Event created", description: msg });
+      reset();
+      onOpenChange(false);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Couldn't create event", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const handleSave = () => {
+    if (!title.trim()) {
+      toast({ title: "Add a title for the event", variant: "destructive" });
+      return;
+    }
+    if (!allDay && combineDateAndTime(date, endTime) <= combineDateAndTime(date, startTime)) {
+      toast({ title: "End time must be after start time", variant: "destructive" });
+      return;
+    }
+    createEvent.mutate();
+  };
+
+  const activeConnectionLabel = connections.length > 0
+    ? connections.map(c => c.provider).join(", ")
+    : null;
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) reset(); onOpenChange(o); }}>
+      <DialogContent className="max-w-2xl p-0 gap-0 overflow-hidden" data-testid="dialog-new-event">
+        <div className="bg-primary px-5 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-2 text-primary-foreground">
+            <CalendarIcon className="h-5 w-5" />
+            <DialogTitle className="text-primary-foreground text-base font-semibold">New event</DialogTitle>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-primary-foreground hover:bg-white/10"
+              onClick={() => { reset(); onOpenChange(false); }}
+              data-testid="button-discard-event"
+            >
+              <Trash2 className="h-4 w-4 mr-1" /> Discard
+            </Button>
+            <Button
+              size="sm"
+              className="bg-white text-primary hover:bg-white/90"
+              onClick={handleSave}
+              disabled={createEvent.isPending}
+              data-testid="button-save-event"
+            >
+              {createEvent.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
+            </Button>
+          </div>
+        </div>
+
+        <DialogHeader className="sr-only">
+          <DialogTitle>New event</DialogTitle>
+        </DialogHeader>
+
+        <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
+          <div className="flex items-start gap-3">
+            <div className="h-3 w-3 rounded-full bg-primary mt-2 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <Label className="text-xs text-muted-foreground">Calendar</Label>
+              <p className="text-sm font-medium">FieldView calendar</p>
+              {activeConnectionLabel && (
+                <p className="text-xs text-muted-foreground">Connected: {activeConnectionLabel}</p>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <Input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Add a title"
+              className="text-lg font-semibold border-0 border-b rounded-none px-0 focus-visible:ring-0 focus-visible:border-primary"
+              data-testid="input-event-title"
+            />
+          </div>
+
+          <div className="flex items-start gap-3">
+            <Users className="h-4 w-4 mt-2.5 text-muted-foreground shrink-0" />
+            <div className="flex-1 min-w-0 space-y-2">
+              <div className="flex flex-wrap gap-1.5">
+                {attendees.map((a) => (
+                  <Badge key={a} variant="secondary" className="gap-1 pr-1 no-default-hover-elevate no-default-active-elevate">
+                    {a}
+                    <button
+                      onClick={() => setAttendees(attendees.filter(x => x !== a))}
+                      className="hover:text-destructive"
+                      data-testid={`button-remove-attendee-${a}`}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                ))}
+              </div>
+              <Input
+                value={attendeesInput}
+                onChange={(e) => setAttendeesInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === ",") {
+                    e.preventDefault();
+                    addAttendee();
+                  }
+                }}
+                onBlur={addAttendee}
+                placeholder="Add people by email"
+                data-testid="input-event-attendees"
+              />
+            </div>
+          </div>
+
+          <div className="flex items-start gap-3">
+            <Clock className="h-4 w-4 mt-2.5 text-muted-foreground shrink-0" />
+            <div className="flex-1 min-w-0 grid grid-cols-1 sm:grid-cols-[auto_auto_1fr_auto_1fr_auto] gap-2 items-center">
+              <Input
+                type="date"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+                className="w-auto"
+                data-testid="input-event-date"
+              />
+              <span className="text-xs text-muted-foreground hidden sm:inline">from</span>
+              <Input
+                type="time"
+                value={startTime}
+                onChange={(e) => setStartTime(e.target.value)}
+                disabled={allDay}
+                data-testid="input-event-start-time"
+              />
+              <span className="text-xs text-muted-foreground hidden sm:inline">to</span>
+              <Input
+                type="time"
+                value={endTime}
+                onChange={(e) => setEndTime(e.target.value)}
+                disabled={allDay}
+                data-testid="input-event-end-time"
+              />
+              <label className="flex items-center gap-2 text-xs text-muted-foreground whitespace-nowrap">
+                <Switch checked={allDay} onCheckedChange={setAllDay} data-testid="switch-event-all-day" />
+                All day
+              </label>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <Repeat className="h-4 w-4 text-muted-foreground shrink-0" />
+            <Select value={repeat} onValueChange={setRepeat}>
+              <SelectTrigger className="w-auto min-w-[180px]" data-testid="select-event-repeat">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(repeatLabels).map(([k, v]) => (
+                  <SelectItem key={k} value={k}>{v}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <MapPin className="h-4 w-4 text-muted-foreground shrink-0" />
+            <Input
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+              placeholder="Add a location"
+              data-testid="input-event-location"
+            />
+          </div>
+
+          <div className="flex items-center gap-3">
+            <FolderKanban className="h-4 w-4 text-muted-foreground shrink-0" />
+            <Select value={projectId} onValueChange={setProjectId}>
+              <SelectTrigger className="w-auto min-w-[200px]" data-testid="select-event-project">
+                <SelectValue placeholder="Link to a project (optional)" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">No project</SelectItem>
+                {projects.map(p => (
+                  <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex items-start gap-3">
+            <AlignLeft className="h-4 w-4 mt-2 text-muted-foreground shrink-0" />
+            <Textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Add notes or a description"
+              rows={3}
+              className="resize-none"
+              data-testid="textarea-event-description"
+            />
+          </div>
+
+          <div className="rounded-md border p-3 flex items-start gap-3 bg-muted/30">
+            <RefreshCw className="h-4 w-4 mt-0.5 text-primary shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-medium">Push to connected calendars</p>
+                <Switch
+                  checked={pushToConnected}
+                  onCheckedChange={setPushToConnected}
+                  data-testid="switch-event-push"
+                />
+              </div>
+              {connections.length === 0 ? (
+                <p className="text-xs text-muted-foreground mt-1 flex items-start gap-1">
+                  <AlertCircle className="h-3 w-3 mt-0.5 shrink-0" />
+                  No calendars are linked yet. Connect Google, Outlook, or Apple from Settings to enable two-way sync.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground mt-1">
+                  This event will be sent to {connections.map(c => c.provider).join(", ")} so it appears alongside your other appointments.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function CalendarPage() {
   const [, navigate] = useLocation();
+  const { toast } = useToast();
   const [viewDate, setViewDate] = useState<Date>(startOfMonth(new Date()));
+  const [newEventOpen, setNewEventOpen] = useState(false);
+  const [newEventDate, setNewEventDate] = useState<Date>(new Date());
   const today = new Date();
 
-  const { data: events, isLoading } = useQuery<CalendarEvent[]>({
+  const { data: events, isLoading } = useQuery<CalendarEventItem[]>({
     queryKey: ["/api/calendar/events"],
+  });
+
+  const { data: projects } = useQuery<ProjectLite[]>({
+    queryKey: ["/api/projects"],
+  });
+
+  const { data: connections } = useQuery<ConnectionLite[]>({
+    queryKey: ["/api/calendar-connections"],
+  });
+
+  const deleteEvent = useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("DELETE", `/api/calendar-events/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar/events"] });
+      toast({ title: "Event deleted" });
+    },
   });
 
   const days = useMemo(() => buildMonthGrid(viewDate), [viewDate]);
 
   const eventsByDay = useMemo(() => {
-    const map: Record<string, CalendarEvent[]> = {};
+    const map: Record<string, CalendarEventItem[]> = {};
     (events || []).forEach((e) => {
       const d = new Date(e.date);
       const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
@@ -85,6 +459,11 @@ export default function CalendarPage() {
   const goNext = () => setViewDate(addMonths(viewDate, 1));
   const goToday = () => setViewDate(startOfMonth(new Date()));
 
+  const openNewEvent = (forDate?: Date) => {
+    setNewEventDate(forDate || new Date());
+    setNewEventOpen(true);
+  };
+
   return (
     <div className="p-4 sm:p-6 space-y-4 h-full flex flex-col">
       <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -94,8 +473,16 @@ export default function CalendarPage() {
             {(events || []).length} item{(events || []).length === 1 ? "" : "s"} scheduled across all projects
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button variant="outline" size="sm" onClick={goToday} data-testid="button-today">Today</Button>
+          <Button
+            size="sm"
+            className="bg-primary text-primary-foreground hover:bg-primary/90"
+            onClick={() => openNewEvent()}
+            data-testid="button-new-event"
+          >
+            <Plus className="h-4 w-4 mr-1" /> New Event
+          </Button>
           <Button variant="ghost" size="icon" onClick={goPrev} data-testid="button-prev-month"><ChevronLeft className="h-4 w-4" /></Button>
           <div className="text-sm font-semibold min-w-[140px] text-center" data-testid="text-month-label">
             {MONTHS[viewDate.getMonth()]} {viewDate.getFullYear()}
@@ -128,7 +515,7 @@ export default function CalendarPage() {
               return (
                 <div
                   key={idx}
-                  className={`border-r border-b p-1.5 overflow-hidden flex flex-col gap-1 min-h-0 ${
+                  className={`group border-r border-b p-1.5 overflow-hidden flex flex-col gap-1 min-h-0 ${
                     !isCurrentMonth ? "bg-muted/20" : ""
                   }`}
                   data-testid={`day-${key}`}
@@ -145,6 +532,14 @@ export default function CalendarPage() {
                     >
                       {day.getDate()}
                     </span>
+                    <button
+                      className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-primary transition-opacity"
+                      onClick={() => openNewEvent(new Date(day.getFullYear(), day.getMonth(), day.getDate(), 9, 0))}
+                      data-testid={`button-add-event-${key}`}
+                      aria-label="Add event"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                    </button>
                   </div>
                   <div className="flex-1 overflow-y-auto space-y-1 min-h-0">
                     {dayEvents.slice(0, 3).map((event) => (
@@ -167,14 +562,34 @@ export default function CalendarPage() {
                             <div className="flex items-start gap-2">
                               {event.type === "task" ? (
                                 <ClipboardList className="h-4 w-4 mt-0.5 shrink-0" style={{ color: event.color }} />
-                              ) : (
+                              ) : event.type === "checklist" ? (
                                 <ClipboardCheck className="h-4 w-4 mt-0.5 shrink-0" style={{ color: event.color }} />
+                              ) : (
+                                <CalendarIcon className="h-4 w-4 mt-0.5 shrink-0" style={{ color: event.color }} />
                               )}
                               <div className="min-w-0">
                                 <p className="font-semibold text-sm">{event.title}</p>
-                                <p className="text-xs text-muted-foreground">{event.projectName}</p>
+                                {event.projectName && (
+                                  <p className="text-xs text-muted-foreground">{event.projectName}</p>
+                                )}
                               </div>
                             </div>
+                            {event.type === "event" && !event.allDay && (
+                              <p className="text-xs text-muted-foreground">
+                                {formatTime(event.date)}{event.endsAt ? ` - ${formatTime(event.endsAt)}` : ""}
+                              </p>
+                            )}
+                            {event.location && (
+                              <p className="text-xs text-muted-foreground flex items-center gap-1">
+                                <MapPin className="h-3 w-3" /> {event.location}
+                              </p>
+                            )}
+                            {event.attendees && event.attendees.length > 0 && (
+                              <p className="text-xs text-muted-foreground flex items-start gap-1">
+                                <Users className="h-3 w-3 mt-0.5" />
+                                <span className="break-all">{event.attendees.join(", ")}</span>
+                              </p>
+                            )}
                             <div className="flex flex-wrap gap-1.5">
                               <Badge variant="secondary" className="text-xs">
                                 {statusLabels[event.status] || event.status}
@@ -182,19 +597,36 @@ export default function CalendarPage() {
                               {event.priority && (
                                 <Badge variant="outline" className="text-xs capitalize">{event.priority}</Badge>
                               )}
+                              {event.repeat && event.repeat !== "none" && (
+                                <Badge variant="outline" className="text-xs">{repeatLabels[event.repeat]}</Badge>
+                              )}
                             </div>
-                            {event.assignedTo && (
-                              <p className="text-xs text-muted-foreground">Assigned to {event.assignedTo}</p>
+                            {event.syncMessage && (
+                              <p className="text-xs text-muted-foreground italic">{event.syncMessage}</p>
                             )}
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="w-full"
-                              onClick={() => navigate(`/projects/${event.projectId}`)}
-                              data-testid={`button-open-project-${event.projectId}`}
-                            >
-                              Open project
-                            </Button>
+                            <div className="flex gap-2">
+                              {event.projectId && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="flex-1"
+                                  onClick={() => navigate(`/projects/${event.projectId}`)}
+                                  data-testid={`button-open-project-${event.projectId}`}
+                                >
+                                  Open project
+                                </Button>
+                              )}
+                              {event.type === "event" && event.rawId && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => deleteEvent.mutate(event.rawId!)}
+                                  data-testid={`button-delete-event-${event.rawId}`}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              )}
+                            </div>
                           </div>
                         </PopoverContent>
                       </Popover>
@@ -224,7 +656,7 @@ export default function CalendarPage() {
               return (
                 <button
                   key={event.id}
-                  onClick={() => navigate(`/projects/${event.projectId}`)}
+                  onClick={() => event.projectId && navigate(`/projects/${event.projectId}`)}
                   className="w-full flex items-center gap-3 p-2 rounded text-left hover-elevate"
                   data-testid={`list-event-${event.id}`}
                 >
@@ -239,12 +671,16 @@ export default function CalendarPage() {
                     <div className="flex items-center gap-1.5">
                       {event.type === "task" ? (
                         <ClipboardList className="h-3 w-3 text-muted-foreground shrink-0" />
-                      ) : (
+                      ) : event.type === "checklist" ? (
                         <ClipboardCheck className="h-3 w-3 text-muted-foreground shrink-0" />
+                      ) : (
+                        <CalendarIcon className="h-3 w-3 text-muted-foreground shrink-0" />
                       )}
                       <p className="text-sm font-medium truncate">{event.title}</p>
                     </div>
-                    <p className="text-xs text-muted-foreground truncate">{event.projectName}</p>
+                    <p className="text-xs text-muted-foreground truncate">
+                      {event.projectName || (event.type === "event" ? "Personal event" : "")}
+                    </p>
                   </div>
                   <Badge variant="secondary" className="text-xs shrink-0 no-default-hover-elevate no-default-active-elevate">
                     {statusLabels[event.status] || event.status}
@@ -255,6 +691,14 @@ export default function CalendarPage() {
           </div>
         </Card>
       )}
+
+      <NewEventDialog
+        open={newEventOpen}
+        onOpenChange={setNewEventOpen}
+        initialDate={newEventDate}
+        projects={projects || []}
+        connections={connections || []}
+      />
     </div>
   );
 }

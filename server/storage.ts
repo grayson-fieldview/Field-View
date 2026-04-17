@@ -12,6 +12,7 @@ import {
   reportTemplates,
   accountTags,
   calendarConnections,
+  calendarEvents,
   type Project,
   type InsertProject,
   type Media,
@@ -38,6 +39,8 @@ import {
   type InsertAccountTag,
   type CalendarConnection,
   type InsertCalendarConnection,
+  type CalendarEvent,
+  type InsertCalendarEvent,
 } from "@shared/schema";
 import { users, type User } from "@shared/models/auth";
 import { db } from "./db";
@@ -117,6 +120,12 @@ export interface IStorage {
   createCalendarConnection(connection: InsertCalendarConnection): Promise<CalendarConnection>;
   updateCalendarConnection(id: number, data: Partial<InsertCalendarConnection>): Promise<CalendarConnection | undefined>;
   deleteCalendarConnection(id: number): Promise<void>;
+
+  getCalendarEvents(accountId: string): Promise<CalendarEvent[]>;
+  getCalendarEvent(id: number): Promise<CalendarEvent | undefined>;
+  createCalendarEvent(event: InsertCalendarEvent): Promise<CalendarEvent>;
+  updateCalendarEvent(id: number, data: Partial<InsertCalendarEvent> & { syncStatus?: string; syncMessage?: string | null }): Promise<CalendarEvent | undefined>;
+  deleteCalendarEvent(id: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -617,6 +626,25 @@ export class DatabaseStorage implements IStorage {
 
   async deleteCalendarConnection(id: number): Promise<void> {
     await db.delete(calendarConnections).where(eq(calendarConnections.id, id));
+  }
+
+  async getCalendarEvents(accountId: string): Promise<CalendarEvent[]> {
+    return db.select().from(calendarEvents).where(eq(calendarEvents.accountId, accountId)).orderBy(asc(calendarEvents.startsAt));
+  }
+  async getCalendarEvent(id: number): Promise<CalendarEvent | undefined> {
+    const [item] = await db.select().from(calendarEvents).where(eq(calendarEvents.id, id));
+    return item;
+  }
+  async createCalendarEvent(event: InsertCalendarEvent): Promise<CalendarEvent> {
+    const [created] = await db.insert(calendarEvents).values(event).returning();
+    return created;
+  }
+  async updateCalendarEvent(id: number, data: Partial<InsertCalendarEvent> & { syncStatus?: string; syncMessage?: string | null }): Promise<CalendarEvent | undefined> {
+    const [updated] = await db.update(calendarEvents).set(data as any).where(eq(calendarEvents.id, id)).returning();
+    return updated;
+  }
+  async deleteCalendarEvent(id: number): Promise<void> {
+    await db.delete(calendarEvents).where(eq(calendarEvents.id, id));
   }
 }
 

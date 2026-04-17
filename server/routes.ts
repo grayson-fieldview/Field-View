@@ -8,7 +8,7 @@ import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClie
 import multer from "multer";
 import path from "path";
 import fs from "fs";
-import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertReportSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertReportTemplateSchema, projects, media, comments, tasks, checklists, reports, projectAssignments } from "@shared/schema";
+import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertReportSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertReportTemplateSchema, insertCalendarEventSchema, projects, media, comments, tasks, checklists, reports, projectAssignments } from "@shared/schema";
 import { users, invitations } from "@shared/models/auth";
 import { db } from "./db";
 import { eq, sql, and, or, inArray } from "drizzle-orm";
@@ -319,6 +319,97 @@ export async function registerRoutes(
     }
   });
 
+  async function pushEventToConnections(userId: string, event: any) {
+    const connections = await storage.getCalendarConnections(userId);
+    if (connections.length === 0) {
+      return { status: "disabled" as const, message: "No connected calendar to push to." };
+    }
+    const active = connections.filter(c => c.status === "active");
+    if (active.length === 0) {
+      const names = connections.map(c => c.provider).join(", ");
+      return {
+        status: "pending" as const,
+        message: `Saved. Will sync to ${names} once that connection is fully authorized.`,
+      };
+    }
+    return {
+      status: "pending" as const,
+      message: `Queued for sync to ${active.map(c => c.provider).join(", ")}.`,
+    };
+  }
+
+  app.get("/api/calendar-events", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const events = await storage.getCalendarEvents(accountId);
+      res.json(events);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch events" });
+    }
+  });
+
+  app.post("/api/calendar-events", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const accountId = req.user.accountId;
+      const userId = req.user.id;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const parsed = insertCalendarEventSchema.parse({
+        ...req.body,
+        accountId,
+        createdById: userId,
+      });
+      if (parsed.endsAt < parsed.startsAt) {
+        return res.status(400).json({ message: "End time must be after start time." });
+      }
+      const created = await storage.createCalendarEvent(parsed);
+      let syncStatus: string = "disabled";
+      let syncMessage: string | null = null;
+      if (parsed.pushToConnected) {
+        const result = await pushEventToConnections(userId, created);
+        syncStatus = result.status;
+        syncMessage = result.message;
+        await storage.updateCalendarEvent(created.id, { syncStatus, syncMessage });
+      }
+      res.status(201).json({ ...created, syncStatus, syncMessage });
+    } catch (error: any) {
+      if (error?.errors) return res.status(400).json({ message: "Invalid event data", errors: error.errors });
+      res.status(500).json({ message: "Failed to create event" });
+    }
+  });
+
+  app.patch("/api/calendar-events/:id", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      const accountId = req.user.accountId;
+      const existing = await storage.getCalendarEvent(id);
+      if (!existing || existing.accountId !== accountId) return res.status(404).json({ message: "Event not found" });
+      const data: any = { ...req.body };
+      if (data.startsAt) data.startsAt = new Date(data.startsAt);
+      if (data.endsAt) data.endsAt = new Date(data.endsAt);
+      if (data.repeatUntil) data.repeatUntil = new Date(data.repeatUntil);
+      delete data.accountId;
+      delete data.createdById;
+      const updated = await storage.updateCalendarEvent(id, data);
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update event" });
+    }
+  });
+
+  app.delete("/api/calendar-events/:id", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      const accountId = req.user.accountId;
+      const existing = await storage.getCalendarEvent(id);
+      if (!existing || existing.accountId !== accountId) return res.status(404).json({ message: "Event not found" });
+      await storage.deleteCalendarEvent(id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete event" });
+    }
+  });
+
   app.get("/api/calendar/events", requireActiveSubscription, async (req: any, res) => {
     try {
       const accountId = req.user.accountId;
@@ -326,9 +417,30 @@ export async function registerRoutes(
       const allTasks = await storage.getAllTasks(accountId);
       const allChecklists = await storage.getAllChecklists(accountId);
       const projectsList = await storage.getProjects(accountId);
+      const calEvents = await storage.getCalendarEvents(accountId);
       const colorByProject: Record<number, string> = {};
       projectsList.forEach(p => { colorByProject[p.id] = p.color || "#F09000"; });
       const events = [
+        ...calEvents.map(e => ({
+          id: `event-${e.id}`,
+          rawId: e.id,
+          type: "event" as const,
+          title: e.title,
+          date: e.startsAt,
+          endsAt: e.endsAt,
+          allDay: e.allDay,
+          location: e.location,
+          description: e.description,
+          attendees: e.attendees,
+          repeat: e.repeat,
+          status: e.syncStatus,
+          syncMessage: e.syncMessage,
+          priority: null,
+          projectId: e.projectId,
+          projectName: e.projectId ? (projectsList.find(p => p.id === e.projectId)?.name || "") : "",
+          color: e.projectId ? (colorByProject[e.projectId] || "#F09000") : "#F09000",
+          assignedTo: null,
+        })),
         ...allTasks.filter(t => t.dueDate).map(t => ({
           id: `task-${t.id}`,
           type: "task" as const,

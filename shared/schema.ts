@@ -13,6 +13,8 @@ export const taskPriorityEnum = pgEnum("task_priority", ["low", "medium", "high"
 export const checklistStatusEnum = pgEnum("checklist_status", ["not_started", "in_progress", "completed"]);
 export const reportStatusEnum = pgEnum("report_status", ["draft", "submitted", "approved"]);
 export const calendarProviderEnum = pgEnum("calendar_provider", ["google", "outlook", "apple", "ical"]);
+export const eventRepeatEnum = pgEnum("event_repeat", ["none", "daily", "weekly", "monthly", "yearly"]);
+export const eventSyncStatusEnum = pgEnum("event_sync_status", ["pending", "synced", "failed", "disabled"]);
 
 export const projects = pgTable("projects", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
@@ -192,6 +194,39 @@ export const insertCalendarConnectionSchema = createInsertSchema(calendarConnect
 });
 export type InsertCalendarConnection = z.infer<typeof insertCalendarConnectionSchema>;
 export type CalendarConnection = typeof calendarConnections.$inferSelect;
+
+export const calendarEvents = pgTable("calendar_events", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  accountId: varchar("account_id").references(() => accounts.id).notNull(),
+  createdById: varchar("created_by_id").references(() => users.id).notNull(),
+  projectId: integer("project_id").references(() => projects.id, { onDelete: "set null" }),
+  title: text("title").notNull(),
+  description: text("description"),
+  location: text("location"),
+  startsAt: timestamp("starts_at").notNull(),
+  endsAt: timestamp("ends_at").notNull(),
+  allDay: boolean("all_day").default(false).notNull(),
+  repeat: eventRepeatEnum("repeat").default("none").notNull(),
+  repeatUntil: timestamp("repeat_until"),
+  attendees: text("attendees").array().default(sql`ARRAY[]::text[]`).notNull(),
+  pushToConnected: boolean("push_to_connected").default(true).notNull(),
+  syncStatus: eventSyncStatusEnum("sync_status").default("pending").notNull(),
+  syncMessage: text("sync_message"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertCalendarEventSchema = createInsertSchema(calendarEvents, {
+  startsAt: z.coerce.date(),
+  endsAt: z.coerce.date(),
+  repeatUntil: z.coerce.date().nullable().optional(),
+}).omit({
+  id: true,
+  createdAt: true,
+  syncStatus: true,
+  syncMessage: true,
+});
+export type InsertCalendarEvent = z.infer<typeof insertCalendarEventSchema>;
+export type CalendarEvent = typeof calendarEvents.$inferSelect;
 
 export const projectsRelations = relations(projects, ({ one, many }) => ({
   createdBy: one(users, { fields: [projects.createdById], references: [users.id] }),
