@@ -9,8 +9,10 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { useTheme } from "@/components/theme-provider";
 import { useToast } from "@/hooks/use-toast";
+import { SiGoogle, SiGooglecalendar, SiApple } from "react-icons/si";
 import {
   Settings as SettingsIcon,
   User,
@@ -22,6 +24,7 @@ import {
   Moon,
   Mail,
   Calendar,
+  CalendarCheck,
   CreditCard,
   Loader2,
   Tag,
@@ -29,7 +32,247 @@ import {
   X,
   Camera,
   FolderKanban,
+  Trash2,
 } from "lucide-react";
+
+type CalendarConnection = {
+  id: number;
+  provider: "google" | "outlook" | "apple" | "ical";
+  externalEmail: string | null;
+  syncTasks: boolean;
+  syncChecklists: boolean;
+  status: string;
+  createdAt: string;
+};
+
+const calendarProviders = [
+  { id: "google" as const, name: "Google Calendar", icon: SiGoogle, color: "#4285F4" },
+  { id: "outlook" as const, name: "Microsoft Outlook", icon: Mail, color: "#0078D4" },
+  { id: "apple" as const, name: "Apple Calendar", icon: SiApple, color: "#000000" },
+];
+
+function ConnectedCalendarsCard() {
+  const { toast } = useToast();
+  const [openProvider, setOpenProvider] = useState<null | "google" | "outlook" | "apple">(null);
+  const [emailInput, setEmailInput] = useState("");
+  const [syncTasks, setSyncTasks] = useState(true);
+  const [syncChecklists, setSyncChecklists] = useState(false);
+
+  const { data: connections, isLoading } = useQuery<CalendarConnection[]>({
+    queryKey: ["/api/calendar-connections"],
+  });
+
+  const createConnection = useMutation({
+    mutationFn: async (data: { provider: string; externalEmail: string; syncTasks: boolean; syncChecklists: boolean }) => {
+      const res = await apiRequest("POST", "/api/calendar-connections", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar-connections"] });
+      toast({
+        title: "Calendar linked",
+        description: "We've saved your connection. Live two-way sync will activate once OAuth is enabled by your admin.",
+      });
+      setOpenProvider(null);
+      setEmailInput("");
+      setSyncTasks(true);
+      setSyncChecklists(false);
+    },
+    onError: (error: Error) => {
+      toast({ title: "Couldn't connect", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const deleteConnection = useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("DELETE", `/api/calendar-connections/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar-connections"] });
+      toast({ title: "Calendar disconnected" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const updateConnection = useMutation({
+    mutationFn: async ({ id, data }: { id: number; data: any }) => {
+      const res = await apiRequest("PATCH", `/api/calendar-connections/${id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar-connections"] });
+    },
+  });
+
+  const handleConnect = () => {
+    if (!openProvider) return;
+    if (!emailInput.trim() || !/.+@.+\..+/.test(emailInput)) {
+      toast({ title: "Enter a valid email", variant: "destructive" });
+      return;
+    }
+    createConnection.mutate({
+      provider: openProvider,
+      externalEmail: emailInput.trim(),
+      syncTasks,
+      syncChecklists,
+    });
+  };
+
+  const connectionByProvider: Record<string, CalendarConnection | undefined> = {};
+  (connections || []).forEach((c) => { connectionByProvider[c.provider] = c; });
+
+  const openProviderInfo = openProvider ? calendarProviders.find(p => p.id === openProvider) : null;
+  const OpenProviderIcon = openProviderInfo?.icon;
+
+  return (
+    <Card className="p-6" data-testid="card-connected-calendars">
+      <div className="flex items-center gap-2 mb-2">
+        <CalendarCheck className="h-5 w-5 text-primary" />
+        <h2 className="text-lg font-semibold">Connected Calendars</h2>
+      </div>
+      <p className="text-xs text-muted-foreground mb-4">
+        Link an external calendar so your Field View tasks and checklist due dates appear alongside your other appointments.
+      </p>
+
+      <div className="space-y-3">
+        {calendarProviders.map((provider) => {
+          const conn = connectionByProvider[provider.id];
+          const Icon = provider.icon;
+          return (
+            <div
+              key={provider.id}
+              className="flex items-center gap-3 p-3 rounded-md border"
+              data-testid={`row-calendar-${provider.id}`}
+            >
+              <div
+                className="h-10 w-10 rounded-md flex items-center justify-center shrink-0"
+                style={{ backgroundColor: `${provider.color}15` }}
+              >
+                <Icon className="h-5 w-5" style={{ color: provider.color }} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium">{provider.name}</p>
+                {conn ? (
+                  <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                    <p className="text-xs text-muted-foreground truncate">{conn.externalEmail}</p>
+                    <Badge variant="secondary" className="text-[10px] no-default-hover-elevate no-default-active-elevate">
+                      {conn.status === "active" ? "Connected" : "Pending sync setup"}
+                    </Badge>
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground mt-0.5">Not connected</p>
+                )}
+                {conn && (
+                  <div className="flex items-center gap-4 mt-2">
+                    <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+                      <Switch
+                        checked={conn.syncTasks}
+                        onCheckedChange={(v) => updateConnection.mutate({ id: conn.id, data: { syncTasks: v } })}
+                        data-testid={`switch-sync-tasks-${provider.id}`}
+                      />
+                      Sync tasks
+                    </label>
+                    <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+                      <Switch
+                        checked={conn.syncChecklists}
+                        onCheckedChange={(v) => updateConnection.mutate({ id: conn.id, data: { syncChecklists: v } })}
+                        data-testid={`switch-sync-checklists-${provider.id}`}
+                      />
+                      Sync checklists
+                    </label>
+                  </div>
+                )}
+              </div>
+              {conn ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => deleteConnection.mutate(conn.id)}
+                  disabled={deleteConnection.isPending}
+                  data-testid={`button-disconnect-${provider.id}`}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => { setOpenProvider(provider.id); setEmailInput(""); setSyncTasks(true); setSyncChecklists(false); }}
+                  data-testid={`button-connect-${provider.id}`}
+                >
+                  Connect
+                </Button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {isLoading && (
+        <p className="text-xs text-muted-foreground mt-3">Loading your connections...</p>
+      )}
+
+      <Dialog open={openProvider !== null} onOpenChange={(o) => { if (!o) setOpenProvider(null); }}>
+        <DialogContent data-testid="dialog-connect-calendar">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {OpenProviderIcon && openProviderInfo && (
+                <OpenProviderIcon className="h-5 w-5" style={{ color: openProviderInfo.color }} />
+              )}
+              Connect {openProviderInfo?.name}
+            </DialogTitle>
+            <DialogDescription>
+              Enter the email address of the calendar you'd like to link. We'll save your preference and surface a sync prompt the next time it's available.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Calendar email</label>
+              <Input
+                value={emailInput}
+                onChange={(e) => setEmailInput(e.target.value)}
+                type="email"
+                placeholder={openProvider === "google" ? "you@gmail.com" : openProvider === "outlook" ? "you@outlook.com" : "you@icloud.com"}
+                data-testid="input-calendar-email"
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium">Sync tasks</p>
+                  <p className="text-xs text-muted-foreground">Push task due dates as calendar events</p>
+                </div>
+                <Switch checked={syncTasks} onCheckedChange={setSyncTasks} data-testid="switch-dialog-sync-tasks" />
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium">Sync checklists</p>
+                  <p className="text-xs text-muted-foreground">Push checklist due dates as calendar events</p>
+                </div>
+                <Switch checked={syncChecklists} onCheckedChange={setSyncChecklists} data-testid="switch-dialog-sync-checklists" />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground border-l-2 border-primary/30 pl-3 py-1.5">
+              Live two-way sync uses each provider's OAuth flow and is being rolled out account-by-account. Your selection is saved so it activates automatically when ready.
+            </p>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpenProvider(null)} data-testid="button-cancel-connect">
+              Cancel
+            </Button>
+            <Button onClick={handleConnect} disabled={createConnection.isPending} data-testid="button-confirm-connect">
+              {createConnection.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save connection"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </Card>
+  );
+}
 
 function BillingCard() {
   const { user } = useAuth();
@@ -318,6 +561,8 @@ export default function SettingsPage() {
           </div>
         </div>
       </Card>
+
+      <ConnectedCalendarsCard />
 
       <TagManagerCard type="photo" title="Photo Tags" icon={Camera} />
       <TagManagerCard type="project" title="Project Tags" icon={FolderKanban} />

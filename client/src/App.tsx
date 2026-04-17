@@ -28,6 +28,7 @@ import ReportsPage from "@/pages/reports";
 import GalleryPage from "@/pages/gallery";
 import TasksPage from "@/pages/tasks";
 import AnalyticsPage from "@/pages/analytics";
+import CalendarPage from "@/pages/calendar";
 
 function AuthenticatedLayout() {
   const style = {
@@ -60,6 +61,7 @@ function AuthenticatedLayout() {
               <Route path="/checklists" component={ChecklistsPage} />
               <Route path="/reports" component={ReportsPage} />
               <Route path="/analytics" component={AnalyticsPage} />
+              <Route path="/calendar" component={CalendarPage} />
               <Route path="/map" component={MapPage} />
               <Route path="/team" component={TeamPage} />
               <Route path="/settings" component={SettingsPage} />

@@ -12,6 +12,7 @@ export const taskStatusEnum = pgEnum("task_status", ["todo", "in_progress", "don
 export const taskPriorityEnum = pgEnum("task_priority", ["low", "medium", "high"]);
 export const checklistStatusEnum = pgEnum("checklist_status", ["not_started", "in_progress", "completed"]);
 export const reportStatusEnum = pgEnum("report_status", ["draft", "submitted", "approved"]);
+export const calendarProviderEnum = pgEnum("calendar_provider", ["google", "outlook", "apple", "ical"]);
 
 export const projects = pgTable("projects", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
@@ -172,6 +173,25 @@ export const insertAccountTagSchema = createInsertSchema(accountTags).omit({
 });
 export type InsertAccountTag = z.infer<typeof insertAccountTagSchema>;
 export type AccountTag = typeof accountTags.$inferSelect;
+
+export const calendarConnections = pgTable("calendar_connections", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+  accountId: varchar("account_id").references(() => accounts.id).notNull(),
+  provider: calendarProviderEnum("provider").notNull(),
+  externalEmail: text("external_email"),
+  syncTasks: boolean("sync_tasks").default(true).notNull(),
+  syncChecklists: boolean("sync_checklists").default(false).notNull(),
+  status: text("status").default("pending").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertCalendarConnectionSchema = createInsertSchema(calendarConnections).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertCalendarConnection = z.infer<typeof insertCalendarConnectionSchema>;
+export type CalendarConnection = typeof calendarConnections.$inferSelect;
 
 export const projectsRelations = relations(projects, ({ one, many }) => ({
   createdBy: one(users, { fields: [projects.createdById], references: [users.id] }),

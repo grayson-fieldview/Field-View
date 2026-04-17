@@ -249,6 +249,117 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/calendar-connections", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const userId = req.user.id;
+      const connections = await storage.getCalendarConnections(userId);
+      res.json(connections);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch calendar connections" });
+    }
+  });
+
+  app.post("/api/calendar-connections", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const userId = req.user.id;
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const { provider, externalEmail, syncTasks, syncChecklists } = req.body;
+      if (!provider || !["google", "outlook", "apple", "ical"].includes(provider)) {
+        return res.status(400).json({ message: "Invalid provider. Must be one of: google, outlook, apple, ical" });
+      }
+      const existing = await storage.getCalendarConnections(userId);
+      if (existing.some(c => c.provider === provider)) {
+        return res.status(409).json({ message: "This calendar provider is already connected" });
+      }
+      const connection = await storage.createCalendarConnection({
+        userId,
+        accountId,
+        provider,
+        externalEmail: externalEmail || null,
+        syncTasks: syncTasks !== false,
+        syncChecklists: !!syncChecklists,
+        status: "pending",
+      });
+      res.status(201).json(connection);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create calendar connection" });
+    }
+  });
+
+  app.patch("/api/calendar-connections/:id", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      const userId = req.user.id;
+      const conn = await storage.getCalendarConnection(id);
+      if (!conn || conn.userId !== userId) return res.status(404).json({ message: "Connection not found" });
+      const { externalEmail, syncTasks, syncChecklists, status } = req.body;
+      const updateData: any = {};
+      if (externalEmail !== undefined) updateData.externalEmail = externalEmail;
+      if (syncTasks !== undefined) updateData.syncTasks = !!syncTasks;
+      if (syncChecklists !== undefined) updateData.syncChecklists = !!syncChecklists;
+      if (status !== undefined) updateData.status = status;
+      const updated = await storage.updateCalendarConnection(id, updateData);
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update calendar connection" });
+    }
+  });
+
+  app.delete("/api/calendar-connections/:id", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      const userId = req.user.id;
+      const conn = await storage.getCalendarConnection(id);
+      if (!conn || conn.userId !== userId) return res.status(404).json({ message: "Connection not found" });
+      await storage.deleteCalendarConnection(id);
+      res.json({ message: "Disconnected" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete calendar connection" });
+    }
+  });
+
+  app.get("/api/calendar/events", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const allTasks = await storage.getAllTasks(accountId);
+      const allChecklists = await storage.getAllChecklists(accountId);
+      const projectsList = await storage.getProjects(accountId);
+      const colorByProject: Record<number, string> = {};
+      projectsList.forEach(p => { colorByProject[p.id] = p.color || "#F09000"; });
+      const events = [
+        ...allTasks.filter(t => t.dueDate).map(t => ({
+          id: `task-${t.id}`,
+          type: "task" as const,
+          title: t.title,
+          date: t.dueDate,
+          status: t.status,
+          priority: t.priority,
+          projectId: t.projectId,
+          projectName: t.project?.name || "",
+          color: colorByProject[t.projectId] || "#F09000",
+          assignedTo: t.assignedTo ? `${t.assignedTo.firstName || ""} ${t.assignedTo.lastName || ""}`.trim() : null,
+        })),
+        ...allChecklists.filter(c => c.dueDate).map(c => ({
+          id: `checklist-${c.id}`,
+          type: "checklist" as const,
+          title: c.title,
+          date: c.dueDate,
+          status: c.status,
+          priority: null,
+          projectId: c.projectId,
+          projectName: c.project?.name || "",
+          color: colorByProject[c.projectId] || "#267D32",
+          assignedTo: c.assignedTo ? `${c.assignedTo.firstName || ""} ${c.assignedTo.lastName || ""}`.trim() : null,
+        })),
+      ];
+      res.json(events);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch calendar events" });
+    }
+  });
+
   app.patch("/api/media/:id", requireActiveSubscription, async (req: any, res) => {
     try {
       const mediaId = parseInt(req.params.id as string);

@@ -24,6 +24,7 @@ import {
   ClipboardCheck,
   FileBarChart,
   BarChart3,
+  CalendarDays,
 } from "lucide-react";
 import { useLocation, Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -38,6 +39,7 @@ const navItems = [
   { title: "Checklists", url: "/checklists", icon: ClipboardCheck, roles: null },
   { title: "Reports", url: "/reports", icon: FileBarChart, roles: null },
   { title: "Analytics", url: "/analytics", icon: BarChart3, roles: null },
+  { title: "Calendar", url: "/calendar", icon: CalendarDays, roles: null },
   { title: "Map", url: "/map", icon: MapPin, roles: null },
   { title: "Team", url: "/team", icon: Users, roles: ["admin", "manager"] },
   { title: "Settings", url: "/settings", icon: Settings, roles: null },
