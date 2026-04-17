@@ -28,6 +28,22 @@ export function log(message: string, source = "express") {
   console.log(`${formattedTime} [${source}] ${message}`);
 }
 
+async function ensureAuthColumns() {
+  try {
+    const { pool } = await import("./db");
+    await pool.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider varchar DEFAULT 'local';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id varchar;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS microsoft_id varchar;
+      CREATE UNIQUE INDEX IF NOT EXISTS users_google_id_unique ON users(google_id) WHERE google_id IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS users_microsoft_id_unique ON users(microsoft_id) WHERE microsoft_id IS NOT NULL;
+    `);
+    console.log("Auth columns verified");
+  } catch (e: any) {
+    console.error("Failed to ensure auth columns:", e.message);
+  }
+}
+
 async function initStripe() {
   let databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
@@ -129,6 +145,7 @@ async function handleSubscriptionEvent(event: any) {
 }
 
 (async () => {
+  await ensureAuthColumns();
   await initStripe();
 
   app.post(
