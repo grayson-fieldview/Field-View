@@ -11,12 +11,14 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogClose } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { AddressAutocomplete } from "@/components/address-autocomplete";
 import { useToast } from "@/hooks/use-toast";
 import {
   ChevronLeft, ChevronRight, ClipboardList, ClipboardCheck, Calendar as CalendarIcon,
-  Plus, X, Users, Clock, Repeat, MapPin, AlignLeft, FolderKanban, Loader2, RefreshCw, AlertCircle, Trash2,
+  Plus, X, Users, Clock, Repeat, MapPin, AlignLeft, FolderKanban, Loader2, RefreshCw, AlertCircle, Trash2, Check, ChevronsUpDown,
 } from "lucide-react";
 
 type CalendarEventItem = {
@@ -40,7 +42,7 @@ type CalendarEventItem = {
   syncMessage?: string | null;
 };
 
-type ProjectLite = { id: number; name: string; color: string | null };
+type ProjectLite = { id: number; name: string; color: string | null; address?: string | null };
 
 const statusLabels: Record<string, string> = {
   todo: "To Do",
@@ -105,6 +107,76 @@ const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
 type ConnectionLite = { id: number; provider: string; status: string };
+
+function ProjectCombobox({
+  projects,
+  value,
+  onChange,
+}: {
+  projects: ProjectLite[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = value === "none" ? null : projects.find(p => String(p.id) === value);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          role="combobox"
+          className="min-w-[240px] justify-between font-normal"
+          data-testid="select-event-project"
+        >
+          {selected ? (
+            <span className="flex items-center gap-2 truncate">
+              <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: selected.color || "#F09000" }} />
+              <span className="truncate">{selected.name}</span>
+            </span>
+          ) : (
+            <span className="text-muted-foreground">Link to a project (optional)</span>
+          )}
+          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[280px] p-0" align="start">
+        <Command>
+          <CommandInput placeholder="Search projects..." data-testid="input-project-search" />
+          <CommandList>
+            <CommandEmpty>
+              {projects.length === 0 ? "No projects yet. Create one first." : "No matching projects."}
+            </CommandEmpty>
+            <CommandGroup>
+              <CommandItem
+                value="no project"
+                onSelect={() => { onChange("none"); setOpen(false); }}
+                data-testid="option-project-none"
+              >
+                <Check className={`mr-2 h-4 w-4 ${value === "none" ? "opacity-100" : "opacity-0"}`} />
+                <span className="text-muted-foreground">No project</span>
+              </CommandItem>
+              {projects.map((p) => (
+                <CommandItem
+                  key={p.id}
+                  value={`${p.name} ${p.address || ""}`}
+                  onSelect={() => { onChange(String(p.id)); setOpen(false); }}
+                  data-testid={`option-project-${p.id}`}
+                >
+                  <Check className={`mr-2 h-4 w-4 ${String(p.id) === value ? "opacity-100" : "opacity-0"}`} />
+                  <span className="h-2.5 w-2.5 rounded-full mr-2 shrink-0" style={{ backgroundColor: p.color || "#F09000" }} />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm">{p.name}</p>
+                    {p.address && <p className="truncate text-xs text-muted-foreground">{p.address}</p>}
+                  </div>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 function NewEventDialog({
   open,
@@ -205,22 +277,16 @@ function NewEventDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) reset(); onOpenChange(o); }}>
-      <DialogContent className="max-w-2xl p-0 gap-0 overflow-hidden" data-testid="dialog-new-event">
+      <DialogContent
+        className="max-w-2xl p-0 gap-0 overflow-hidden [&>button]:top-1/2 [&>button]:-translate-y-1/2 [&>button]:translate-x-0 [&>button]:right-5 [&>button]:text-white [&>button]:opacity-90 [&>button:hover]:opacity-100 [&>button]:focus:ring-white"
+        data-testid="dialog-new-event"
+      >
         <div className="bg-primary px-5 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2 text-primary-foreground">
             <CalendarIcon className="h-5 w-5" />
             <DialogTitle className="text-primary-foreground text-base font-semibold">New event</DialogTitle>
           </div>
-          <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="ghost"
-              className="text-primary-foreground hover:bg-white/10"
-              onClick={() => { reset(); onOpenChange(false); }}
-              data-testid="button-discard-event"
-            >
-              <Trash2 className="h-4 w-4 mr-1" /> Discard
-            </Button>
+          <div className="flex items-center gap-3 mr-8">
             <Button
               size="sm"
               className="bg-white text-primary hover:bg-white/90"
@@ -340,28 +406,33 @@ function NewEventDialog({
           </div>
 
           <div className="flex items-center gap-3">
-            <MapPin className="h-4 w-4 text-muted-foreground shrink-0" />
-            <Input
-              value={location}
-              onChange={(e) => setLocation(e.target.value)}
-              placeholder="Add a location"
-              data-testid="input-event-location"
+            <FolderKanban className="h-4 w-4 text-muted-foreground shrink-0" />
+            <ProjectCombobox
+              projects={projects}
+              value={projectId}
+              onChange={(id) => {
+                setProjectId(id);
+                if (id !== "none") {
+                  const p = projects.find(pp => String(pp.id) === id);
+                  if (p?.address && !location.trim()) {
+                    setLocation(p.address);
+                  }
+                }
+              }}
             />
           </div>
 
           <div className="flex items-center gap-3">
-            <FolderKanban className="h-4 w-4 text-muted-foreground shrink-0" />
-            <Select value={projectId} onValueChange={setProjectId}>
-              <SelectTrigger className="w-auto min-w-[200px]" data-testid="select-event-project">
-                <SelectValue placeholder="Link to a project (optional)" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">No project</SelectItem>
-                {projects.map(p => (
-                  <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <MapPin className="h-4 w-4 text-muted-foreground shrink-0" />
+            <div className="flex-1 min-w-0">
+              <AddressAutocomplete
+                value={location}
+                onTextChange={setLocation}
+                onChange={(r) => setLocation(r.address)}
+                placeholder="Add a location"
+                data-testid="input-event-location"
+              />
+            </div>
           </div>
 
           <div className="flex items-start gap-3">
