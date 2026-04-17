@@ -280,6 +280,24 @@ function NewEventDialog({
       <DialogContent
         className="max-w-2xl p-0 gap-0 overflow-hidden border-0 [&>button]:hidden"
         data-testid="dialog-new-event"
+        onPointerDownOutside={(e) => {
+          const t = e.target as HTMLElement;
+          if (t.closest(".pac-container") || t.closest("[data-radix-popper-content-wrapper]")) {
+            e.preventDefault();
+          }
+        }}
+        onInteractOutside={(e) => {
+          const t = e.target as HTMLElement;
+          if (t.closest(".pac-container") || t.closest("[data-radix-popper-content-wrapper]")) {
+            e.preventDefault();
+          }
+        }}
+        onFocusOutside={(e) => {
+          const t = e.target as HTMLElement;
+          if (t.closest(".pac-container") || t.closest("[data-radix-popper-content-wrapper]")) {
+            e.preventDefault();
+          }
+        }}
       >
         <div className="bg-primary px-5 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2 text-primary-foreground">
