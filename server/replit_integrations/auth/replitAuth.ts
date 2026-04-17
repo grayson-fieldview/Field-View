@@ -1,14 +1,100 @@
 import passport from "passport";
 import { Strategy as LocalStrategy } from "passport-local";
+import { Strategy as GoogleStrategy } from "passport-google-oauth20";
+// @ts-ignore - no types published for passport-microsoft
+import { Strategy as MicrosoftStrategy } from "passport-microsoft";
 import session from "express-session";
-import type { Express, RequestHandler } from "express";
+import type { Express, RequestHandler, Request } from "express";
 import connectPg from "connect-pg-simple";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { authStorage } from "./storage";
 import { db, pool } from "../../db";
 import { eq, and } from "drizzle-orm";
-import { passwordResetTokens, accounts, invitations } from "@shared/models/auth";
+import { passwordResetTokens, accounts, invitations, type User } from "@shared/models/auth";
+
+function getBaseUrl(req?: Request) {
+  if (process.env.OAUTH_BASE_URL) return process.env.OAUTH_BASE_URL;
+  if (process.env.REPLIT_DOMAINS) {
+    const first = process.env.REPLIT_DOMAINS.split(",")[0].trim();
+    return `https://${first}`;
+  }
+  if (req) return `${req.protocol}://${req.get("host")}`;
+  return "http://localhost:5000";
+}
+
+async function findOrCreateOAuthUser(opts: {
+  provider: "google" | "microsoft";
+  providerId: string;
+  email: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  profileImageUrl?: string | null;
+  inviteToken?: string | null;
+}): Promise<User> {
+  const providerIdField = opts.provider === "google" ? "googleId" : "microsoftId";
+
+  // 1. Match by provider id (returning user)
+  const byProvider = opts.provider === "google"
+    ? await authStorage.getUserByGoogleId(opts.providerId)
+    : await authStorage.getUserByMicrosoftId(opts.providerId);
+  if (byProvider) return byProvider;
+
+  // 2. Match by email — link the provider id to the existing account
+  if (opts.email) {
+    const existing = await authStorage.getUserByEmail(opts.email);
+    if (existing) {
+      const updated = await authStorage.updateUser(existing.id, {
+        [providerIdField]: opts.providerId,
+        firstName: existing.firstName || opts.firstName || null,
+        lastName: existing.lastName || opts.lastName || null,
+        profileImageUrl: existing.profileImageUrl || opts.profileImageUrl || null,
+      } as any);
+      return updated!;
+    }
+  }
+
+  // 3. Brand new user. Honor invite token if present, else create a new team.
+  if (!opts.email) {
+    throw new Error("Email permission was not granted by the OAuth provider");
+  }
+
+  let accountId: string;
+  let role: string;
+
+  if (opts.inviteToken) {
+    const [invitation] = await db.select().from(invitations).where(
+      and(eq(invitations.token, opts.inviteToken), eq(invitations.status, "pending"))
+    );
+    if (!invitation || new Date() > invitation.expiresAt) {
+      throw new Error("Invalid or expired invitation");
+    }
+    if (invitation.email.toLowerCase() !== opts.email.toLowerCase()) {
+      throw new Error("Email does not match invitation");
+    }
+    accountId = invitation.accountId;
+    role = invitation.role;
+    await db.update(invitations).set({ status: "accepted" }).where(eq(invitations.id, invitation.id));
+  } else {
+    const accountName = [opts.firstName, opts.lastName].filter(Boolean).join(" ") || opts.email;
+    const [account] = await db.insert(accounts).values({ name: accountName + "'s Team" }).returning();
+    accountId = account.id;
+    role = "admin";
+  }
+
+  return authStorage.upsertUser({
+    email: opts.email,
+    firstName: opts.firstName || null,
+    lastName: opts.lastName || null,
+    profileImageUrl: opts.profileImageUrl || null,
+    authProvider: opts.provider,
+    [providerIdField]: opts.providerId,
+    role,
+    accountId,
+    subscriptionStatus: "none",
+    trialEndsAt: null,
+  } as any);
+}
 
 export function getSession() {
   const sessionTtlSeconds = 7 * 24 * 60 * 60;
@@ -59,6 +145,76 @@ export async function setupAuth(app: Express) {
       }
     )
   );
+
+  // Google OAuth strategy (only register if credentials are present)
+  if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+    passport.use(
+      new GoogleStrategy(
+        {
+          clientID: process.env.GOOGLE_CLIENT_ID,
+          clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+          callbackURL: `${getBaseUrl()}/api/auth/google/callback`,
+          passReqToCallback: true,
+        },
+        async (req: any, _accessToken: string, _refreshToken: string, profile: any, done: any) => {
+          try {
+            const email = profile.emails?.[0]?.value || null;
+            const inviteToken = (req.session as any)?.oauthInviteToken || null;
+            const user = await findOrCreateOAuthUser({
+              provider: "google",
+              providerId: profile.id,
+              email,
+              firstName: profile.name?.givenName || null,
+              lastName: profile.name?.familyName || null,
+              profileImageUrl: profile.photos?.[0]?.value || null,
+              inviteToken,
+            });
+            return done(null, user);
+          } catch (err: any) {
+            return done(null, false, { message: err.message || "Google sign-in failed" });
+          }
+        }
+      )
+    );
+  }
+
+  // Microsoft OAuth strategy (only register if credentials are present)
+  if (process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET) {
+    passport.use(
+      new MicrosoftStrategy(
+        {
+          clientID: process.env.MICROSOFT_CLIENT_ID,
+          clientSecret: process.env.MICROSOFT_CLIENT_SECRET,
+          callbackURL: `${getBaseUrl()}/api/auth/microsoft/callback`,
+          scope: ["user.read", "openid", "profile", "email"],
+          tenant: "common",
+          passReqToCallback: true,
+        },
+        async (req: any, _accessToken: string, _refreshToken: string, profile: any, done: any) => {
+          try {
+            const email =
+              profile.emails?.[0]?.value ||
+              profile._json?.mail ||
+              profile._json?.userPrincipalName ||
+              null;
+            const inviteToken = (req.session as any)?.oauthInviteToken || null;
+            const user = await findOrCreateOAuthUser({
+              provider: "microsoft",
+              providerId: profile.id,
+              email,
+              firstName: profile.name?.givenName || profile._json?.givenName || null,
+              lastName: profile.name?.familyName || profile._json?.surname || null,
+              profileImageUrl: null,
+              inviteToken,
+            });
+            return done(null, user);
+          } catch (err: any) {
+            return done(null, false, { message: err.message || "Microsoft sign-in failed" });
+          }
+        }
+      )
+    );
+  }
 
   passport.serializeUser((user: any, cb) => cb(null, user.id));
   passport.deserializeUser(async (id: string, cb) => {
@@ -168,6 +324,68 @@ export async function setupAuth(app: Express) {
         return res.json(safeUser);
       });
     })(req, res, next);
+  });
+
+  // ----- Google OAuth routes -----
+  app.get("/api/auth/google", (req, res, next) => {
+    if (!process.env.GOOGLE_CLIENT_ID) {
+      return res.redirect("/login?error=google_not_configured");
+    }
+    const inviteToken = (req.query.invite as string) || null;
+    (req.session as any).oauthInviteToken = inviteToken;
+    passport.authenticate("google", {
+      scope: ["profile", "email"],
+      prompt: "select_account",
+    })(req, res, next);
+  });
+
+  app.get("/api/auth/google/callback", (req, res, next) => {
+    passport.authenticate("google", (err: any, user: any, info: any) => {
+      if (err || !user) {
+        const msg = encodeURIComponent(info?.message || "Google sign-in failed");
+        return res.redirect(`/login?error=${msg}`);
+      }
+      req.login(user, (loginErr) => {
+        if (loginErr) return res.redirect(`/login?error=session`);
+        delete (req.session as any).oauthInviteToken;
+        res.redirect("/");
+      });
+    })(req, res, next);
+  });
+
+  // ----- Microsoft OAuth routes -----
+  app.get("/api/auth/microsoft", (req, res, next) => {
+    if (!process.env.MICROSOFT_CLIENT_ID) {
+      return res.redirect("/login?error=microsoft_not_configured");
+    }
+    const inviteToken = (req.query.invite as string) || null;
+    (req.session as any).oauthInviteToken = inviteToken;
+    passport.authenticate("microsoft", {
+      scope: ["user.read", "openid", "profile", "email"],
+      prompt: "select_account",
+    } as any)(req, res, next);
+  });
+
+  app.get("/api/auth/microsoft/callback", (req, res, next) => {
+    passport.authenticate("microsoft", (err: any, user: any, info: any) => {
+      if (err || !user) {
+        const msg = encodeURIComponent(info?.message || "Microsoft sign-in failed");
+        return res.redirect(`/login?error=${msg}`);
+      }
+      req.login(user, (loginErr) => {
+        if (loginErr) return res.redirect(`/login?error=session`);
+        delete (req.session as any).oauthInviteToken;
+        res.redirect("/");
+      });
+    })(req, res, next);
+  });
+
+  // Tells the frontend which OAuth providers are enabled
+  app.get("/api/auth/providers", (_req, res) => {
+    res.json({
+      google: !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
+      microsoft: !!(process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET),
+    });
   });
 
   app.post("/api/logout", (req, res) => {

@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Eye, EyeOff, Loader2, CheckCircle2, Users } from "lucide-react";
+import { SocialAuthButtons } from "./login";
 import faviconImg from "@assets/Favicon-01_1772067008525.png";
 
 export default function RegisterPage() {
@@ -136,6 +137,7 @@ export default function RegisterPage() {
               </div>
             </div>
           )}
+          <SocialAuthButtons inviteToken={inviteToken} />
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">

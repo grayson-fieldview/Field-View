@@ -1,13 +1,63 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { Eye, EyeOff, Loader2 } from "lucide-react";
+import { SiGoogle } from "react-icons/si";
+import { Mail } from "lucide-react";
 import faviconImg from "@assets/Favicon-01_1772067008525.png";
+
+type Providers = { google: boolean; microsoft: boolean };
+
+export function SocialAuthButtons({ inviteToken }: { inviteToken?: string | null }) {
+  const { data: providers } = useQuery<Providers>({
+    queryKey: ["/api/auth/providers"],
+  });
+  if (!providers || (!providers.google && !providers.microsoft)) return null;
+  const qs = inviteToken ? `?invite=${encodeURIComponent(inviteToken)}` : "";
+  return (
+    <div className="space-y-2">
+      {providers.google && (
+        <Button
+          asChild
+          variant="outline"
+          className="w-full"
+          data-testid="button-google-auth"
+        >
+          <a href={`/api/auth/google${qs}`}>
+            <SiGoogle className="mr-2 h-4 w-4" />
+            Continue with Google
+          </a>
+        </Button>
+      )}
+      {providers.microsoft && (
+        <Button
+          asChild
+          variant="outline"
+          className="w-full"
+          data-testid="button-microsoft-auth"
+        >
+          <a href={`/api/auth/microsoft${qs}`}>
+            <Mail className="mr-2 h-4 w-4" />
+            Continue with Microsoft
+          </a>
+        </Button>
+      )}
+      <div className="relative my-2">
+        <div className="absolute inset-0 flex items-center">
+          <span className="w-full border-t border-border" />
+        </div>
+        <div className="relative flex justify-center text-xs uppercase">
+          <span className="bg-card px-2 text-muted-foreground">or</span>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function LoginPage() {
   const [, setLocation] = useLocation();
@@ -16,6 +66,25 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+
+  // Surface OAuth callback errors via toast and clean up the URL
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const err = params.get("error");
+    if (err) {
+      const map: Record<string, string> = {
+        google_not_configured: "Google sign-in isn't set up yet.",
+        microsoft_not_configured: "Microsoft sign-in isn't set up yet.",
+        session: "We couldn't start your session. Please try again.",
+      };
+      toast({
+        title: "Sign-in failed",
+        description: map[err] || decodeURIComponent(err),
+        variant: "destructive",
+      });
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, [toast]);
 
   const loginMutation = useMutation({
     mutationFn: async () => {
@@ -61,6 +130,7 @@ export default function LoginPage() {
           <CardDescription>Sign in to your account to continue</CardDescription>
         </CardHeader>
         <CardContent>
+          <SocialAuthButtons />
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
