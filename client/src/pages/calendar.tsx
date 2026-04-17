@@ -278,7 +278,7 @@ function NewEventDialog({
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) reset(); onOpenChange(o); }}>
       <DialogContent
-        className="max-w-2xl p-0 gap-0 overflow-hidden [&>button]:top-1/2 [&>button]:-translate-y-1/2 [&>button]:translate-x-0 [&>button]:right-5 [&>button]:text-white [&>button]:opacity-90 [&>button:hover]:opacity-100 [&>button]:focus:ring-white"
+        className="max-w-2xl p-0 gap-0 overflow-hidden border-0 [&>button]:hidden"
         data-testid="dialog-new-event"
       >
         <div className="bg-primary px-5 py-3 flex items-center justify-between">
@@ -286,7 +286,7 @@ function NewEventDialog({
             <CalendarIcon className="h-5 w-5" />
             <DialogTitle className="text-primary-foreground text-base font-semibold">New event</DialogTitle>
           </div>
-          <div className="flex items-center gap-3 mr-8">
+          <div className="flex items-center gap-3">
             <Button
               size="sm"
               className="bg-white text-primary hover:bg-white/90"
@@ -296,6 +296,15 @@ function NewEventDialog({
             >
               {createEvent.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
             </Button>
+            <DialogClose asChild>
+              <button
+                className="text-white opacity-90 hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-white rounded-sm"
+                aria-label="Close"
+                data-testid="button-close-event"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </DialogClose>
           </div>
         </div>
 
