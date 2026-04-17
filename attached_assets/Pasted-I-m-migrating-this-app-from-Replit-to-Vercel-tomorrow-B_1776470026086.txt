@@ -1,0 +1,53 @@
+I'm migrating this app from Replit to Vercel tomorrow. Before I do, I need you to audit the entire codebase and prepare it for a smooth Vercel deployment. Vercel is a serverless platform so some things work differently than Replit. Please do the following:
+1. Audit and report back on compatibility issues:
+
+Is the Express server structured in a way that works on Vercel? (Vercel expects an Express app exported as a handler, not a long-running server with app.listen())
+Are there any Replit-specific packages, integrations, or connectors in use? (Replit DB, Replit Auth, Replit Storage, etc.)
+Are there any WebSocket connections, long-running processes, cron jobs, or background workers that won't work in Vercel's serverless model?
+Are there any hardcoded URLs pointing to Replit domains (.replit.app, .repl.co, replit.com)?
+Are there any file system writes to local disk? (Vercel has a read-only filesystem except /tmp)
+
+2. Environment variables audit:
+
+List every environment variable the app uses
+Flag any that are Replit-specific and need to be replaced
+Make sure secrets are accessed via process.env.X consistently, not hardcoded
+
+3. Database connection audit:
+
+Confirm the app connects to AWS RDS using DATABASE_URL env var
+Verify connection pooling is configured correctly — serverless environments open many short-lived connections, so we need either pg with a sensible pool size OR plan to add AWS RDS Proxy later
+Make sure there are no connection leaks
+
+4. Session handling:
+
+The app uses session cookies via express-session. Confirm what session store is being used. If it's in-memory (MemoryStore), that WILL NOT WORK on Vercel because each serverless function invocation is isolated. We need to move sessions to a persistent store — either the PostgreSQL database (using connect-pg-simple) or Redis.
+If session store needs to change, make that change now.
+
+5. Build configuration:
+
+Check package.json has proper build and start scripts
+Ensure there's a vercel.json file (or let me know we need to create one)
+Confirm the framework is detected correctly (likely a Vite + Express fullstack setup)
+
+6. CORS configuration:
+
+The app currently runs on one domain. After migration, it'll be at app.field-view.com. Make sure CORS is configured to accept requests from the new domain AND still work during the migration period.
+
+7. Static assets:
+
+Make sure the frontend build output goes to the right folder (dist/ or build/)
+Make sure static assets (images, favicon, etc.) are served correctly
+
+8. File uploads:
+
+Confirm photo uploads go directly to AWS S3 (not through Vercel's filesystem)
+If uploads currently pass through the server, we need presigned URL uploads for Vercel
+
+Deliverable: Give me a detailed report of:
+
+What's compatible and ready to deploy
+What needs changes before deployment (with fixes applied)
+What I'll need to configure manually in Vercel (env vars, domain, etc.)
+
+Do NOT push any changes that could break the live app without confirming with me first. Work in the codebase and report findings before making destructive changes.
