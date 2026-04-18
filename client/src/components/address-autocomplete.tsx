@@ -61,12 +61,17 @@ export function AddressAutocomplete({
       });
     };
 
+    const preventBlur = (e: MouseEvent) => {
+      e.preventDefault();
+    };
+
     const observer = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
         for (const node of Array.from(mutation.addedNodes)) {
           if (node instanceof HTMLElement && node.classList.contains("pac-container")) {
             node.style.position = "fixed";
             node.style.zIndex = "10000";
+            node.addEventListener("mousedown", preventBlur);
             repositionPac();
 
             const styleObs = new MutationObserver(() => {
