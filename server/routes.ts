@@ -1741,6 +1741,7 @@ export async function registerRoutes(
         success_url: `${baseUrl}/?checkout=success`,
         cancel_url: `${baseUrl}/?checkout=canceled`,
         payment_method_collection: "always",
+        allow_promotion_codes: true,
       };
       if (!hasSubscription) {
         sessionConfig.subscription_data = {
