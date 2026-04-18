@@ -9,7 +9,6 @@ import { WebhookHandlers } from "./webhookHandlers";
 import { authStorage } from "./replit_integrations/auth/storage";
 
 const app = express();
-const httpServer = createServer(app);
 
 declare module "http" {
   interface IncomingMessage {
@@ -28,7 +27,17 @@ export function log(message: string, source = "express") {
   console.log(`${formattedTime} [${source}] ${message}`);
 }
 
-async function ensureAuthColumns() {
+function getPublicBaseUrl(): string | null {
+  if (process.env.OAUTH_BASE_URL) return process.env.OAUTH_BASE_URL.replace(/\/$/, "");
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
+  if (process.env.REPLIT_DOMAINS) {
+    const first = process.env.REPLIT_DOMAINS.split(",")[0]?.trim();
+    if (first) return `https://${first}`;
+  }
+  return null;
+}
+
+export async function ensureAuthColumns() {
   try {
     const { pool } = await import("./db");
     await pool.query(`
@@ -44,7 +53,7 @@ async function ensureAuthColumns() {
   }
 }
 
-async function initStripe() {
+export async function initStripe() {
   let databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
     throw new Error('DATABASE_URL environment variable is required for Stripe integration.');
@@ -62,14 +71,18 @@ async function initStripe() {
     const stripeSync = await getStripeSync();
 
     console.log('Setting up managed webhook...');
-    const webhookBaseUrl = `https://${process.env.REPLIT_DOMAINS?.split(',')[0]}`;
-    try {
-      const result = await stripeSync.findOrCreateManagedWebhook(
-        `${webhookBaseUrl}/api/stripe/webhook`
-      );
-      console.log(`Webhook configured: ${result?.webhook?.url || 'setup complete'}`);
-    } catch (webhookError: any) {
-      console.warn('Webhook setup warning:', webhookError.message);
+    const baseUrl = getPublicBaseUrl();
+    if (baseUrl) {
+      try {
+        const result = await stripeSync.findOrCreateManagedWebhook(
+          `${baseUrl}/api/stripe/webhook`
+        );
+        console.log(`Webhook configured: ${result?.webhook?.url || 'setup complete'}`);
+      } catch (webhookError: any) {
+        console.warn('Webhook setup warning:', webhookError.message);
+      }
+    } else {
+      console.warn('No public base URL detected; skipping managed webhook setup. Set OAUTH_BASE_URL or VERCEL_URL.');
     }
 
     console.log('Syncing Stripe data...');
@@ -85,148 +98,7 @@ async function initStripe() {
   }
 }
 
-async function handleSubscriptionEvent(event: any) {
-  try {
-    const type = event.type;
-    const data = event.data?.object;
-    if (!data) return;
-
-    if (type === "checkout.session.completed") {
-      const customerId = data.customer;
-      const subscriptionId = data.subscription;
-      if (customerId && subscriptionId) {
-        const user = await authStorage.getUserByStripeCustomerId(customerId);
-        if (user) {
-          let appStatus = "trialing";
-          try {
-            const stripe = await getUncachableStripeClient();
-            const sub = await stripe.subscriptions.retrieve(subscriptionId as string);
-            if (sub.status === "active") appStatus = "active";
-            else if (sub.status === "trialing") appStatus = "trialing";
-            else if (sub.status === "past_due") appStatus = "past_due";
-          } catch (e) {}
-          await authStorage.updateUser(user.id, {
-            stripeSubscriptionId: subscriptionId as string,
-            subscriptionStatus: appStatus,
-          });
-          console.log(`User ${user.id} subscription updated to ${appStatus} via checkout`);
-        }
-      }
-    } else if (type === "customer.subscription.updated") {
-      const customerId = data.customer;
-      const status = data.status;
-      const user = await authStorage.getUserByStripeCustomerId(customerId);
-      if (user) {
-        let appStatus = "none";
-        if (status === "active") appStatus = "active";
-        else if (status === "trialing") appStatus = "trialing";
-        else if (status === "past_due") appStatus = "past_due";
-        else if (status === "canceled" || status === "unpaid") appStatus = "canceled";
-
-        await authStorage.updateUser(user.id, {
-          subscriptionStatus: appStatus,
-          stripeSubscriptionId: data.id,
-        });
-        console.log(`User ${user.id} subscription updated to ${appStatus}`);
-      }
-    } else if (type === "customer.subscription.deleted") {
-      const customerId = data.customer;
-      const user = await authStorage.getUserByStripeCustomerId(customerId);
-      if (user) {
-        await authStorage.updateUser(user.id, {
-          subscriptionStatus: "canceled",
-        });
-        console.log(`User ${user.id} subscription canceled`);
-      }
-    }
-  } catch (err: any) {
-    console.error("Error handling subscription event:", err.message);
-  }
-}
-
-(async () => {
-  await ensureAuthColumns();
-  await initStripe();
-
-  app.post(
-    '/api/stripe/webhook',
-    express.raw({ type: 'application/json' }),
-    async (req, res) => {
-      const signature = req.headers['stripe-signature'];
-
-      if (!signature) {
-        return res.status(400).json({ error: 'Missing stripe-signature' });
-      }
-
-      try {
-        const sig = Array.isArray(signature) ? signature[0] : signature;
-
-        if (!Buffer.isBuffer(req.body)) {
-          console.error('STRIPE WEBHOOK ERROR: req.body is not a Buffer.');
-          return res.status(500).json({ error: 'Webhook processing error' });
-        }
-
-        await WebhookHandlers.processWebhook(req.body as Buffer, sig);
-
-        try {
-          const stripe = await getUncachableStripeClient();
-          const event = stripe.webhooks.constructEvent(req.body, sig, '');
-          await handleSubscriptionEvent(event);
-        } catch (eventErr: any) {
-          try {
-            const rawEvent = JSON.parse(req.body.toString());
-            await handleSubscriptionEvent(rawEvent);
-          } catch (parseErr) {
-          }
-        }
-
-        res.status(200).json({ received: true });
-      } catch (error: any) {
-        console.error('Webhook error:', error.message);
-        res.status(400).json({ error: 'Webhook processing error' });
-      }
-    }
-  );
-
-  app.use(
-    express.json({
-      verify: (req, _res, buf) => {
-        req.rawBody = buf;
-      },
-    }),
-  );
-
-  app.use(express.urlencoded({ extended: false }));
-
-  app.use((req, res, next) => {
-    const start = Date.now();
-    const path = req.path;
-    let capturedJsonResponse: Record<string, any> | undefined = undefined;
-
-    const originalResJson = res.json;
-    res.json = function (bodyJson, ...args) {
-      capturedJsonResponse = bodyJson;
-      return originalResJson.apply(res, [bodyJson, ...args]);
-    };
-
-    res.on("finish", () => {
-      const duration = Date.now() - start;
-      if (path.startsWith("/api")) {
-        let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-        if (capturedJsonResponse) {
-          logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
-        }
-
-        log(logLine);
-      }
-    });
-
-    next();
-  });
-
-  await registerRoutes(httpServer, app);
-  await seedDatabase();
-
+export async function bootstrapAdminAndOrphans() {
   try {
     const bcryptMod = await import("bcryptjs");
     const { db } = await import("./db");
@@ -292,36 +164,194 @@ async function handleSubscriptionEvent(event: any) {
   } catch (e) {
     console.error("Account setup skipped:", e);
   }
+}
 
-  app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
-    const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
+async function handleSubscriptionEvent(event: any) {
+  try {
+    const type = event.type;
+    const data = event.data?.object;
+    if (!data) return;
 
-    console.error("Internal Server Error:", err);
+    if (type === "checkout.session.completed") {
+      const customerId = data.customer;
+      const subscriptionId = data.subscription;
+      if (customerId && subscriptionId) {
+        const user = await authStorage.getUserByStripeCustomerId(customerId);
+        if (user) {
+          let appStatus = "trialing";
+          try {
+            const stripe = await getUncachableStripeClient();
+            const sub = await stripe.subscriptions.retrieve(subscriptionId as string);
+            if (sub.status === "active") appStatus = "active";
+            else if (sub.status === "trialing") appStatus = "trialing";
+            else if (sub.status === "past_due") appStatus = "past_due";
+          } catch (e) {}
+          await authStorage.updateUser(user.id, {
+            stripeSubscriptionId: subscriptionId as string,
+            subscriptionStatus: appStatus,
+          });
+          console.log(`User ${user.id} subscription updated to ${appStatus} via checkout`);
+        }
+      }
+    } else if (type === "customer.subscription.updated") {
+      const customerId = data.customer;
+      const status = data.status;
+      const user = await authStorage.getUserByStripeCustomerId(customerId);
+      if (user) {
+        let appStatus = "none";
+        if (status === "active") appStatus = "active";
+        else if (status === "trialing") appStatus = "trialing";
+        else if (status === "past_due") appStatus = "past_due";
+        else if (status === "canceled" || status === "unpaid") appStatus = "canceled";
 
-    if (res.headersSent) {
-      return next(err);
+        await authStorage.updateUser(user.id, {
+          subscriptionStatus: appStatus,
+          stripeSubscriptionId: data.id,
+        });
+        console.log(`User ${user.id} subscription updated to ${appStatus}`);
+      }
+    } else if (type === "customer.subscription.deleted") {
+      const customerId = data.customer;
+      const user = await authStorage.getUserByStripeCustomerId(customerId);
+      if (user) {
+        await authStorage.updateUser(user.id, {
+          subscriptionStatus: "canceled",
+        });
+        console.log(`User ${user.id} subscription canceled`);
+      }
+    }
+  } catch (err: any) {
+    console.error("Error handling subscription event:", err.message);
+  }
+}
+
+app.post(
+  '/api/stripe/webhook',
+  express.raw({ type: 'application/json' }),
+  async (req, res) => {
+    const signature = req.headers['stripe-signature'];
+
+    if (!signature) {
+      return res.status(400).json({ error: 'Missing stripe-signature' });
     }
 
-    return res.status(status).json({ message });
+    try {
+      const sig = Array.isArray(signature) ? signature[0] : signature;
+
+      if (!Buffer.isBuffer(req.body)) {
+        console.error('STRIPE WEBHOOK ERROR: req.body is not a Buffer.');
+        return res.status(500).json({ error: 'Webhook processing error' });
+      }
+
+      await WebhookHandlers.processWebhook(req.body as Buffer, sig);
+
+      try {
+        const stripe = await getUncachableStripeClient();
+        const event = stripe.webhooks.constructEvent(req.body, sig, '');
+        await handleSubscriptionEvent(event);
+      } catch (eventErr: any) {
+        try {
+          const rawEvent = JSON.parse(req.body.toString());
+          await handleSubscriptionEvent(rawEvent);
+        } catch (parseErr) {
+        }
+      }
+
+      res.status(200).json({ received: true });
+    } catch (error: any) {
+      console.error('Webhook error:', error.message);
+      res.status(400).json({ error: 'Webhook processing error' });
+    }
+  }
+);
+
+app.use(
+  express.json({
+    verify: (req, _res, buf) => {
+      req.rawBody = buf;
+    },
+  }),
+);
+
+app.use(express.urlencoded({ extended: false }));
+
+app.use((req, res, next) => {
+  const start = Date.now();
+  const path = req.path;
+  let capturedJsonResponse: Record<string, any> | undefined = undefined;
+
+  const originalResJson = res.json;
+  res.json = function (bodyJson, ...args) {
+    capturedJsonResponse = bodyJson;
+    return originalResJson.apply(res, [bodyJson, ...args]);
+  };
+
+  res.on("finish", () => {
+    const duration = Date.now() - start;
+    if (path.startsWith("/api")) {
+      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
+      if (capturedJsonResponse) {
+        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
+      }
+
+      log(logLine);
+    }
   });
 
-  if (process.env.NODE_ENV === "production") {
-    serveStatic(app);
-  } else {
-    const { setupVite } = await import("./vite");
-    await setupVite(httpServer, app);
-  }
+  next();
+});
 
-  const port = parseInt(process.env.PORT || "5000", 10);
-  httpServer.listen(
-    {
-      port,
-      host: "0.0.0.0",
-      reusePort: true,
-    },
-    () => {
-      log(`serving on port ${port}`);
-    },
-  );
-})();
+const httpServer = createServer(app);
+let routesRegistered = false;
+let routesRegistering: Promise<void> | null = null;
+
+export async function ensureAppReady(): Promise<void> {
+  if (routesRegistered) return;
+  if (!routesRegistering) {
+    routesRegistering = (async () => {
+      await registerRoutes(httpServer, app);
+      app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
+        const status = err.status || err.statusCode || 500;
+        const message = err.message || "Internal Server Error";
+        console.error("Internal Server Error:", err);
+        if (res.headersSent) return next(err);
+        return res.status(status).json({ message });
+      });
+      routesRegistered = true;
+    })();
+  }
+  await routesRegistering;
+}
+
+export { app, httpServer };
+
+const isServerless = !!process.env.VERCEL;
+
+if (!isServerless) {
+  (async () => {
+    await ensureAuthColumns();
+    await initStripe();
+    await ensureAppReady();
+    await seedDatabase();
+    await bootstrapAdminAndOrphans();
+
+    if (process.env.NODE_ENV === "production") {
+      serveStatic(app);
+    } else {
+      const { setupVite } = await import("./vite");
+      await setupVite(httpServer, app);
+    }
+
+    const port = parseInt(process.env.PORT || "5000", 10);
+    httpServer.listen(
+      {
+        port,
+        host: "0.0.0.0",
+        reusePort: true,
+      },
+      () => {
+        log(`serving on port ${port}`);
+      },
+    );
+  })();
+}

@@ -12,6 +12,8 @@ if (!process.env.DATABASE_URL) {
 
 const connectionConfig: pg.PoolConfig = {
   connectionString: process.env.DATABASE_URL,
+  max: process.env.VERCEL ? 1 : 10,
+  idleTimeoutMillis: 10000,
 };
 
 if (process.env.DATABASE_URL?.includes("rds.amazonaws.com")) {

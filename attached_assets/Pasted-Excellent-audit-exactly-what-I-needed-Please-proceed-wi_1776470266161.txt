@@ -1,0 +1,25 @@
+Excellent audit — exactly what I needed. Please proceed with Step 1 (the non-destructive prep work that won't break the live Replit deployment):
+
+Refactor server/index.ts to export the Express app and gate .listen() behind !process.env.VERCEL
+Create an api/index.ts handler entry point that imports and exports the app as export default app
+Move all startup work (Stripe sync, seedDatabase, ensureAuthColumns, admin bootstrap, orphan cleanup) out of the main IIFE into separate exported functions that are only invoked when !process.env.VERCEL. I'll run these manually from my laptop after the first Vercel deploy.
+Remove the dead uploads/ directory mkdirSync and the express.static(uploadDir) serve — verify nothing in the database references /uploads/... URLs first (everything should be S3 URLs)
+Update the Stripe webhook URL builder to use OAUTH_BASE_URL || VERCEL_URL || REPLIT_DOMAINS as the fallback chain
+Lower the PG pool max to 1 with idleTimeoutMillis: 10000
+Create a vercel.json with the correct rewrites for API routes and static assets
+Convert photo uploads to presigned URL direct-to-S3 uploads. Since @aws-sdk/s3-request-presigner is already installed and getPresignedUrl is already used for reads, add a POST /api/uploads/sign endpoint that returns a presigned PUT URL. Update the frontend upload flow to:
+
+Request a presigned URL from the API
+PUT the file directly to S3 from the browser
+Send the resulting S3 key/URL back to the API to save in the database
+
+This bypasses the Vercel function body limit entirely and is a better architecture anyway.
+Remove the drizzle-kit push --force line from the build script — I'll run db:push manually from my laptop when schema changes are needed.
+
+After all changes, please:
+
+Test that the app still works correctly on Replit (sessions, uploads, auth, Stripe)
+Commit everything to Git with a clear message like "prep: vercel migration changes"
+Give me a summary of files changed and what was changed in each
+
+Do NOT deploy or push to production yet — I want to verify everything works on Replit first before migrating.

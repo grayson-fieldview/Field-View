@@ -22,6 +22,23 @@ export async function getPresignedUrl(key: string): Promise<string> {
   return getSignedUrl(s3Client, command, { expiresIn: 3600 });
 }
 
+export async function getPresignedPutUrl(
+  originalName: string,
+  mimeType: string,
+  folder: string = "photos"
+): Promise<{ key: string; uploadUrl: string; publicUrl: string }> {
+  const ext = path.extname(originalName);
+  const uniqueName = `${Date.now()}-${crypto.randomBytes(8).toString("hex")}${ext}`;
+  const key = `${folder}/${uniqueName}`;
+  const command = new PutObjectCommand({
+    Bucket: BUCKET,
+    Key: key,
+    ContentType: mimeType,
+  });
+  const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 600 });
+  return { key, uploadUrl, publicUrl: getS3Url(key) };
+}
+
 export function isS3Url(url: string): boolean {
   return url.includes(".s3.") && url.includes("amazonaws.com");
 }

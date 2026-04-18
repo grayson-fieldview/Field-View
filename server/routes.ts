@@ -5,14 +5,11 @@ import { storage } from "./storage";
 import { setupAuth, registerAuthRoutes, isAuthenticated, requireActiveSubscription } from "./replit_integrations/auth";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
-import multer from "multer";
-import path from "path";
-import fs from "fs";
 import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertReportSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertReportTemplateSchema, insertCalendarEventSchema, projects, media, comments, tasks, checklists, reports, projectAssignments } from "@shared/schema";
 import { users, invitations } from "@shared/models/auth";
 import { db } from "./db";
 import { eq, sql, and, or, inArray } from "drizzle-orm";
-import { uploadToS3, getPresignedUrl, isS3Url, extractS3KeyFromUrl } from "./s3";
+import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl } from "./s3";
 
 async function verifyProjectAccess(projectId: number, accountId: string): Promise<boolean> {
   const project = await storage.getProject(projectId);
@@ -67,21 +64,11 @@ async function presignMediaUrls<T extends { url: string }>(items: T[]): Promise<
   }));
 }
 
-const uploadDir = path.join(process.cwd(), "uploads");
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
+const ALLOWED_UPLOAD_EXT = /\.(jpe?g|png|gif|webp|mp4|mov|avi|heic)$/i;
+function isAllowedUpload(originalName: string, mimeType: string): boolean {
+  if (ALLOWED_UPLOAD_EXT.test(originalName)) return true;
+  return mimeType.startsWith("image/") || mimeType.startsWith("video/");
 }
-
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => {
-    const allowedTypes = /jpeg|jpg|png|gif|webp|mp4|mov|avi|heic/;
-    const ext = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-    const mime = allowedTypes.test(file.mimetype.split("/")[1]) || file.mimetype.startsWith("image/") || file.mimetype.startsWith("video/");
-    cb(null, ext || mime);
-  },
-});
 
 export async function registerRoutes(
   httpServer: Server,
@@ -89,11 +76,6 @@ export async function registerRoutes(
 ): Promise<Server> {
   await setupAuth(app);
   registerAuthRoutes(app);
-
-  app.use("/uploads", (req, res, next) => {
-    res.setHeader("Cache-Control", "public, max-age=31536000");
-    next();
-  }, express.static(uploadDir));
 
   app.get("/api/config/maps", requireActiveSubscription, (_req, res) => {
     const apiKey = process.env.GOOGLE_MAPS_API_KEY;
@@ -198,43 +180,76 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/projects/:id/media", requireActiveSubscription, upload.array("files", 20), async (req: any, res) => {
+  app.post("/api/uploads/sign", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const files = req.body?.files;
+      if (!Array.isArray(files) || files.length === 0) {
+        return res.status(400).json({ message: "Provide a non-empty 'files' array" });
+      }
+      if (files.length > 20) {
+        return res.status(400).json({ message: "Cannot sign more than 20 files at once" });
+      }
+      const signed = await Promise.all(
+        files.map(async (f: any) => {
+          if (!f?.originalName || !f?.mimeType) {
+            throw new Error("Each file must include originalName and mimeType");
+          }
+          if (!isAllowedUpload(f.originalName, f.mimeType)) {
+            throw new Error(`File type not allowed: ${f.originalName}`);
+          }
+          return getPresignedPutUrl(f.originalName, f.mimeType);
+        })
+      );
+      res.json(signed);
+    } catch (error: any) {
+      console.error("Sign upload error:", error?.message || error);
+      res.status(400).json({ message: error?.message || "Failed to sign upload" });
+    }
+  });
+
+  app.post("/api/projects/:id/media", requireActiveSubscription, async (req: any, res) => {
     try {
       const projectId = parseInt(req.params.id as string);
       const project = await storage.getProject(projectId);
       if (!project) return res.status(404).json({ message: "Project not found" });
       if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
 
-      const files = req.files as Express.Multer.File[];
-      if (!files || files.length === 0) {
-        return res.status(400).json({ message: "No files uploaded" });
+      const items = req.body?.files;
+      if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ message: "Provide a non-empty 'files' array of uploaded objects" });
       }
 
       const caption = req.body.caption || null;
-      const tags = req.body.tags ? req.body.tags.split(",").map((t: string) => t.trim()).filter(Boolean) : [];
+      const tags = Array.isArray(req.body.tags)
+        ? req.body.tags.filter(Boolean)
+        : (typeof req.body.tags === "string"
+            ? req.body.tags.split(",").map((t: string) => t.trim()).filter(Boolean)
+            : []);
 
       const created = await Promise.all(
-        files.map(async (file) => {
-          const { url, key } = await uploadToS3(file.buffer, file.originalname, file.mimetype);
+        items.map(async (it: any) => {
+          if (!it?.key || !it?.publicUrl || !it?.originalName || !it?.mimeType) {
+            throw new Error("Each file must include key, publicUrl, originalName, and mimeType");
+          }
           return storage.createMedia({
             projectId,
             uploadedById: req.user.id,
-            filename: key,
-            originalName: file.originalname,
-            mimeType: file.mimetype,
-            url,
+            filename: it.key,
+            originalName: it.originalName,
+            mimeType: it.mimeType,
+            url: it.publicUrl,
             caption,
             tags,
-            latitude: req.body.latitude ? parseFloat(req.body.latitude) : null,
-            longitude: req.body.longitude ? parseFloat(req.body.longitude) : null,
+            latitude: it.latitude ?? (req.body.latitude ? parseFloat(req.body.latitude) : null),
+            longitude: it.longitude ?? (req.body.longitude ? parseFloat(req.body.longitude) : null),
           });
         })
       );
 
       res.status(201).json(await presignMediaUrls(created));
     } catch (error: any) {
-      console.error("Upload error:", error?.message || error);
-      res.status(500).json({ message: "Failed to upload media" });
+      console.error("Create media error:", error?.message || error);
+      res.status(500).json({ message: error?.message || "Failed to save media" });
     }
   });
 

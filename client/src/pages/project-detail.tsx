@@ -378,15 +378,46 @@ export default function ProjectDetailPage({ id }: { id: string }) {
 
   const uploadMedia = useMutation({
     mutationFn: async (files: File[]) => {
-      const formData = new FormData();
-      files.forEach((f) => formData.append("files", f));
-      const res = await fetch(`/api/projects/${id}/media`, {
+      const signRes = await fetch(`/api/uploads/sign`, {
         method: "POST",
-        body: formData,
+        headers: { "Content-Type": "application/json" },
         credentials: "include",
+        body: JSON.stringify({
+          files: files.map((f) => ({
+            originalName: f.name,
+            mimeType: f.type || "application/octet-stream",
+          })),
+        }),
       });
-      if (!res.ok) throw new Error(await res.text());
-      return res.json();
+      if (!signRes.ok) throw new Error(await signRes.text());
+      const signed: Array<{ key: string; uploadUrl: string; publicUrl: string }> = await signRes.json();
+
+      await Promise.all(
+        files.map(async (file, i) => {
+          const putRes = await fetch(signed[i].uploadUrl, {
+            method: "PUT",
+            headers: { "Content-Type": file.type || "application/octet-stream" },
+            body: file,
+          });
+          if (!putRes.ok) throw new Error(`Upload failed for ${file.name}`);
+        })
+      );
+
+      const finalizeRes = await fetch(`/api/projects/${id}/media`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          files: files.map((f, i) => ({
+            key: signed[i].key,
+            publicUrl: signed[i].publicUrl,
+            originalName: f.name,
+            mimeType: f.type || "application/octet-stream",
+          })),
+        }),
+      });
+      if (!finalizeRes.ok) throw new Error(await finalizeRes.text());
+      return finalizeRes.json();
     },
     onSuccess: () => {
       clearStaged();

@@ -28,7 +28,8 @@ Field View utilizes a modern web application architecture with a clear separatio
 - Uses PostgreSQL with Drizzle ORM for data persistence.
 - **Multi-Tenancy**: Account-based isolation where each organization is an `account`. Users, projects, templates, and all child data are linked to an `accountId`. All API endpoints enforce `accountId` verification to prevent cross-account access.
 - **Authentication**: Custom email/password authentication using Passport.js local strategy with bcryptjs for password hashing. Sessions are stored in PostgreSQL using `connect-pg-simple`. User profiles include subscription status and Stripe customer IDs.
-- **File Storage**: Photos are uploaded to AWS S3 (`fieldview-storage` bucket in `us-east-2`) using Multer and `@aws-sdk/client-s3`.
+- **File Storage**: Photos are uploaded to AWS S3 (`fieldview-storage` bucket in `us-east-2`) via presigned URL direct uploads. The browser requests a presigned PUT URL from `POST /api/uploads/sign`, uploads the file directly to S3, then posts the resulting S3 key/URL to `POST /api/projects/:id/media` to create the database record. This bypasses the serverless function body-size limit and is forward-compatible with Vercel.
+- **Vercel readiness**: `server/index.ts` exports the Express `app` and only calls `httpServer.listen()` when `!process.env.VERCEL`. Startup work (Stripe sync, seed, admin bootstrap, orphan cleanup, auth-column migration) is gated the same way and lives in named exported functions so it can be invoked manually post-deploy. `api/index.ts` is the Vercel serverless entry. `vercel.json` rewrites `/api/*` to the function and everything else to the SPA. PG pool size is `1` when running on Vercel, `10` otherwise.
 - **API Endpoints**: Comprehensive RESTful API for all frontend functionalities including user management, project operations, media handling, task/checklist/report management, invitations, analytics, and billing.
 
 ## External Dependencies
