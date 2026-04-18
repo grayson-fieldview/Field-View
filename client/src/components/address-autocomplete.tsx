@@ -18,6 +18,13 @@ interface AddressAutocompleteProps {
   "data-testid"?: string;
 }
 
+interface Suggestion {
+  id: string;
+  primary: string;
+  secondary: string;
+  placePrediction: any;
+}
+
 export function AddressAutocomplete({
   value,
   onChange,
@@ -25,18 +32,167 @@ export function AddressAutocomplete({
   placeholder = "Search for an address...",
   "data-testid": testId,
 }: AddressAutocompleteProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const autocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const sessionTokenRef = useRef<any>(null);
+  const fetchSeqRef = useRef(0);
+  const debounceRef = useRef<number | null>(null);
   const onChangeRef = useRef(onChange);
   const onTextChangeRef = useRef(onTextChange);
-  const isHandlingPlaceSelectionRef = useRef(false);
+  onChangeRef.current = onChange;
+  onTextChangeRef.current = onTextChange;
+
   const [scriptLoaded, setScriptLoaded] = useState(false);
   const [scriptLoading, setScriptLoading] = useState(false);
   const [scriptError, setScriptError] = useState(false);
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [open, setOpen] = useState(false);
+  const [highlight, setHighlight] = useState(0);
+  const [fetching, setFetching] = useState(false);
 
-  onChangeRef.current = onChange;
-  onTextChangeRef.current = onTextChange;
+  const { data: config, isError: configError } = useQuery<{ apiKey: string }>({
+    queryKey: ["/api/config/maps"],
+    retry: 1,
+  });
+
+  useEffect(() => {
+    if (!config?.apiKey || scriptLoaded || scriptLoading) return;
+    if ((window as any).google?.maps?.places) {
+      setScriptLoaded(true);
+      return;
+    }
+    setScriptLoading(true);
+    (async () => {
+      try {
+        const { loadGoogleMaps } = await import("@/lib/google-maps");
+        await loadGoogleMaps(config.apiKey);
+        setScriptLoaded(true);
+      } catch {
+        setScriptError(true);
+      } finally {
+        setScriptLoading(false);
+      }
+    })();
+  }, [config?.apiKey, scriptLoaded, scriptLoading]);
+
+  const ensureSessionToken = useCallback(() => {
+    if (!sessionTokenRef.current && (window as any).google?.maps?.places?.AutocompleteSessionToken) {
+      sessionTokenRef.current = new (window as any).google.maps.places.AutocompleteSessionToken();
+    }
+    return sessionTokenRef.current;
+  }, []);
+
+  const fetchSuggestions = useCallback(
+    async (input: string) => {
+      if (!scriptLoaded) return;
+      const places: any = (window as any).google?.maps?.places;
+      if (!places?.AutocompleteSuggestion?.fetchAutocompleteSuggestions) {
+        console.warn("[ADDR] AutocompleteSuggestion API not available");
+        return;
+      }
+      const seq = ++fetchSeqRef.current;
+      setFetching(true);
+      try {
+        const request: any = {
+          input,
+          sessionToken: ensureSessionToken(),
+          includedPrimaryTypes: ["street_address", "premise", "subpremise", "route"],
+        };
+        const { suggestions: results } = await places.AutocompleteSuggestion.fetchAutocompleteSuggestions(request);
+        if (seq !== fetchSeqRef.current) return;
+        const mapped: Suggestion[] = (results || []).slice(0, 6).map((s: any, idx: number) => {
+          const pp = s.placePrediction;
+          return {
+            id: pp?.placeId || `s-${idx}`,
+            primary: pp?.mainText?.text || pp?.text?.text || "",
+            secondary: pp?.secondaryText?.text || "",
+            placePrediction: pp,
+          };
+        });
+        console.log("[ADDR] fetchAutocompleteSuggestions", { input, count: mapped.length });
+        setSuggestions(mapped);
+        setHighlight(0);
+        setOpen(mapped.length > 0);
+      } catch (err) {
+        console.error("[ADDR] fetchAutocompleteSuggestions failed", err);
+        setSuggestions([]);
+        setOpen(false);
+      } finally {
+        if (seq === fetchSeqRef.current) setFetching(false);
+      }
+    },
+    [scriptLoaded, ensureSessionToken],
+  );
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const text = e.target.value;
+    console.log("[ADDR] native input onChange", text);
+    onTextChangeRef.current(text);
+    if (debounceRef.current) window.clearTimeout(debounceRef.current);
+    if (!text.trim()) {
+      setSuggestions([]);
+      setOpen(false);
+      return;
+    }
+    debounceRef.current = window.setTimeout(() => {
+      fetchSuggestions(text);
+    }, 200);
+  };
+
+  const selectSuggestion = useCallback(async (sug: Suggestion) => {
+    console.log("[ADDR] suggestion selected", sug);
+    setOpen(false);
+    setSuggestions([]);
+    try {
+      const place = sug.placePrediction.toPlace();
+      await place.fetchFields({ fields: ["formattedAddress", "location"] });
+      const address = place.formattedAddress || `${sug.primary}${sug.secondary ? ", " + sug.secondary : ""}`;
+      const loc = place.location;
+      if (!loc) {
+        console.warn("[ADDR] selected place has no location");
+        return;
+      }
+      const latitude = typeof loc.lat === "function" ? loc.lat() : loc.lat;
+      const longitude = typeof loc.lng === "function" ? loc.lng() : loc.lng;
+      console.log("[ADDR] place fetched", { address, latitude, longitude });
+      if (inputRef.current) inputRef.current.value = address;
+      onChangeRef.current({ address, latitude, longitude });
+      sessionTokenRef.current = null;
+    } catch (err) {
+      console.error("[ADDR] fetchFields failed", err);
+    }
+  }, []);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!open || suggestions.length === 0) {
+      if (e.key === "Enter") e.preventDefault();
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHighlight((h) => Math.min(h + 1, suggestions.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlight((h) => Math.max(h - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const sug = suggestions[highlight];
+      if (sug) selectSuggestion(sug);
+    } else if (e.key === "Escape") {
+      setOpen(false);
+    }
+  };
+
+  useEffect(() => {
+    const onDocClick = (e: MouseEvent) => {
+      if (!containerRef.current) return;
+      if (!containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, []);
 
   useEffect(() => {
     if (inputRef.current && inputRef.current.value !== value) {
@@ -44,172 +200,61 @@ export function AddressAutocomplete({
     }
   }, [value]);
 
-  useEffect(() => {
-    if (!containerRef.current) return;
-
-    const repositionPac = () => {
-      const input = inputRef.current;
-      if (!input) return;
-      const rect = input.getBoundingClientRect();
-      const pacContainers = document.querySelectorAll(".pac-container");
-      pacContainers.forEach((pac) => {
-        const el = pac as HTMLElement;
-        el.style.position = "fixed";
-        el.style.top = `${rect.bottom + 2}px`;
-        el.style.left = `${rect.left}px`;
-        el.style.width = `${rect.width}px`;
-        el.style.zIndex = "10000";
-      });
-    };
-
-    const observer = new MutationObserver((mutations) => {
-      for (const mutation of mutations) {
-        for (const node of Array.from(mutation.addedNodes)) {
-          if (node instanceof HTMLElement && node.classList.contains("pac-container")) {
-            node.style.position = "fixed";
-            node.style.zIndex = "10000";
-            repositionPac();
-
-            const styleObs = new MutationObserver(() => {
-              repositionPac();
-            });
-            styleObs.observe(node, { attributes: true, attributeFilter: ["style"] });
-          }
-        }
-      }
-    });
-
-    observer.observe(document.body, { childList: true, subtree: true });
-
-    const inputEl = inputRef.current;
-    if (inputEl) {
-      inputEl.addEventListener("focus", repositionPac);
-      inputEl.addEventListener("input", repositionPac);
-    }
-
-    window.addEventListener("scroll", repositionPac, true);
-    window.addEventListener("resize", repositionPac);
-
-    return () => {
-      observer.disconnect();
-      if (inputEl) {
-        inputEl.removeEventListener("focus", repositionPac);
-        inputEl.removeEventListener("input", repositionPac);
-      }
-      window.removeEventListener("scroll", repositionPac, true);
-      window.removeEventListener("resize", repositionPac);
-    };
-  }, []);
-
-  const { data: config, isError: configError } = useQuery<{ apiKey: string }>({
-    queryKey: ["/api/config/maps"],
-    retry: 1,
-  });
-
-  const initAutocomplete = useCallback(() => {
-    if (!inputRef.current || autocompleteRef.current) return;
-
-    const input = inputRef.current;
-
-    const autocomplete = new google.maps.places.Autocomplete(input, {
-      types: ["address"],
-      fields: ["formatted_address", "geometry"],
-    });
-
-    autocomplete.addListener("place_changed", () => {
-      const place = autocomplete.getPlace();
-      console.log("[ADDR] place_changed fires", { place });
-      if (place.formatted_address && place.geometry?.location) {
-        const address = place.formatted_address;
-        const latitude = place.geometry.location.lat();
-        const longitude = place.geometry.location.lng();
-
-        isHandlingPlaceSelectionRef.current = true;
-        input.value = address;
-        console.log("[ADDR] onChange called from place_changed", { address, latitude, longitude });
-        onChangeRef.current({ address, latitude, longitude });
-
-        setTimeout(() => {
-          isHandlingPlaceSelectionRef.current = false;
-        }, 0);
-      }
-    });
-
-    autocompleteRef.current = autocomplete;
-  }, []);
-
-  useEffect(() => {
-    if (!config?.apiKey || scriptLoaded || scriptLoading) return;
-
-    if ((window as any).google?.maps?.places) {
-      setScriptLoaded(true);
-      return;
-    }
-
-    setScriptLoading(true);
-
-    (async () => {
-      try {
-        const { loadGoogleMaps } = await import("@/lib/google-maps");
-        await loadGoogleMaps(config.apiKey);
-        setScriptLoaded(true);
-        setScriptLoading(false);
-      } catch {
-        setScriptLoading(false);
-        setScriptError(true);
-      }
-    })();
-  }, [config?.apiKey, scriptLoaded, scriptLoading]);
-
-  useEffect(() => {
-    if (scriptLoaded) {
-      initAutocomplete();
-    }
-  }, [scriptLoaded, initAutocomplete]);
-
-  useEffect(() => {
-    return () => {
-      if (autocompleteRef.current) {
-        google.maps.event.clearInstanceListeners(autocompleteRef.current);
-        autocompleteRef.current = null;
-      }
-    };
-  }, []);
-
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (isHandlingPlaceSelectionRef.current) {
-      console.log("[ADDR] native input onChange fires \u2192 SUPPRESSED by guard flag", e.target.value);
-      return;
-    }
-    console.log("[ADDR] native input onChange fires", e.target.value);
-    onTextChangeRef.current(e.target.value);
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-    }
-  };
-
   const showFallback = configError || scriptError;
 
   return (
     <div ref={containerRef} className="relative">
-      <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+      <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none z-10" />
       <Input
         ref={inputRef}
         defaultValue={value}
         onChange={handleInputChange}
         onKeyDown={handleKeyDown}
+        onFocus={() => {
+          if (suggestions.length > 0) setOpen(true);
+        }}
         placeholder={showFallback ? "Enter address manually" : placeholder}
         className="pl-10"
         data-testid={testId}
+        autoComplete="off"
       />
-      {scriptLoading && (
+      {(scriptLoading || fetching) && (
         <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground animate-spin" />
       )}
+      {open && suggestions.length > 0 && (
+        <div
+          className="absolute left-0 right-0 top-full mt-1 z-50 rounded-md border bg-popover text-popover-foreground shadow-md max-h-72 overflow-auto"
+          data-testid="dropdown-address-suggestions"
+        >
+          {suggestions.map((sug, idx) => (
+            <button
+              key={sug.id}
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                selectSuggestion(sug);
+              }}
+              onMouseEnter={() => setHighlight(idx)}
+              className={`w-full text-left px-3 py-2 text-sm flex items-start gap-2 hover-elevate active-elevate-2 ${
+                idx === highlight ? "bg-accent text-accent-foreground" : ""
+              }`}
+              data-testid={`option-address-${idx}`}
+            >
+              <MapPin className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
+              <span className="flex-1 min-w-0">
+                <span className="block truncate font-medium">{sug.primary}</span>
+                {sug.secondary && (
+                  <span className="block truncate text-xs text-muted-foreground">{sug.secondary}</span>
+                )}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
       {showFallback && (
-        <p className="text-xs text-muted-foreground mt-1">Address search unavailable. You can type the address manually.</p>
+        <p className="text-xs text-muted-foreground mt-1">
+          Address search unavailable. You can type the address manually.
+        </p>
       )}
     </div>
   );
