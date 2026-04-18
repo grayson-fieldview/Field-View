@@ -14,10 +14,6 @@
   line-height: 1.5;
 }
 
-.pac-item * {
-  pointer-events: none;
-}
-
 @media (max-width: 767px) {
   .group[data-testid^="card-media-"] {
     touch-action: manipulation;
