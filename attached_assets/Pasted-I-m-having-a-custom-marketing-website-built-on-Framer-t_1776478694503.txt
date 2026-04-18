@@ -1,0 +1,25 @@
+I'm having a custom marketing website built on Framer that will live at www.field-view.com. The Replit-generated marketing/landing page at the root of the app is no longer needed. I want app.field-view.com to be pure software — no marketing page.
+Please make these changes:
+1. Redirect the landing page to signup for unauthenticated users:
+When an unauthenticated user hits the root route /, redirect them to /signup (the "Start your free trial" page) instead of showing the current marketing landing page. This way, anyone landing on app.field-view.com/ sees the signup form immediately.
+2. Handle authenticated users normally:
+If a user IS authenticated and hits /, redirect them to /dashboard (or wherever your main authenticated route is) — this behavior should remain unchanged.
+3. Keep the marketing page components but make them unused:
+Don't delete the landing page components yet — just unroute them. The Framer site won't be ready for 5-7 days and I may want to reference the old copy. Move them to a components/legacy/ folder or similar so they're clearly archived.
+4. Update the /login page:
+The login page should have a link at the bottom: "Don't have an account? Start your free trial" that goes to /signup. Confirm this is already there and working.
+5. Update the /signup page:
+Similarly, confirm "Already have an account? Sign in" links to /login.
+6. External links:
+Any hardcoded links in the app (footer, nav, etc.) that point to field-view.com, /features, /pricing, /industries, /why-field-view — these marketing routes no longer need to exist on the app domain. Either remove those links or redirect them to the equivalent www.field-view.com/... URL (e.g., pricing goes to https://www.field-view.com/pricing).
+7. Simplify the header nav for unauthenticated users:
+The current app has a header with "Features / Industries / Why Field View / Pricing / Get Started / Log in / Start Free" on unauthenticated pages. Simplify this for the app domain to just: "Log in" and "Start Free" (no marketing links). The Framer site will own all marketing navigation.
+After making these changes, test that:
+
+Hitting / as a logged-out user → redirects to /signup
+Hitting / as a logged-in user → goes to dashboard as before
+Login works normally
+Signup works normally
+No broken links in the app nav
+
+Then commit to Git with a clear message like refactor: remove marketing page, redirect root to signup for app subdomain and push to GitHub so Vercel auto-deploys.

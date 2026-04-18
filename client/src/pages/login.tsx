@@ -193,7 +193,7 @@ export default function LoginPage() {
           </form>
           <div className="mt-6 text-center text-sm text-muted-foreground">
             Don't have an account?{" "}
-            <a href="/register" className="text-[#F09000] hover:underline font-medium" data-testid="link-register">
+            <a href="/signup" className="text-[#F09000] hover:underline font-medium" data-testid="link-register">
               Start your free trial
             </a>
           </div>

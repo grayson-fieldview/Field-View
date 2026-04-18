@@ -10,7 +10,6 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { useAuth } from "@/hooks/use-auth";
 import { Skeleton } from "@/components/ui/skeleton";
 import NotFound from "@/pages/not-found";
-import LandingPage from "@/pages/landing";
 import LoginPage from "@/pages/login";
 import RegisterPage from "@/pages/register";
 import ForgotPasswordPage from "@/pages/forgot-password";
@@ -50,6 +49,7 @@ function AuthenticatedLayout() {
               <Route path="/" component={DashboardPage} />
               <Route path="/login"><Redirect to="/" /></Route>
               <Route path="/register"><Redirect to="/" /></Route>
+              <Route path="/signup"><Redirect to="/" /></Route>
               <Route path="/forgot-password"><Redirect to="/" /></Route>
               <Route path="/reset-password" component={ResetPasswordPage} />
               <Route path="/projects" component={ProjectsPage} />
@@ -109,11 +109,12 @@ function AppContent() {
     return (
       <Switch>
         <Route path="/login" component={LoginPage} />
-        <Route path="/register" component={RegisterPage} />
+        <Route path="/signup" component={RegisterPage} />
+        <Route path="/register"><Redirect to="/signup" /></Route>
         <Route path="/forgot-password" component={ForgotPasswordPage} />
         <Route path="/reset-password" component={ResetPasswordPage} />
         <Route>
-          <LandingPage />
+          <Redirect to="/signup" />
         </Route>
       </Switch>
     );
