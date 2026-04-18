@@ -1,4 +1,4 @@
-import { app, ensureAppReady } from "../server/index";
+import { app, ensureAppReady } from "./index";
 
 let ready: Promise<void> | null = null;
 
