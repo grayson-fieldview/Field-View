@@ -133,14 +133,17 @@ export async function registerRoutes(
 
   app.post("/api/projects", requireActiveSubscription, async (req: any, res) => {
     try {
+      console.log("[API] POST /api/projects body", req.body);
       const parsed = insertProjectSchema.safeParse({
         ...req.body,
         accountId: req.user.accountId,
         createdById: req.user.id,
       });
       if (!parsed.success) {
+        console.log("[API] POST /api/projects validation failed", parsed.error.message);
         return res.status(400).json({ message: parsed.error.message });
       }
+      console.log("[API] POST /api/projects parsed", { latitude: parsed.data.latitude, longitude: parsed.data.longitude });
       const project = await storage.createProject(parsed.data);
       res.status(201).json(project);
     } catch (error) {

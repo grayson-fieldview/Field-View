@@ -75,12 +75,14 @@ export default function ProjectsPage() {
   });
 
   const handleAddressSelect = useCallback((result: { address: string; latitude: number; longitude: number }) => {
+    console.log("[FORM] handleAddressSelect sets address+lat+lng atomically", result);
     form.setValue("address", result.address, { shouldValidate: true, shouldDirty: true });
     form.setValue("latitude", result.latitude, { shouldDirty: true });
     form.setValue("longitude", result.longitude, { shouldDirty: true });
   }, [form]);
 
   const handleAddressTextChange = useCallback((text: string) => {
+    console.log("[FORM] handleAddressTextChange (manual typing) clears lat/lng", text);
     form.setValue("address", text, { shouldDirty: true });
     form.setValue("latitude", null);
     form.setValue("longitude", null);
@@ -88,6 +90,7 @@ export default function ProjectsPage() {
 
   const createProject = useMutation({
     mutationFn: async (data: z.infer<typeof createProjectSchema>) => {
+      console.log("[SUBMIT] outgoing payload", data);
       const res = await apiRequest("POST", "/api/projects", data);
       return res.json();
     },

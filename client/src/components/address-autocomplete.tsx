@@ -30,6 +30,7 @@ export function AddressAutocomplete({
   const autocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
   const onChangeRef = useRef(onChange);
   const onTextChangeRef = useRef(onTextChange);
+  const isHandlingPlaceSelectionRef = useRef(false);
   const [scriptLoaded, setScriptLoaded] = useState(false);
   const [scriptLoading, setScriptLoading] = useState(false);
   const [scriptError, setScriptError] = useState(false);
@@ -122,15 +123,20 @@ export function AddressAutocomplete({
 
     autocomplete.addListener("place_changed", () => {
       const place = autocomplete.getPlace();
+      console.log("[ADDR] place_changed fires", { place });
       if (place.formatted_address && place.geometry?.location) {
         const address = place.formatted_address;
+        const latitude = place.geometry.location.lat();
+        const longitude = place.geometry.location.lng();
+
+        isHandlingPlaceSelectionRef.current = true;
         input.value = address;
-        onTextChangeRef.current(address);
-        onChangeRef.current({
-          address,
-          latitude: place.geometry.location.lat(),
-          longitude: place.geometry.location.lng(),
-        });
+        console.log("[ADDR] onChange called from place_changed", { address, latitude, longitude });
+        onChangeRef.current({ address, latitude, longitude });
+
+        setTimeout(() => {
+          isHandlingPlaceSelectionRef.current = false;
+        }, 0);
       }
     });
 
@@ -176,6 +182,11 @@ export function AddressAutocomplete({
   }, []);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (isHandlingPlaceSelectionRef.current) {
+      console.log("[ADDR] native input onChange fires \u2192 SUPPRESSED by guard flag", e.target.value);
+      return;
+    }
+    console.log("[ADDR] native input onChange fires", e.target.value);
     onTextChangeRef.current(e.target.value);
   };
 

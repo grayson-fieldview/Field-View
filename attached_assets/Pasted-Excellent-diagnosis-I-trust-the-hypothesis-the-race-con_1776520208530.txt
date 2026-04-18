@@ -1,0 +1,17 @@
+Excellent diagnosis. I trust the hypothesis — the race condition between place_changed and the native input onChange event clobbering lat/lng is clearly the issue. Please proceed with the fix.
+Implement this approach:
+
+Make place_changed the single source of truth for address + lat/lng. Do NOT split the responsibility across two callbacks. When a user picks a suggestion from the autocomplete dropdown, both the address text AND the lat/lng should be set together in one atomic operation.
+Guard the native input onChange handler so it does NOT fire its onTextChange callback during or immediately after a place_changed event. Use a brief flag (e.g., isHandlingPlaceSelection) set to true at the start of place_changed and reset in a setTimeout(..., 0) or microtask after the handler completes. The native input event that Google fires post-selection will see the flag and bail out.
+Only clear lat/lng when the user is ACTUALLY typing a new address — i.e., when the user manually edits the field character by character (not when Google's autocomplete programmatically updates the value).
+Fix both forms — the Create form in projects.tsx (L77-87) and verify the Edit form in project-detail.tsx is also clean. Even though the edit form's behavior is slightly different, apply the same guard pattern for consistency.
+Keep the diagnostic console.log statements you outlined in the report IN PLACE for now. I want to test the fix live and verify the log order matches the expected fixed flow:
+[ADDR] place_changed fires
+[ADDR] onChange called from place_changed (sets address + lat/lng atomically)
+[ADDR] native input onChange fires → SUPPRESSED by guard flag
+[SUBMIT] outgoing payload { address: "...", latitude: 26.71, longitude: -80.05 }
+[API] body { address: "...", latitude: 26.71, longitude: -80.05 }
+
+After the fix works and I confirm, you can remove the console.log statements in a follow-up commit.
+
+Commit with a clear message like fix(address-autocomplete): prevent native input event from clobbering lat/lng set by place_changed and push to GitHub so Vercel auto-deploys.
