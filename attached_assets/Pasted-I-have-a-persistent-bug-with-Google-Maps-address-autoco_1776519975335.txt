@@ -1,0 +1,39 @@
+I have a persistent bug with Google Maps address autocomplete on the Create New Project and Edit Project forms. When a user types an address, the Google Places autocomplete dropdown correctly shows suggestions. When the user clicks a suggestion, the address text populates in the field but the latitude and longitude do NOT save to the database.
+You have tried to fix this ~10 times and each attempt has failed. STOP GUESSING. Before writing any fix code, you need to diagnose the actual root cause.
+Please do the following in order:
+1. Map the full data flow first. Find and show me:
+
+The frontend component that renders the address input (likely uses Google Places Autocomplete)
+The handler function that fires when a user selects a place from the dropdown
+The state/form fields where latitude and longitude should be stored
+The API endpoint that receives the project create/update request
+The database insert/update code that writes lat/long to the projects table
+The Drizzle schema for the projects table — confirm latitude and longitude columns exist with the correct types (likely decimal or double precision)
+
+2. Add verbose console.log statements at every step of the flow:
+
+Log the raw Google Places response when a user selects a suggestion
+Log the extracted lat/long values right after parsing
+Log the form state right before submission
+Log the request body on the frontend before sending to the API
+Log the request body on the backend when it receives the request
+Log the exact SQL being executed for the insert/update
+
+3. Do NOT attempt any fixes yet. Instead, report back:
+
+All the file paths and line numbers involved in this flow
+Whether the database schema has the lat/long columns and their types
+Whether the Google Places response is even being parsed correctly
+Whether the values are being lost on the frontend, in the API payload, or at the database write
+
+Only AFTER we identify the exact point of failure will we fix it.
+Common culprits to check for specifically:
+
+The Google Places Autocomplete component may be firing onChange with just the text, not the full place object with geometry
+The place_changed or onPlaceSelected event may not be wired up — only the text change is being captured
+The lat/long might be extracted but the form state isn't updating before submit
+The API payload might include lat/long but the backend is stripping them or sending them to the wrong DB columns
+The Drizzle schema might be missing the columns or have them as a type that silently drops the values
+Zod validation on the API request body might be dropping lat/long fields if they're not in the schema
+
+Report your findings before touching any code.
