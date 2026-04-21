@@ -47,7 +47,7 @@ import {
 } from "@shared/schema";
 import { users, type User } from "@shared/models/auth";
 import { db } from "./db";
-import { eq, desc, sql, asc, and } from "drizzle-orm";
+import { eq, desc, sql, asc, and, inArray } from "drizzle-orm";
 
 export interface ProjectWithDetails extends Project {
   photoCount: number;
@@ -78,6 +78,7 @@ export interface IStorage {
   createComment(comment: InsertComment): Promise<Comment>;
 
   getAnnotationsByMedia(mediaId: number): Promise<(MediaAnnotation & { user?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } })[]>;
+  getAnnotationsByProject(projectId: number): Promise<MediaAnnotation[]>;
   getAnnotation(id: string): Promise<MediaAnnotation | undefined>;
   createAnnotation(annotation: InsertMediaAnnotation): Promise<MediaAnnotation>;
   updateAnnotation(id: string, data: { strokes: unknown }): Promise<MediaAnnotation | undefined>;
@@ -334,6 +335,20 @@ export class DatabaseStorage implements IStorage {
       ...r.annotation,
       user: r.user?.firstName ? r.user : undefined,
     }));
+  }
+
+  async getAnnotationsByProject(projectId: number): Promise<MediaAnnotation[]> {
+    const mediaRows = await db
+      .select({ id: media.id })
+      .from(media)
+      .where(eq(media.projectId, projectId));
+    const mediaIds = mediaRows.map((m) => m.id);
+    if (mediaIds.length === 0) return [];
+    return await db
+      .select()
+      .from(mediaAnnotations)
+      .where(inArray(mediaAnnotations.mediaId, mediaIds))
+      .orderBy(asc(mediaAnnotations.createdAt));
   }
 
   async getAnnotation(id: string): Promise<MediaAnnotation | undefined> {

@@ -82,7 +82,8 @@ import {
 import { useLocation } from "wouter";
 import { LayoutTemplate } from "lucide-react";
 import { AddressAutocomplete } from "@/components/address-autocomplete";
-import type { Project, Media, Comment, Task, Checklist, ChecklistItem, Report, ChecklistTemplate, ChecklistTemplateItem, ReportTemplate } from "@shared/schema";
+import type { Project, Media, Comment, Task, Checklist, ChecklistItem, Report, ChecklistTemplate, ChecklistTemplateItem, ReportTemplate, MediaAnnotation, AnnotationStroke } from "@shared/schema";
+import { AnnotationOverlay } from "@/lib/annotation-svg";
 
 type ChecklistWithDetails = Checklist & {
   assignedTo?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null };
@@ -344,6 +345,16 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const isMobile = useIsMobile();
   const [stagedFiles, setStagedFiles] = useState<File[]>([]);
   const [stagedPreviews, setStagedPreviews] = useState<string[]>([]);
+
+  const { data: projectAnnotations = [] } = useQuery<MediaAnnotation[]>({
+    queryKey: ["/api/projects", id, "annotations"],
+  });
+  const projectAnnotationsMap = new Map<number, AnnotationStroke[]>();
+  for (const a of projectAnnotations) {
+    const arr = projectAnnotationsMap.get(a.mediaId) || [];
+    const strokes = Array.isArray(a.strokes) ? (a.strokes as AnnotationStroke[]) : [];
+    projectAnnotationsMap.set(a.mediaId, arr.concat(strokes));
+  }
 
   const { data, isLoading } = useQuery<ProjectDetailData>({
     queryKey: ["/api/projects", id],
@@ -774,6 +785,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
 
   const { project, media: projectMedia, tasks: projectTasks, checklists: projectChecklists, reports: projectReports } = data;
   const groupedMedia = groupMediaByDate(projectMedia);
+  const annotationsByMedia = projectAnnotationsMap;
 
   const uniqueUsers = new Map<string, { firstName: string | null; lastName: string | null; profileImageUrl: string | null }>();
   projectMedia.forEach((m) => {
@@ -1393,6 +1405,9 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                                   alt={item.caption || item.originalName}
                                   className="w-full h-full object-cover md:transition-transform md:duration-300 md:group-hover:scale-105"
                                 />
+                                {(annotationsByMedia.get(item.id)?.length ?? 0) > 0 && (
+                                  <AnnotationOverlay strokes={annotationsByMedia.get(item.id) || []} />
+                                )}
                                 {selectionMode && (
                                   <div className="absolute top-2 left-2">
                                     <div className={`h-6 w-6 rounded-md border-2 flex items-center justify-center transition-colors ${isSelected ? "bg-primary border-primary" : "bg-black/30 border-white/70"}`} data-testid={`checkbox-media-${item.id}`}>

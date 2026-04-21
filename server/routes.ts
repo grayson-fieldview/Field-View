@@ -592,6 +592,18 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/projects/:projectId/annotations", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const projectId = parseInt(req.params.projectId as string);
+      if (Number.isNaN(projectId)) return res.status(400).json({ message: "Invalid project id" });
+      if (!(await verifyProjectAccess(projectId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      const annotations = await storage.getAnnotationsByProject(projectId);
+      res.json(annotations);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch annotations" });
+    }
+  });
+
   app.get("/api/media/:mediaId/annotations", requireActiveSubscription, async (req: any, res) => {
     try {
       const mediaId = parseInt(req.params.mediaId as string);
