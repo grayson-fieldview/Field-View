@@ -265,6 +265,9 @@ export default function PhotoViewer({
       queryClient.invalidateQueries({
         queryKey: ["/api/media", media.id.toString(), "annotations"],
       });
+      queryClient.invalidateQueries({
+        queryKey: ["/api/projects", project.id.toString(), "annotations"],
+      });
       setAnnotations([]);
       setCurrentShape(null);
       setEditingAnnotationId(null);
@@ -289,10 +292,29 @@ export default function PhotoViewer({
       queryClient.invalidateQueries({
         queryKey: ["/api/media", media.id.toString(), "annotations"],
       });
+      queryClient.invalidateQueries({
+        queryKey: ["/api/projects", project.id.toString(), "annotations"],
+      });
       toast({ title: "Annotations removed" });
     },
     onError: (error: Error) => {
       toast({ title: "Could not delete", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const deletePhoto = useMutation({
+    mutationFn: async () => {
+      await apiRequest("DELETE", `/api/media/${media.id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", project.id.toString()] });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", project.id.toString(), "annotations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/media"] });
+      toast({ title: "Photo deleted" });
+      onClose();
+    },
+    onError: (error: Error) => {
+      toast({ title: "Could not delete photo", description: error.message, variant: "destructive" });
     },
   });
 
@@ -781,6 +803,21 @@ export default function PhotoViewer({
             data-testid="button-download"
           >
             <Download className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => {
+              if (window.confirm("Delete this photo? This cannot be undone.")) {
+                deletePhoto.mutate();
+              }
+            }}
+            disabled={deletePhoto.isPending}
+            title="Delete photo"
+            data-testid="button-delete-photo"
+            className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
+          >
+            <Trash2 className="h-4 w-4" />
           </Button>
           {savedAnnotations.length > 0 && !isAnnotating && (
             <>

@@ -9,7 +9,7 @@ import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertCheck
 import { users, invitations } from "@shared/models/auth";
 import { db } from "./db";
 import { eq, sql, and, or, inArray } from "drizzle-orm";
-import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl } from "./s3";
+import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, deleteFromS3 } from "./s3";
 
 async function verifyProjectAccess(projectId: number, accountId: string): Promise<boolean> {
   const project = await storage.getProject(projectId);
@@ -487,6 +487,29 @@ export async function registerRoutes(
       res.json(events);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch calendar events" });
+    }
+  });
+
+  app.delete("/api/media/:id", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const mediaId = parseInt(req.params.id as string);
+      if (Number.isNaN(mediaId)) return res.status(400).json({ message: "Invalid media id" });
+      if (!(await verifyMediaAccess(mediaId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      const item = await storage.getMedia(mediaId);
+      if (!item) return res.status(404).json({ message: "Media not found" });
+      const project = await storage.getProject(item.projectId);
+      if (project && project.coverPhotoId === mediaId) {
+        await storage.updateProject(item.projectId, { coverPhotoId: null } as any);
+      }
+      await storage.deleteMedia(mediaId);
+      const key = extractS3KeyFromUrl(item.url);
+      if (key) {
+        try { await deleteFromS3(key); } catch (e) { console.warn("S3 delete failed", e); }
+      }
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Failed to delete media", error);
+      res.status(500).json({ message: "Failed to delete media" });
     }
   });
 
