@@ -160,6 +160,112 @@ export default function PhotoViewer({
     setEditingTags(false);
   }, [media.id, media.caption, media.tags]);
 
+  const saveAnnotatedPhoto = useMutation({
+    mutationFn: async () => {
+      if (annotations.length === 0) throw new Error("No annotations to save");
+
+      const blob: Blob = await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = () => {
+          const w = img.naturalWidth;
+          const h = img.naturalHeight;
+          const off = document.createElement("canvas");
+          off.width = w;
+          off.height = h;
+          const ctx = off.getContext("2d");
+          if (!ctx) return reject(new Error("Canvas context unavailable"));
+          ctx.drawImage(img, 0, 0, w, h);
+          for (const shape of annotations) {
+            const scaled: AnnotationShape = {
+              ...shape,
+              width: Math.max(1, shape.width * (Math.min(w, h) / 600)),
+            } as AnnotationShape;
+            drawShape(ctx, scaled, w, h);
+          }
+          off.toBlob(
+            (b) => (b ? resolve(b) : reject(new Error("Failed to encode image"))),
+            "image/jpeg",
+            0.92,
+          );
+        };
+        img.onerror = () =>
+          reject(new Error("Could not load image for export (CORS)"));
+        img.src = media.url;
+      });
+
+      const baseName = (media.originalName || "photo").replace(/\.[^.]+$/, "");
+      const fileName = `annotated-${baseName}-${Date.now()}.jpg`;
+
+      const signRes = await fetch(`/api/uploads/sign`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          files: [{ originalName: fileName, mimeType: "image/jpeg" }],
+        }),
+      });
+      if (!signRes.ok) throw new Error(await signRes.text());
+      const signed: Array<{ key: string; uploadUrl: string; publicUrl: string }> =
+        await signRes.json();
+
+      const putRes = await fetch(signed[0].uploadUrl, {
+        method: "PUT",
+        headers: { "Content-Type": "image/jpeg" },
+        body: blob,
+      });
+      if (!putRes.ok) throw new Error("Upload to storage failed");
+
+      const finalizeRes = await fetch(`/api/projects/${project.id}/media`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          files: [
+            {
+              key: signed[0].key,
+              publicUrl: signed[0].publicUrl,
+              originalName: fileName,
+              mimeType: "image/jpeg",
+            },
+          ],
+        }),
+      });
+      if (!finalizeRes.ok) throw new Error(await finalizeRes.text());
+      return finalizeRes.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["/api/projects", project.id.toString(), "media"],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["/api/projects", project.id.toString()],
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/media"] });
+      setAnnotations([]);
+      setCurrentShape(null);
+      setIsAnnotating(false);
+      toast({
+        title: "Annotations saved",
+        description: "A new annotated photo was added to the project.",
+      });
+    },
+    onError: (error: Error) => {
+      if (isUnauthorizedError(error)) {
+        toast({ title: "Unauthorized", variant: "destructive" });
+        setTimeout(() => {
+          window.location.href = "/login";
+        }, 500);
+        return;
+      }
+      toast({
+        title: "Could not save annotations",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
   const updateMedia = useMutation({
     mutationFn: async (data: { caption?: string; tags?: string[] }) => {
       const res = await apiRequest("PATCH", `/api/media/${media.id}`, data);
@@ -505,6 +611,18 @@ export default function PhotoViewer({
                 data-testid="button-clear-annotations"
               >
                 <Trash2 className="h-4 w-4" />
+              </Button>
+              <div className="w-px h-6 bg-black/20 dark:bg-white/20 mx-0.5" />
+              <Button
+                size="sm"
+                onClick={() => saveAnnotatedPhoto.mutate()}
+                disabled={annotations.length === 0 || saveAnnotatedPhoto.isPending}
+                className="h-8 px-3 bg-[#F09000] hover:bg-[#D67F00] text-white font-medium"
+                title="Save annotated photo"
+                data-testid="button-save-annotations"
+              >
+                <Check className="h-4 w-4 mr-1" />
+                {saveAnnotatedPhoto.isPending ? "Saving..." : "Save"}
               </Button>
             </>
           )}
