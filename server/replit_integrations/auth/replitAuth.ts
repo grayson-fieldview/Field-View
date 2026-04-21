@@ -143,7 +143,11 @@ export async function setupAuth(app: Express) {
         rawCookieHeader: req.headers.cookie || "(none)",
         cookieHeaderLength: req.headers.cookie?.length || 0,
         hasConnectSid: req.headers.cookie?.includes("connect.sid") || false,
+        sessionStoreLookup: "checking...",
       }));
+      req.sessionStore.get(req.sessionID, (err, sessionData) => {
+        console.log("[store-diag] direct store lookup for sessionID", req.sessionID, "err:", err, "found:", !!sessionData, "hasPassport:", !!(sessionData as any)?.passport);
+      });
     }
     next();
   });
@@ -346,8 +350,13 @@ export async function setupAuth(app: Express) {
       }
       req.login(user, (err) => {
         if (err) return next(err);
+        console.log("[login-diag] req.login complete, sessionID:", req.sessionID, "session.passport:", (req.session as any)?.passport);
         req.session.save((saveErr) => {
-          if (saveErr) return next(saveErr);
+          if (saveErr) {
+            console.log("[login-diag] session.save ERROR:", saveErr);
+            return next(saveErr);
+          }
+          console.log("[login-diag] session.save complete, sessionID:", req.sessionID);
           const { password: _, ...safeUser } = user;
           return res.json(safeUser);
         });
