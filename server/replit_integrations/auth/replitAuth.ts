@@ -140,6 +140,9 @@ export async function setupAuth(app: Express) {
         referer: req.headers.referer || "(none)",
         hasCookieHeader: !!req.headers.cookie,
         cookieFirstChars: req.headers.cookie?.slice(0, 50),
+        rawCookieHeader: req.headers.cookie || "(none)",
+        cookieHeaderLength: req.headers.cookie?.length || 0,
+        hasConnectSid: req.headers.cookie?.includes("connect.sid") || false,
       }));
     }
     next();
