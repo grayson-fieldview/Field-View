@@ -37,6 +37,7 @@ import {
   Plus,
   Eye,
   EyeOff,
+  Eraser,
 } from "lucide-react";
 import type { Media, Comment, Task, Project, MediaAnnotation, AnnotationStroke } from "@shared/schema";
 import { useAuth } from "@/hooks/use-auth";
@@ -68,7 +69,55 @@ interface PhotoViewerProps {
 }
 
 type AnnotationPoint = { x: number; y: number };
-type AnnotationTool = "freehand" | "arrow" | "circle" | "rectangle" | "line";
+type AnnotationTool = "freehand" | "arrow" | "circle" | "rectangle" | "line" | "eraser";
+
+const ERASER_THRESHOLD = 0.015;
+
+function dist(a: AnnotationPoint, b: AnnotationPoint): number {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function distToSegment(p: AnnotationPoint, a: AnnotationPoint, b: AnnotationPoint): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  if (len2 === 0) return dist(p, a);
+  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return dist(p, { x: a.x + t * dx, y: a.y + t * dy });
+}
+
+function shapeHit(shape: AnnotationShape, p: AnnotationPoint, threshold: number): boolean {
+  if (shape.type === "freehand") {
+    for (let i = 0; i < shape.points.length - 1; i++) {
+      if (distToSegment(p, shape.points[i], shape.points[i + 1]) < threshold) return true;
+    }
+    return false;
+  }
+  if (shape.type === "arrow" || shape.type === "line") {
+    return distToSegment(p, shape.start, shape.end) < threshold;
+  }
+  if (shape.type === "rectangle") {
+    const { start: s, end: e } = shape;
+    const x1 = Math.min(s.x, e.x), x2 = Math.max(s.x, e.x);
+    const y1 = Math.min(s.y, e.y), y2 = Math.max(s.y, e.y);
+    const tl = { x: x1, y: y1 }, tr = { x: x2, y: y1 };
+    const bl = { x: x1, y: y2 }, br = { x: x2, y: y2 };
+    return (
+      distToSegment(p, tl, tr) < threshold ||
+      distToSegment(p, tr, br) < threshold ||
+      distToSegment(p, br, bl) < threshold ||
+      distToSegment(p, bl, tl) < threshold
+    );
+  }
+  if (shape.type === "circle") {
+    const r = dist(shape.center, shape.radius);
+    return Math.abs(dist(shape.center, p) - r) < threshold;
+  }
+  return false;
+}
 type AnnotationShape =
   | { type: "freehand"; points: AnnotationPoint[]; color: string; width: number }
   | { type: "arrow"; start: AnnotationPoint; end: AnnotationPoint; color: string; width: number }
@@ -193,6 +242,10 @@ export default function PhotoViewer({
   const saveAnnotation = useMutation({
     mutationFn: async () => {
       const strokes = annotations.map(shapeToStroke);
+      if (editingAnnotationId && strokes.length === 0) {
+        await apiRequest("DELETE", `/api/annotations/${editingAnnotationId}`);
+        return null;
+      }
       if (editingAnnotationId) {
         const res = await apiRequest(
           "PUT",
@@ -547,11 +600,21 @@ export default function PhotoViewer({
     };
   };
 
+  const eraseAt = (pos: AnnotationPoint) => {
+    setAnnotations((prev) => prev.filter((s) => !shapeHit(s, pos, ERASER_THRESHOLD)));
+  };
+
   const handlePointerDown = (e: React.MouseEvent | React.TouchEvent) => {
     if (!isAnnotating) return;
     e.preventDefault();
     const pos = getRelativePos(e);
     if (!pos) return;
+
+    if (annotationTool === "eraser") {
+      setDrawStart(pos);
+      eraseAt(pos);
+      return;
+    }
 
     if (annotationTool === "freehand") {
       setCurrentShape({ type: "freehand", points: [pos], color: annotationColor, width: annotationWidth });
@@ -570,7 +633,14 @@ export default function PhotoViewer({
   };
 
   const handlePointerMove = (e: React.MouseEvent | React.TouchEvent) => {
-    if (!isAnnotating || !currentShape) return;
+    if (!isAnnotating) return;
+    if (annotationTool === "eraser" && drawStart) {
+      e.preventDefault();
+      const pos = getRelativePos(e);
+      if (pos) eraseAt(pos);
+      return;
+    }
+    if (!currentShape) return;
     e.preventDefault();
     const pos = getRelativePos(e);
     if (!pos) return;
@@ -593,7 +663,12 @@ export default function PhotoViewer({
   };
 
   const handlePointerUp = () => {
-    if (!isAnnotating || !currentShape) return;
+    if (!isAnnotating) return;
+    if (annotationTool === "eraser") {
+      setDrawStart(null);
+      return;
+    }
+    if (!currentShape) return;
     const isValid = currentShape.type === "freehand"
       ? currentShape.points.length > 1
       : true;
@@ -761,13 +836,13 @@ export default function PhotoViewer({
               <Button
                 size="sm"
                 onClick={() => saveAnnotation.mutate()}
-                disabled={annotations.length === 0 || saveAnnotation.isPending}
+                disabled={(annotations.length === 0 && !editingAnnotationId) || saveAnnotation.isPending || deleteAnnotation.isPending}
                 className="h-8 px-3 bg-[#F09000] hover:bg-[#D67F00] text-white font-medium"
                 title="Save annotations"
                 data-testid="button-save-annotations"
               >
                 <Check className="h-4 w-4 mr-1" />
-                {saveAnnotation.isPending ? "Saving..." : "Save"}
+                {saveAnnotation.isPending || deleteAnnotation.isPending ? "Saving..." : "Save"}
               </Button>
             </>
           )}
@@ -825,6 +900,16 @@ export default function PhotoViewer({
                 data-testid="button-tool-line"
               >
                 <Minus className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setAnnotationTool("eraser")}
+                className={`rounded ${annotationTool === "eraser" ? "bg-primary text-primary-foreground" : ""}`}
+                title="Eraser"
+                data-testid="button-tool-eraser"
+              >
+                <Eraser className="h-4 w-4" />
               </Button>
             </div>
 
