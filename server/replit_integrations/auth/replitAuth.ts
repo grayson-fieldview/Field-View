@@ -343,8 +343,11 @@ export async function setupAuth(app: Express) {
       }
       req.login(user, (err) => {
         if (err) return next(err);
-        const { password: _, ...safeUser } = user;
-        return res.json(safeUser);
+        req.session.save((saveErr) => {
+          if (saveErr) return next(saveErr);
+          const { password: _, ...safeUser } = user;
+          return res.json(safeUser);
+        });
       });
     })(req, res, next);
   });
