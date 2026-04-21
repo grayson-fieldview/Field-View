@@ -1,0 +1,47 @@
+I'm on the project detail page and trying to edit the address of an existing project. Three issues are happening:
+
+When I click into the address field to edit, the Google Places autocomplete dropdown does NOT appear — no address suggestions show as I type
+There's no visible Submit/Save button to confirm the address change
+Even when I try to pick a suggestion (if the dropdown did appear), the new address doesn't save
+
+Expected behavior:
+
+Click the address field → enters edit mode
+Start typing → Google Places autocomplete dropdown shows address suggestions (same behavior as on Create New Project form)
+A "Save" button appears (and maybe a "Cancel" button) as soon as the user begins editing
+Click a suggestion → the field populates with the selected address and lat/lng are captured
+Click Save → address + lat/lng are saved to the database, edit mode exits, new address displays
+
+Reference: The address autocomplete works correctly on the Create New Project form (that was fixed recently in the address-autocomplete race condition commit). The same AddressAutocomplete component should be reused on the project detail edit flow. The edit flow is a DIFFERENT screen (project-detail.tsx) and appears to have its own, inferior implementation.
+Before writing any fix code, please diagnose:
+
+Find the address editing UI on the project detail page — file path and line numbers for:
+
+The address display component on project-detail.tsx
+The input/edit mode component (is it using <AddressAutocomplete> or a plain <Input>?)
+The save handler / mutation
+The Submit/Save button rendering logic (if any exists at all)
+
+
+Confirm or deny the following suspicions:
+
+Is the edit address field using the shared <AddressAutocomplete> component, or is it a raw text input that never wired up Google Places at all?
+Does the current UI even have a "Save" button for the address field, or does it attempt to save on blur / on every keystroke?
+Is the updateAddress mutation being called correctly, and if so, is it being called with lat/lng or only the address text?
+Is the Google Maps API script loaded on the project detail page? (It may be loaded on the Create page but not the Detail page — that would explain the missing dropdown entirely.)
+
+
+Report your findings with file paths, line numbers, and a diagnosis of each of the 3 issues before touching any code.
+
+Then, once diagnosed, implement this fix:
+
+Reuse the SAME <AddressAutocomplete> component used on the Create New Project form. Do not build a parallel implementation.
+When the user clicks into the address field, enter "edit mode" — show the <AddressAutocomplete> input with the current address as the initial value
+As soon as the user starts editing, render a "Save" button and a "Cancel" button below the field
+If the user picks a Google Places suggestion, capture both the address text and the lat/lng (same atomic pattern as the Create form fix)
+Clicking Save calls the existing updateAddress mutation with { address, latitude, longitude }
+Clicking Cancel reverts to the original address and exits edit mode
+After a successful save, exit edit mode and show the new address + refresh the project data
+Verify Google Maps script is loaded on this page (it may need to be added if it's not)
+
+Commit with message like fix(project-detail): use AddressAutocomplete for editing project address with Save/Cancel buttons and push to GitHub.

@@ -314,6 +314,9 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const renameInputRef = useRef<HTMLInputElement>(null);
   const [isEditingAddress, setIsEditingAddress] = useState(false);
   const [addressText, setAddressText] = useState("");
+  const [pendingLat, setPendingLat] = useState<number | null>(null);
+  const [pendingLng, setPendingLng] = useState<number | null>(null);
+  const [originalAddress, setOriginalAddress] = useState("");
   const [showCoverPicker, setShowCoverPicker] = useState(false);
   const [selectedMedia, setSelectedMedia] = useState<(Media & { uploadedBy?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } }) | null>(null);
   const [newTaskTitle, setNewTaskTitle] = useState("");
@@ -926,29 +929,60 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                 </div>
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
                   {isEditingAddress ? (
-                    <div className="flex items-center gap-2 w-full max-w-md">
-                      <div className="flex-1">
+                    <div className="flex items-center gap-2 w-full max-w-md flex-wrap">
+                      <div className="flex-1 min-w-[220px]">
                         <AddressAutocomplete
                           value={addressText}
                           onChange={(result) => {
-                            updateAddress.mutate({
-                              address: result.address,
-                              latitude: result.latitude,
-                              longitude: result.longitude,
-                            });
+                            setAddressText(result.address);
+                            setPendingLat(result.latitude);
+                            setPendingLng(result.longitude);
                           }}
-                          onTextChange={setAddressText}
+                          onTextChange={(text) => {
+                            setAddressText(text);
+                            setPendingLat(null);
+                            setPendingLng(null);
+                          }}
                           placeholder="Search for an address..."
                           data-testid="input-edit-address"
                         />
                       </div>
                       <Button
+                        size="sm"
+                        disabled={
+                          updateAddress.isPending ||
+                          addressText.trim() === originalAddress.trim()
+                        }
+                        onClick={() => {
+                          const trimmed = addressText.trim();
+                          if (!trimmed || trimmed === originalAddress.trim()) {
+                            setIsEditingAddress(false);
+                            return;
+                          }
+                          updateAddress.mutate({
+                            address: trimmed,
+                            latitude: pendingLat ?? undefined,
+                            longitude: pendingLng ?? undefined,
+                          });
+                        }}
+                        data-testid="button-save-address"
+                      >
+                        <Check className="h-4 w-4 mr-1" />
+                        Save
+                      </Button>
+                      <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => setIsEditingAddress(false)}
+                        onClick={() => {
+                          setAddressText(originalAddress);
+                          setPendingLat(null);
+                          setPendingLng(null);
+                          setIsEditingAddress(false);
+                        }}
                         data-testid="button-cancel-address"
                       >
-                        <X className="h-4 w-4" />
+                        <X className="h-4 w-4 mr-1" />
+                        Cancel
                       </Button>
                     </div>
                   ) : (
@@ -957,7 +991,11 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                         <button
                           className="group text-sm text-muted-foreground hover:text-[#F09000] flex items-center gap-1 transition-colors"
                           onClick={() => {
-                            setAddressText(project.address || "");
+                            const current = project.address || "";
+                            setAddressText(current);
+                            setOriginalAddress(current);
+                            setPendingLat(null);
+                            setPendingLng(null);
                             setIsEditingAddress(true);
                           }}
                           data-testid="button-edit-address"
@@ -971,6 +1009,9 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                           className="text-sm text-muted-foreground hover:text-[#F09000] flex items-center gap-1 transition-colors"
                           onClick={() => {
                             setAddressText("");
+                            setOriginalAddress("");
+                            setPendingLat(null);
+                            setPendingLng(null);
                             setIsEditingAddress(true);
                           }}
                           data-testid="button-add-address"
