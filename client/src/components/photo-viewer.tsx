@@ -35,8 +35,12 @@ import {
   Minus,
   Check,
   Plus,
+  Eye,
+  EyeOff,
 } from "lucide-react";
-import type { Media, Comment, Task, Project } from "@shared/schema";
+import type { Media, Comment, Task, Project, MediaAnnotation, AnnotationStroke } from "@shared/schema";
+import { useAuth } from "@/hooks/use-auth";
+import { AnnotationOverlay } from "@/lib/annotation-svg";
 
 type MediaWithUser = Media & {
   uploadedBy?: {
@@ -72,6 +76,37 @@ type AnnotationShape =
   | { type: "rectangle"; start: AnnotationPoint; end: AnnotationPoint; color: string; width: number }
   | { type: "line"; start: AnnotationPoint; end: AnnotationPoint; color: string; width: number };
 
+function newId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `s-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function shapeToStroke(shape: AnnotationShape): AnnotationStroke {
+  if (shape.type === "freehand") {
+    return { id: newId(), type: "pencil", color: shape.color, width: shape.width, points: shape.points };
+  }
+  if (shape.type === "circle") {
+    return { id: newId(), type: "circle", color: shape.color, width: shape.width, points: [shape.center, shape.radius] };
+  }
+  return { id: newId(), type: shape.type, color: shape.color, width: shape.width, points: [shape.start, shape.end] };
+}
+
+function strokeToShape(stroke: AnnotationStroke): AnnotationShape {
+  const { color, width, points } = stroke;
+  if (stroke.type === "pencil") {
+    return { type: "freehand", color, width, points };
+  }
+  const [a, b] = points;
+  const safeA = a || { x: 0, y: 0 };
+  const safeB = b || safeA;
+  if (stroke.type === "circle") {
+    return { type: "circle", color, width, center: safeA, radius: safeB };
+  }
+  return { type: stroke.type, color, width, start: safeA, end: safeB };
+}
+
 const ANNOTATION_COLORS = [
   { name: "Red", value: "#ff3b30" },
   { name: "Green", value: "#34c759" },
@@ -92,11 +127,14 @@ export default function PhotoViewer({
   onNavigate,
 }: PhotoViewerProps) {
   const { toast } = useToast();
+  const { user: currentUser } = useAuth();
   const [photoOnlyMode, setPhotoOnlyMode] = useState(false);
   const [newComment, setNewComment] = useState("");
   const [isAnnotating, setIsAnnotating] = useState(false);
   const [annotations, setAnnotations] = useState<AnnotationShape[]>([]);
   const [currentShape, setCurrentShape] = useState<AnnotationShape | null>(null);
+  const [editingAnnotationId, setEditingAnnotationId] = useState<string | null>(null);
+  const [showOverlay, setShowOverlay] = useState(true);
   const [annotationColor, setAnnotationColor] = useState("#ff3b30");
   const [annotationWidth, setAnnotationWidth] = useState(3);
   const [annotationTool, setAnnotationToolRaw] = useState<AnnotationTool>("freehand");
@@ -138,6 +176,83 @@ export default function PhotoViewer({
       toast({ title: "Error", description: error.message, variant: "destructive" });
     },
   });
+
+  const { data: savedAnnotations = [] } = useQuery<(MediaAnnotation & { user?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } })[]>({
+    queryKey: ["/api/media", media.id.toString(), "annotations"],
+  });
+
+  const allDisplayedStrokes: AnnotationStroke[] = (savedAnnotations || []).flatMap((a) => {
+    if (editingAnnotationId && a.id === editingAnnotationId) return [];
+    return Array.isArray(a.strokes) ? (a.strokes as AnnotationStroke[]) : [];
+  });
+
+  const myExistingAnnotation = (savedAnnotations || []).find(
+    (a) => currentUser?.id && a.userId === currentUser.id,
+  );
+
+  const saveAnnotation = useMutation({
+    mutationFn: async () => {
+      const strokes = annotations.map(shapeToStroke);
+      if (editingAnnotationId) {
+        const res = await apiRequest(
+          "PUT",
+          `/api/annotations/${editingAnnotationId}`,
+          { strokes },
+        );
+        return res.json();
+      }
+      const res = await apiRequest(
+        "POST",
+        `/api/media/${media.id}/annotations`,
+        { strokes },
+      );
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["/api/media", media.id.toString(), "annotations"],
+      });
+      setAnnotations([]);
+      setCurrentShape(null);
+      setEditingAnnotationId(null);
+      setIsAnnotating(false);
+      toast({ title: "Annotations saved" });
+    },
+    onError: (error: Error) => {
+      if (isUnauthorizedError(error)) {
+        toast({ title: "Unauthorized", variant: "destructive" });
+        setTimeout(() => { window.location.href = "/login"; }, 500);
+        return;
+      }
+      toast({ title: "Could not save", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const deleteAnnotation = useMutation({
+    mutationFn: async (annotationId: string) => {
+      await apiRequest("DELETE", `/api/annotations/${annotationId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["/api/media", media.id.toString(), "annotations"],
+      });
+      toast({ title: "Annotations removed" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Could not delete", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const startEditingMine = () => {
+    if (!myExistingAnnotation) return;
+    const strokes = Array.isArray(myExistingAnnotation.strokes)
+      ? (myExistingAnnotation.strokes as AnnotationStroke[])
+      : [];
+    setAnnotations(strokes.map(strokeToShape));
+    setEditingAnnotationId(myExistingAnnotation.id);
+    setIsAnnotating(true);
+    setShowOverlay(true);
+  };
 
   const [editingDescription, setEditingDescription] = useState(false);
   const [descriptionText, setDescriptionText] = useState(media.caption || "");
@@ -513,6 +628,9 @@ export default function PhotoViewer({
           draggable={false}
           data-testid="photo-viewer-image"
         />
+        {showOverlay && allDisplayedStrokes.length > 0 && (
+          <AnnotationOverlay strokes={allDisplayedStrokes} />
+        )}
         <canvas
           ref={canvasRef}
           className={`absolute inset-0 w-full h-full ${isAnnotating ? "cursor-crosshair" : "cursor-default"}`}
@@ -589,6 +707,33 @@ export default function PhotoViewer({
           >
             <Download className="h-4 w-4" />
           </Button>
+          {savedAnnotations.length > 0 && !isAnnotating && (
+            <>
+              <div className="w-px h-6 bg-black/20 dark:bg-white/20 mx-0.5" />
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setShowOverlay((v) => !v)}
+                title={showOverlay ? "Hide annotations" : "Show annotations"}
+                data-testid="button-toggle-annotations"
+              >
+                {showOverlay ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+              </Button>
+              {myExistingAnnotation && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={startEditingMine}
+                  className="h-8 px-2 text-xs"
+                  title="Edit your annotations"
+                  data-testid="button-edit-my-annotations"
+                >
+                  <Pencil className="h-3.5 w-3.5 mr-1" />
+                  Edit mine
+                </Button>
+              )}
+            </>
+          )}
           {isAnnotating && (
             <>
               <div className="w-px h-6 bg-black/20 dark:bg-white/20 mx-0.5" />
@@ -615,14 +760,14 @@ export default function PhotoViewer({
               <div className="w-px h-6 bg-black/20 dark:bg-white/20 mx-0.5" />
               <Button
                 size="sm"
-                onClick={() => saveAnnotatedPhoto.mutate()}
-                disabled={annotations.length === 0 || saveAnnotatedPhoto.isPending}
+                onClick={() => saveAnnotation.mutate()}
+                disabled={annotations.length === 0 || saveAnnotation.isPending}
                 className="h-8 px-3 bg-[#F09000] hover:bg-[#D67F00] text-white font-medium"
-                title="Save annotated photo"
+                title="Save annotations"
                 data-testid="button-save-annotations"
               >
                 <Check className="h-4 w-4 mr-1" />
-                {saveAnnotatedPhoto.isPending ? "Saving..." : "Save"}
+                {saveAnnotation.isPending ? "Saving..." : "Save"}
               </Button>
             </>
           )}

@@ -1,0 +1,106 @@
+Implement non-destructive annotations for photos. Do not touch any other functionality.
+
+GOAL: Original photos in S3 stay untouched forever. Annotations (strokes, arrows, shapes) are stored separately in Postgres as JSON and rendered as an SVG overlay on top of the photo at view time. Users can add, edit, or remove annotations without ever modifying the original image.
+
+=== PHASE 1 SCOPE (this prompt) ===
+- Database table for annotations
+- CRUD API endpoints for annotations
+- Web frontend: save strokes as JSON instead of flattened image
+- Web frontend: render SVG overlay on top of photo in viewer
+- DO NOT touch mobile app
+- DO NOT migrate existing duplicated annotated photos (we'll decide later)
+- DO NOT delete the old save-as-new-photo code path yet - leave it in place, just stop calling it from the annotation flow
+
+=== DATA MODEL ===
+Create a new Drizzle schema for annotations table:
+
+- id: uuid primary key
+- media_id: foreign key to media table (cascade delete)
+- user_id: foreign key to users table (who drew it)
+- strokes: jsonb (array of stroke objects)
+- created_at: timestamp default now
+- updated_at: timestamp default now
+
+Stroke JSON schema (each element in strokes array):
+{
+  "id": "stroke-uuid",
+  "type": "pencil" | "arrow" | "rectangle" | "circle" | "line",
+  "color": "#hex",
+  "width": number,
+  "points": [{"x": 0.42, "y": 0.18}, ...]  // normalized 0-1 coordinates so annotations scale with image
+}
+
+Use normalized 0-1 coordinates (x and y as fractions of image width/height). This makes annotations resolution-independent.
+
+Create and run the migration. Use the existing Drizzle migration pattern in the repo.
+
+=== API ENDPOINTS ===
+All require authentication. User can only modify their own annotations, but can view annotations from anyone on photos they have access to.
+
+GET /api/media/:mediaId/annotations
+  Returns array of all annotation records for the media
+
+POST /api/media/:mediaId/annotations
+  Body: { strokes: [...] }
+  Creates new annotation record owned by current user. Returns created record.
+
+PUT /api/annotations/:annotationId
+  Body: { strokes: [...] }
+  Updates strokes. Only owner can update. Returns updated record.
+
+DELETE /api/annotations/:annotationId
+  Only owner can delete. Returns 204.
+
+Add these to the existing route file that handles media endpoints. Match the existing error handling and auth middleware patterns.
+
+=== WEB FRONTEND ===
+1. Annotation editor: 
+   - Find the current annotation save handler (the one triggered by the "Save" button we just got working)
+   - Instead of flattening the canvas to a PNG and uploading to S3, serialize the current strokes as JSON and POST to /api/media/:mediaId/annotations
+   - If an existing annotation record is being edited, PUT instead
+   - On success, close the editor and reload the photo view
+
+2. Photo viewer:
+   - When displaying a photo, also fetch GET /api/media/:mediaId/annotations
+   - Render an <svg> element absolutely positioned over the <img>, with viewBox matching the image aspect ratio
+   - For each stroke, render appropriate SVG element:
+     * pencil → <polyline points="...">
+     * arrow → <line> with arrowhead marker
+     * rectangle → <rect>
+     * circle → <ellipse>
+     * line → <line>
+   - Use normalized coords multiplied by SVG viewBox dimensions
+   - Annotations should overlay the image, not obscure the underlying photo
+
+3. Annotation list UI:
+   - In the photo viewer, show a small indicator when annotations exist
+   - Add a toggle or hover control to show/hide annotation overlay
+   - For the annotation owner, add an "edit" button that reopens the editor pre-populated with existing strokes
+
+=== FILES TO MODIFY ===
+Diagnose the current codebase first. Identify:
+- Current annotation editor component file
+- Current photo viewer component file  
+- Schema/migration files
+- API route file where media endpoints live
+
+Report these paths in your response before writing any code.
+
+=== CONSTRAINTS ===
+- Do NOT modify existing media upload endpoints
+- Do NOT modify S3 logic
+- Do NOT touch the mobile codebase
+- Preserve existing auth middleware patterns
+- Use existing Drizzle/Express patterns, don't introduce new libraries
+- If you need to add an SVG rendering utility, put it in a new file under client/src/lib/ or similar
+
+=== WORKFLOW ===
+1. First, report the file paths you'll be touching (no code changes yet)
+2. Then generate and apply the Drizzle migration
+3. Then add the API endpoints
+4. Then update the web frontend (save handler first, then viewer)
+5. Test the flow locally if possible
+6. Commit with message: feat(annotations): non-destructive layered annotations with strokes stored in postgres
+7. Stop. Report what was changed and what's ready to test.
+
+Do not push to GitHub yet - I want to review the changes before they deploy to Vercel.

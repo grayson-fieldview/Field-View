@@ -1,5 +1,5 @@
 import { sql, relations } from "drizzle-orm";
-import { pgTable, text, varchar, integer, timestamp, boolean, real, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, timestamp, boolean, real, pgEnum, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -46,6 +46,15 @@ export const media = pgTable("media", {
   longitude: real("longitude"),
   tags: text("tags").array().default(sql`'{}'::text[]`),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const mediaAnnotations = pgTable("media_annotations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  mediaId: integer("media_id").references(() => media.id, { onDelete: "cascade" }).notNull(),
+  userId: varchar("user_id").references(() => users.id).notNull(),
+  strokes: jsonb("strokes").notNull().default(sql`'[]'::jsonb`),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
 export const comments = pgTable("comments", {
@@ -247,6 +256,11 @@ export const commentsRelations = relations(comments, ({ one }) => ({
   user: one(users, { fields: [comments.userId], references: [users.id] }),
 }));
 
+export const mediaAnnotationsRelations = relations(mediaAnnotations, ({ one }) => ({
+  media: one(media, { fields: [mediaAnnotations.mediaId], references: [media.id] }),
+  user: one(users, { fields: [mediaAnnotations.userId], references: [users.id] }),
+}));
+
 export const tasksRelations = relations(tasks, ({ one }) => ({
   project: one(projects, { fields: [tasks.projectId], references: [projects.id] }),
   assignedTo: one(users, { fields: [tasks.assignedToId], references: [users.id] }),
@@ -293,6 +307,24 @@ export const insertCommentSchema = createInsertSchema(comments).omit({
   createdAt: true,
 });
 
+export const annotationStrokeSchema = z.object({
+  id: z.string(),
+  type: z.enum(["pencil", "arrow", "rectangle", "circle", "line"]),
+  color: z.string(),
+  width: z.number(),
+  points: z.array(z.object({ x: z.number(), y: z.number() })),
+});
+
+export const annotationStrokesSchema = z.array(annotationStrokeSchema);
+
+export const insertMediaAnnotationSchema = createInsertSchema(mediaAnnotations).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+}).extend({
+  strokes: annotationStrokesSchema,
+});
+
 export const insertTaskSchema = createInsertSchema(tasks).omit({
   id: true,
   createdAt: true,
@@ -321,6 +353,9 @@ export type InsertMedia = z.infer<typeof insertMediaSchema>;
 export type Media = typeof media.$inferSelect;
 export type InsertComment = z.infer<typeof insertCommentSchema>;
 export type Comment = typeof comments.$inferSelect;
+export type AnnotationStroke = z.infer<typeof annotationStrokeSchema>;
+export type InsertMediaAnnotation = z.infer<typeof insertMediaAnnotationSchema>;
+export type MediaAnnotation = typeof mediaAnnotations.$inferSelect;
 export type InsertTask = z.infer<typeof insertTaskSchema>;
 export type Task = typeof tasks.$inferSelect;
 export type InsertChecklist = z.infer<typeof insertChecklistSchema>;

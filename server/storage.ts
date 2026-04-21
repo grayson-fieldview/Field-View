@@ -1,6 +1,7 @@
 import {
   projects,
   media,
+  mediaAnnotations,
   comments,
   tasks,
   checklists,
@@ -19,6 +20,8 @@ import {
   type InsertMedia,
   type Comment,
   type InsertComment,
+  type MediaAnnotation,
+  type InsertMediaAnnotation,
   type Task,
   type InsertTask,
   type Checklist,
@@ -73,6 +76,12 @@ export interface IStorage {
 
   getCommentsByMedia(mediaId: number): Promise<(Comment & { user?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } })[]>;
   createComment(comment: InsertComment): Promise<Comment>;
+
+  getAnnotationsByMedia(mediaId: number): Promise<(MediaAnnotation & { user?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } })[]>;
+  getAnnotation(id: string): Promise<MediaAnnotation | undefined>;
+  createAnnotation(annotation: InsertMediaAnnotation): Promise<MediaAnnotation>;
+  updateAnnotation(id: string, data: { strokes: unknown }): Promise<MediaAnnotation | undefined>;
+  deleteAnnotation(id: string): Promise<void>;
 
   getTasksByProject(projectId: number): Promise<(Task & { assignedTo?: { firstName: string | null; lastName: string | null } })[]>;
   getAllTasks(accountId: string): Promise<(Task & { project?: { name: string }; assignedTo?: { firstName: string | null; lastName: string | null } })[]>;
@@ -305,6 +314,55 @@ export class DatabaseStorage implements IStorage {
   async createComment(comment: InsertComment): Promise<Comment> {
     const [created] = await db.insert(comments).values(comment).returning();
     return created;
+  }
+
+  async getAnnotationsByMedia(mediaId: number) {
+    const rows = await db
+      .select({
+        annotation: mediaAnnotations,
+        user: {
+          firstName: users.firstName,
+          lastName: users.lastName,
+          profileImageUrl: users.profileImageUrl,
+        },
+      })
+      .from(mediaAnnotations)
+      .leftJoin(users, eq(mediaAnnotations.userId, users.id))
+      .where(eq(mediaAnnotations.mediaId, mediaId))
+      .orderBy(asc(mediaAnnotations.createdAt));
+    return rows.map((r) => ({
+      ...r.annotation,
+      user: r.user?.firstName ? r.user : undefined,
+    }));
+  }
+
+  async getAnnotation(id: string): Promise<MediaAnnotation | undefined> {
+    const [row] = await db
+      .select()
+      .from(mediaAnnotations)
+      .where(eq(mediaAnnotations.id, id));
+    return row;
+  }
+
+  async createAnnotation(annotation: InsertMediaAnnotation): Promise<MediaAnnotation> {
+    const [created] = await db
+      .insert(mediaAnnotations)
+      .values(annotation as any)
+      .returning();
+    return created;
+  }
+
+  async updateAnnotation(id: string, data: { strokes: unknown }): Promise<MediaAnnotation | undefined> {
+    const [updated] = await db
+      .update(mediaAnnotations)
+      .set({ strokes: data.strokes as any, updatedAt: new Date() })
+      .where(eq(mediaAnnotations.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteAnnotation(id: string): Promise<void> {
+    await db.delete(mediaAnnotations).where(eq(mediaAnnotations.id, id));
   }
 
   async getTasksByProject(projectId: number) {

@@ -5,7 +5,7 @@ import { storage } from "./storage";
 import { setupAuth, registerAuthRoutes, isAuthenticated, requireActiveSubscription } from "./replit_integrations/auth";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
-import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertReportSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertReportTemplateSchema, insertCalendarEventSchema, projects, media, comments, tasks, checklists, reports, projectAssignments } from "@shared/schema";
+import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertReportSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertReportTemplateSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, reports, projectAssignments } from "@shared/schema";
 import { users, invitations } from "@shared/models/auth";
 import { db } from "./db";
 import { eq, sql, and, or, inArray } from "drizzle-orm";
@@ -589,6 +589,70 @@ export async function registerRoutes(
       res.status(201).json(comment);
     } catch (error) {
       res.status(500).json({ message: "Failed to create comment" });
+    }
+  });
+
+  app.get("/api/media/:mediaId/annotations", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const mediaId = parseInt(req.params.mediaId as string);
+      if (Number.isNaN(mediaId)) return res.status(400).json({ message: "Invalid media id" });
+      if (!(await verifyMediaAccess(mediaId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      const annotations = await storage.getAnnotationsByMedia(mediaId);
+      res.json(annotations);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch annotations" });
+    }
+  });
+
+  app.post("/api/media/:mediaId/annotations", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const mediaId = parseInt(req.params.mediaId as string);
+      if (Number.isNaN(mediaId)) return res.status(400).json({ message: "Invalid media id" });
+      if (!(await verifyMediaAccess(mediaId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      const parsedStrokes = annotationStrokesSchema.safeParse(req.body?.strokes);
+      if (!parsedStrokes.success) {
+        return res.status(400).json({ message: parsedStrokes.error.message });
+      }
+      const created = await storage.createAnnotation({
+        mediaId,
+        userId: req.user.id,
+        strokes: parsedStrokes.data,
+      });
+      res.status(201).json(created);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create annotation" });
+    }
+  });
+
+  app.put("/api/annotations/:id", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const id = req.params.id as string;
+      const existing = await storage.getAnnotation(id);
+      if (!existing) return res.status(404).json({ message: "Annotation not found" });
+      if (existing.userId !== req.user.id) return res.status(403).json({ message: "Only the owner can edit this annotation" });
+      if (!(await verifyMediaAccess(existing.mediaId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      const parsedStrokes = annotationStrokesSchema.safeParse(req.body?.strokes);
+      if (!parsedStrokes.success) {
+        return res.status(400).json({ message: parsedStrokes.error.message });
+      }
+      const updated = await storage.updateAnnotation(id, { strokes: parsedStrokes.data });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update annotation" });
+    }
+  });
+
+  app.delete("/api/annotations/:id", requireActiveSubscription, async (req: any, res) => {
+    try {
+      const id = req.params.id as string;
+      const existing = await storage.getAnnotation(id);
+      if (!existing) return res.status(404).json({ message: "Annotation not found" });
+      if (existing.userId !== req.user.id) return res.status(403).json({ message: "Only the owner can delete this annotation" });
+      if (!(await verifyMediaAccess(existing.mediaId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      await storage.deleteAnnotation(id);
+      res.status(204).end();
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete annotation" });
     }
   });
 
