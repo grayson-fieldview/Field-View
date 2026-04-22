@@ -10,8 +10,9 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { authStorage } from "./storage";
 import { db, pool } from "../../db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import { passwordResetTokens, accounts, invitations, type User } from "@shared/models/auth";
+import { sendPasswordResetEmail } from "../../services/email";
 
 function getBaseUrl(req?: Request) {
   if (process.env.OAUTH_BASE_URL) return process.env.OAUTH_BASE_URL;
@@ -456,6 +457,13 @@ export async function setupAuth(app: Express) {
 
       const user = await authStorage.getUserByEmail(email);
       if (user) {
+        await db.update(passwordResetTokens)
+          .set({ usedAt: new Date() })
+          .where(and(
+            eq(passwordResetTokens.userId, user.id),
+            isNull(passwordResetTokens.usedAt)
+          ));
+
         const token = crypto.randomBytes(32).toString("hex");
         const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
 
@@ -465,11 +473,10 @@ export async function setupAuth(app: Express) {
           expiresAt,
         });
 
-        const baseUrl = `${req.protocol}://${req.get("host")}`;
-        const resetLink = `${baseUrl}/reset-password?token=${token}`;
-
-        if (process.env.NODE_ENV !== "production") {
-          console.log(`[Password Reset] Link for ${email}: ${resetLink}`);
+        try {
+          await sendPasswordResetEmail(email, token);
+        } catch (emailErr) {
+          console.error("[forgot-password] email send failed:", emailErr);
         }
       }
 

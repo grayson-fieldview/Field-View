@@ -83,6 +83,7 @@
     "react-leaflet": "^4.2.1",
     "react-resizable-panels": "^2.1.7",
     "recharts": "^2.15.2",
+    "resend": "^6.12.2",
     "stripe": "^20.0.0",
     "stripe-replit-sync": "^1.0.0",
     "tailwind-merge": "^2.6.0",
