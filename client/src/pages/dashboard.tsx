@@ -317,6 +317,17 @@ export default function DashboardPage() {
           <p className="text-sm text-muted-foreground mt-0.5" data-testid="text-dashboard-tagline">
             Your Field Command Center &mdash; Photos, Tasks, Maps & Insights in One View
           </p>
+          {import.meta.env.DEV && (
+            <button
+              onClick={() => {
+                throw new Error("Sentry test error — safe to ignore");
+              }}
+              className="mt-2 text-xs text-red-600 underline"
+              data-testid="button-sentry-test"
+            >
+              Trigger test error (dev only)
+            </button>
+          )}
         </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>

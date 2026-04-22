@@ -1,0 +1,71 @@
+Install Sentry for error tracking on the web app. This is a production error monitoring tool.
+
+Steps:
+
+1. Install the Sentry SDK for React/Vite:
+   npm install --save @sentry/react
+
+2. Create a new file at client/src/lib/sentry.ts with this content:
+
+import * as Sentry from "@sentry/react";
+
+const DSN = import.meta.env.VITE_SENTRY_DSN;
+
+export function initSentry() {
+  if (!DSN) {
+    console.warn("[sentry] VITE_SENTRY_DSN not set — Sentry disabled");
+    return;
+  }
+  Sentry.init({
+    dsn: DSN,
+    environment: import.meta.env.MODE,
+    release: import.meta.env.VITE_RELEASE || "unknown",
+    tracesSampleRate: 0.1,
+    replaysSessionSampleRate: 0.05,
+    replaysOnErrorSampleRate: 1.0,
+    integrations: [
+      Sentry.browserTracingIntegration(),
+      Sentry.replayIntegration({
+        maskAllText: false,
+        blockAllMedia: true,
+      }),
+    ],
+    beforeSend(event, hint) {
+      // Filter out noise
+      if (event.exception?.values?.[0]?.value?.includes("ResizeObserver")) {
+        return null;
+      }
+      return event;
+    },
+  });
+}
+
+export { Sentry };
+
+3. In the app entry file (likely client/src/main.tsx or client/src/index.tsx), import and call initSentry() BEFORE the React app mounts:
+
+import { initSentry } from "./lib/sentry";
+initSentry();
+// ... existing ReactDOM.render or createRoot code
+
+4. Wrap the top-level App component with Sentry's ErrorBoundary. In the entry file, wrap the <App /> component:
+
+import { Sentry } from "./lib/sentry";
+
+<Sentry.ErrorBoundary fallback={<p>Something went wrong. Our team has been notified.</p>} showDialog>
+  <App />
+</Sentry.ErrorBoundary>
+
+5. Add a test route/button ONLY accessible in development that throws an error, so we can verify Sentry is capturing. Add to any existing dev-only route or temporarily to the dashboard:
+
+{import.meta.env.DEV && (
+  <button onClick={() => { throw new Error("Sentry test error — safe to ignore"); }}>
+    Trigger test error (dev only)
+  </button>
+)}
+
+6. I will add VITE_SENTRY_DSN to Vercel environment variables myself — you don't need to set it. Just verify the code reads from import.meta.env.VITE_SENTRY_DSN.
+
+Commit with message: feat(observability): install Sentry for error tracking
+
+Confirm files modified and when done. Do NOT push to GitHub — I'll review and push from the Git pane.
