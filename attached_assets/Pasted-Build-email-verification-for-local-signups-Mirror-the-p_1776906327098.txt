@@ -1,0 +1,262 @@
+Build email verification for local signups. Mirror the password-reset pattern already implemented in server/services/email.ts and the token schema pattern from passwordResetTokens.
+
+=== DESIGN DECISIONS ===
+- Strict mode: unverified local users cannot log in. Login returns a specific error.
+- Google/Microsoft OAuth signups: auto-mark emailVerified = true (provider already verified).
+- Verification token: 1 hour expiry, single use.
+- Resend endpoint: rate-limited to 1 resend per 60 seconds per user.
+- Do NOT touch the Stripe trial flow — the user still lands on /subscribe after login, no changes to SubscriptionGate or /api/create-checkout-session.
+
+=== STEP 1: Schema changes ===
+
+In shared/models/auth.ts:
+
+1. Add to the users table (in the column list):
+   emailVerified: boolean("email_verified").notNull().default(false),
+
+   Make sure `boolean` is imported from drizzle-orm/pg-core.
+
+2. Add a new table definition for email verification tokens (mirror passwordResetTokens):
+
+export const emailVerificationTokens = pgTable("email_verification_tokens", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+  token: varchar("token").notNull().unique(),
+  expiresAt: timestamp("expires_at").notNull(),
+  usedAt: timestamp("used_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  index("idx_email_verification_tokens_user_id").on(table.userId),
+]);
+
+3. Re-export emailVerificationTokens from shared/schema.ts following the existing pattern.
+
+4. Generate and apply migration via npm run db:push. After migration completes, run a one-off UPDATE to mark all existing users as verified so we don't lock ourselves out of accounts created before this feature existed:
+
+   UPDATE users SET email_verified = true;
+
+=== STEP 2: Email service addition ===
+
+In server/services/email.ts, add a new function alongside sendPasswordResetEmail:
+
+export async function sendEmailVerificationEmail(to: string, verificationToken: string, firstName?: string): Promise<void> {
+  if (!resend) {
+    console.warn("[email] Skipping send — Resend not configured");
+    return;
+  }
+
+  const verifyUrl = `${PUBLIC_APP_URL}/verify-email?token=${verificationToken}`;
+  const greeting = firstName ? `Hi ${firstName},` : "Welcome to Field View!";
+
+  const { data, error } = await resend.emails.send({
+    from: FROM,
+    to,
+    subject: "Verify your email for Field View",
+    html: `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 560px; margin: 0 auto; padding: 40px 20px; color: #111;">
+        <h1 style="font-size: 24px; margin-bottom: 16px;">Verify your email</h1>
+        <p style="font-size: 16px; line-height: 1.5; margin-bottom: 24px;">
+          ${greeting} Please confirm your email address to finish setting up your Field View account.
+        </p>
+        <p style="margin-bottom: 24px;">
+          <a href="${verifyUrl}" style="background: #f97316; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+            Verify email
+          </a>
+        </p>
+        <p style="font-size: 14px; color: #666; line-height: 1.5; margin-bottom: 8px;">
+          Or copy this link into your browser:
+        </p>
+        <p style="font-size: 13px; color: #666; word-break: break-all; margin-bottom: 24px;">
+          ${verifyUrl}
+        </p>
+        <p style="font-size: 14px; color: #666; line-height: 1.5;">
+          This link will expire in 1 hour. If you didn't sign up for Field View, you can safely ignore this email.
+        </p>
+        <hr style="border: none; border-top: 1px solid #eee; margin: 32px 0;">
+        <p style="font-size: 12px; color: #999;">
+          Field View &middot; <a href="https://field-view.com" style="color: #999;">field-view.com</a>
+        </p>
+      </div>
+    `,
+    text: `Verify your email for Field View\n\n${greeting} Please confirm your email address to finish setting up your Field View account:\n\n${verifyUrl}\n\nThis link will expire in 1 hour. If you didn't sign up, you can safely ignore this email.\n\n— Field View`,
+  });
+
+  if (error) {
+    console.error("[email] Failed to send verification email:", error);
+    throw new Error(`Email send failed: ${error.message}`);
+  }
+
+  console.log("[email] Verification email sent:", data?.id);
+}
+
+=== STEP 3: Modify POST /api/register ===
+
+In server/replit_integrations/auth/replitAuth.ts, modify the /api/register handler:
+
+1. Keep all existing logic (validation, password hashing, account creation, invite token handling).
+
+2. When creating the user via authStorage.upsertUser, add emailVerified: false explicitly to the payload (even though the DB default is false, being explicit avoids confusion).
+
+3. AFTER authStorage.upsertUser completes (the user now exists), but BEFORE req.login:
+   - Generate a verification token using crypto.randomBytes(32).toString("hex")
+   - Insert into emailVerificationTokens with 1 hour expiry:
+     await db.insert(emailVerificationTokens).values({
+       userId: user.id,
+       token,
+       expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+     });
+   - Call sendEmailVerificationEmail(user.email, token, user.firstName) wrapped in try/catch (log failures but don't break registration).
+
+4. REMOVE the req.login call. The user is NOT logged in until they verify.
+
+5. Return 201 with:
+   { message: "Please check your email to verify your account.", email: user.email }
+
+=== STEP 4: Add GET /api/verify-email endpoint ===
+
+Add a new route in the same file, near the other auth endpoints:
+
+app.get("/api/verify-email", async (req, res) => {
+  const token = req.query.token as string;
+  if (!token) return res.status(400).json({ error: "Token required" });
+
+  const [row] = await db.select().from(emailVerificationTokens).where(eq(emailVerificationTokens.token, token));
+  if (!row) return res.status(400).json({ error: "Invalid token" });
+  if (row.usedAt) return res.status(400).json({ error: "Token already used" });
+  if (row.expiresAt < new Date()) return res.status(400).json({ error: "Token expired" });
+
+  // Mark user as verified
+  await db.update(users).set({ emailVerified: true }).where(eq(users.id, row.userId));
+  // Mark token as used
+  await db.update(emailVerificationTokens).set({ usedAt: new Date() }).where(eq(emailVerificationTokens.id, row.id));
+
+  res.json({ success: true, message: "Email verified successfully" });
+});
+
+=== STEP 5: Gate login for unverified users ===
+
+In the Passport LocalStrategy callback (at the top of replitAuth.ts), AFTER password verification succeeds but BEFORE returning the user:
+
+if (user.authProvider === "local" && !user.emailVerified) {
+  return done(null, false, { message: "email_not_verified" });
+}
+
+In the POST /api/login handler, modify the passport.authenticate callback to detect this specific info.message and return 403 with:
+
+{ error: "email_not_verified", email: req.body.email }
+
+This allows the frontend to render a "Please verify your email" state with a resend option.
+
+=== STEP 6: Auto-verify OAuth signups ===
+
+In the Google and Microsoft OAuth strategy callbacks (same file, ~line 369+), when CREATING a new user (not when finding an existing one), set emailVerified: true explicitly in the upsertUser payload. OAuth providers already verify the email — no need to re-verify.
+
+=== STEP 7: Resend verification endpoint ===
+
+Add POST /api/resend-verification:
+
+app.post("/api/resend-verification", async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: "Email required" });
+
+  const [user] = await db.select().from(users).where(eq(users.email, email));
+
+  // Always return generic 200 to prevent enumeration
+  if (!user || user.emailVerified) {
+    return res.json({ message: "If an unverified account exists, a new verification email has been sent." });
+  }
+
+  // Rate limit: check if a token was issued in the last 60 seconds
+  const [recentToken] = await db.select().from(emailVerificationTokens)
+    .where(and(
+      eq(emailVerificationTokens.userId, user.id),
+      isNull(emailVerificationTokens.usedAt),
+      gt(emailVerificationTokens.createdAt, new Date(Date.now() - 60 * 1000))
+    ))
+    .limit(1);
+  if (recentToken) {
+    return res.status(429).json({ error: "Please wait a moment before requesting another verification email." });
+  }
+
+  // Invalidate old unused tokens
+  await db.update(emailVerificationTokens)
+    .set({ usedAt: new Date() })
+    .where(and(
+      eq(emailVerificationTokens.userId, user.id),
+      isNull(emailVerificationTokens.usedAt)
+    ));
+
+  // Generate new token
+  const token = crypto.randomBytes(32).toString("hex");
+  await db.insert(emailVerificationTokens).values({
+    userId: user.id,
+    token,
+    expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+  });
+
+  try {
+    await sendEmailVerificationEmail(user.email, token, user.firstName);
+  } catch (err) {
+    console.error("[resend-verification] email send failed:", err);
+  }
+
+  res.json({ message: "If an unverified account exists, a new verification email has been sent." });
+});
+
+Make sure `gt` is imported from drizzle-orm if not already.
+
+=== STEP 8: Frontend — post-register screen ===
+
+In client/src/pages/register.tsx, change the onSuccess handler:
+- Instead of setLocation("/"), navigate to /check-email?email=<userEmail>
+
+Create a new page at client/src/pages/check-email.tsx:
+- Mirror the visual style of the existing client/src/pages/forgot-password.tsx success state (the "Check your email" green envelope UI).
+- Read ?email= from URL query params.
+- Display: "We sent a verification link to {email}. Click the link to activate your account."
+- Include a "Resend email" button that POSTs to /api/resend-verification with the email.
+- Show toast notifications for success and error states (including the 429 rate limit).
+- Include a "Back to sign in" link at the bottom.
+
+Register the route in client/src/App.tsx following the existing public route pattern (no auth required).
+
+=== STEP 9: Frontend — verify-email page ===
+
+Create client/src/pages/verify-email.tsx:
+- On mount, read ?token= from URL query.
+- GET /api/verify-email?token={token}
+- Show three states:
+  1. Loading: spinner + "Verifying your email..."
+  2. Success: green checkmark + "Email verified! Redirecting to login..." → setTimeout(() => setLocation("/login"), 2000)
+  3. Error: red icon + the error message from the API + a "Request a new verification email" button that navigates to /check-email (or shows an email input)
+
+Register the route in App.tsx (public, no auth required).
+
+=== STEP 10: Frontend — login error handling ===
+
+In client/src/pages/login.tsx:
+- When POST /api/login returns 403 with error: "email_not_verified", do NOT show the generic "Invalid email or password" error.
+- Instead, show a warning-style banner: "Your email isn't verified yet. Check your inbox — or click below to resend."
+- Add a "Resend verification email" button below the banner that POSTs to /api/resend-verification with the email they tried to log in with.
+
+=== CONSTRAINTS ===
+- Do NOT modify /api/forgot-password or /api/reset-password
+- Do NOT modify SubscriptionGate.tsx or any Stripe routes
+- Do NOT modify /api/create-checkout-session or /api/confirm-checkout
+- Do NOT add any new npm dependencies
+- Do NOT modify the existing OAuth flow except to add emailVerified: true when creating NEW users
+- RUN the UPDATE users SET email_verified = true after migration so existing users aren't locked out
+
+=== WORKFLOW ===
+1. Report the list of files you'll touch before writing code
+2. Make schema changes, run migration, run UPDATE query
+3. Add sendEmailVerificationEmail to email.ts
+4. Modify /api/register
+5. Add GET /api/verify-email
+6. Gate LocalStrategy + /api/login
+7. Auto-verify OAuth new users
+8. Add POST /api/resend-verification
+9. Build frontend: register.tsx change, check-email.tsx, verify-email.tsx, login.tsx changes
+10. Register new routes in App.tsx
+11. Commit with message: feat(auth): require email verification for local signups
+12. Report wh

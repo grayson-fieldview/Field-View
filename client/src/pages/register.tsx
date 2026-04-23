@@ -70,8 +70,7 @@ export default function RegisterPage() {
       return res.json();
     },
     onSuccess: (data) => {
-      queryClient.setQueryData(["/api/auth/user"], data);
-      setLocation("/");
+      setLocation(`/check-email?email=${encodeURIComponent(data.email || email)}`);
     },
     onError: (error: Error) => {
       toast({

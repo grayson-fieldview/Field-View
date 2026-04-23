@@ -10,9 +10,9 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { authStorage } from "./storage";
 import { db, pool } from "../../db";
-import { eq, and, isNull } from "drizzle-orm";
-import { passwordResetTokens, accounts, invitations, type User } from "@shared/models/auth";
-import { sendPasswordResetEmail } from "../../services/email";
+import { eq, and, isNull, gt } from "drizzle-orm";
+import { passwordResetTokens, emailVerificationTokens, users, accounts, invitations, type User } from "@shared/models/auth";
+import { sendPasswordResetEmail, sendEmailVerificationEmail } from "../../services/email";
 
 function getBaseUrl(req?: Request) {
   if (process.env.OAUTH_BASE_URL) return process.env.OAUTH_BASE_URL;
@@ -92,6 +92,7 @@ async function findOrCreateOAuthUser(opts: {
     [providerIdField]: opts.providerId,
     role,
     accountId,
+    emailVerified: true,
     subscriptionStatus: "none",
     trialEndsAt: null,
   } as any);
@@ -165,6 +166,9 @@ export async function setupAuth(app: Express) {
           const isValid = await bcrypt.compare(password, user.password);
           if (!isValid) {
             return done(null, false, { message: "Invalid email or password" });
+          }
+          if (user.authProvider === "local" && !user.emailVerified) {
+            return done(null, false, { message: "email_not_verified" });
           }
           return done(null, user);
         } catch (error) {
@@ -326,16 +330,27 @@ export async function setupAuth(app: Express) {
         lastName: lastName || null,
         role,
         accountId,
+        emailVerified: false,
         subscriptionStatus: "none",
         trialEndsAt: null,
       });
 
-      req.login(user, (err) => {
-        if (err) {
-          return res.status(500).json({ message: "Failed to log in after registration" });
-        }
-        const { password: _, ...safeUser } = user;
-        return res.status(201).json(safeUser);
+      const verificationToken = crypto.randomBytes(32).toString("hex");
+      await db.insert(emailVerificationTokens).values({
+        userId: user.id,
+        token: verificationToken,
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      });
+
+      try {
+        await sendEmailVerificationEmail(user.email!, verificationToken, user.firstName);
+      } catch (emailErr) {
+        console.error("[register] verification email send failed:", emailErr);
+      }
+
+      return res.status(201).json({
+        message: "Please check your email to verify your account.",
+        email: user.email,
       });
     } catch (error) {
       console.error("Registration error:", error);
@@ -347,6 +362,9 @@ export async function setupAuth(app: Express) {
     passport.authenticate("local", (err: any, user: any, info: any) => {
       if (err) return next(err);
       if (!user) {
+        if (info?.message === "email_not_verified") {
+          return res.status(403).json({ error: "email_not_verified", email: req.body.email });
+        }
         return res.status(401).json({ message: info?.message || "Invalid email or password" });
       }
       req.login(user, (err) => {
@@ -524,6 +542,75 @@ export async function setupAuth(app: Express) {
     } catch (error) {
       console.error("Reset password error:", error);
       res.status(500).json({ message: "Password reset failed" });
+    }
+  });
+
+  app.get("/api/verify-email", async (req, res) => {
+    try {
+      const token = req.query.token as string;
+      if (!token) return res.status(400).json({ error: "Token required" });
+
+      const [row] = await db.select().from(emailVerificationTokens).where(eq(emailVerificationTokens.token, token));
+      if (!row) return res.status(400).json({ error: "Invalid token" });
+      if (row.usedAt) return res.status(400).json({ error: "Token already used" });
+      if (row.expiresAt < new Date()) return res.status(400).json({ error: "Token expired" });
+
+      await db.update(users).set({ emailVerified: true }).where(eq(users.id, row.userId));
+      await db.update(emailVerificationTokens).set({ usedAt: new Date() }).where(eq(emailVerificationTokens.id, row.id));
+
+      res.json({ success: true, message: "Email verified successfully" });
+    } catch (error) {
+      console.error("Verify email error:", error);
+      res.status(500).json({ error: "Verification failed" });
+    }
+  });
+
+  app.post("/api/resend-verification", async (req, res) => {
+    try {
+      const { email } = req.body;
+      if (!email) return res.status(400).json({ error: "Email required" });
+
+      const [user] = await db.select().from(users).where(eq(users.email, email));
+
+      if (!user || user.emailVerified) {
+        return res.json({ message: "If an unverified account exists, a new verification email has been sent." });
+      }
+
+      const [recentToken] = await db.select().from(emailVerificationTokens)
+        .where(and(
+          eq(emailVerificationTokens.userId, user.id),
+          isNull(emailVerificationTokens.usedAt),
+          gt(emailVerificationTokens.createdAt, new Date(Date.now() - 60 * 1000))
+        ))
+        .limit(1);
+      if (recentToken) {
+        return res.status(429).json({ error: "Please wait a moment before requesting another verification email." });
+      }
+
+      await db.update(emailVerificationTokens)
+        .set({ usedAt: new Date() })
+        .where(and(
+          eq(emailVerificationTokens.userId, user.id),
+          isNull(emailVerificationTokens.usedAt)
+        ));
+
+      const token = crypto.randomBytes(32).toString("hex");
+      await db.insert(emailVerificationTokens).values({
+        userId: user.id,
+        token,
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      });
+
+      try {
+        await sendEmailVerificationEmail(user.email!, token, user.firstName);
+      } catch (err) {
+        console.error("[resend-verification] email send failed:", err);
+      }
+
+      res.json({ message: "If an unverified account exists, a new verification email has been sent." });
+    } catch (error) {
+      console.error("Resend verification error:", error);
+      res.status(500).json({ error: "Request failed" });
     }
   });
 }

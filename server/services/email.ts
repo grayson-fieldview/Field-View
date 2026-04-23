@@ -58,3 +58,53 @@ export async function sendPasswordResetEmail(to: string, resetToken: string): Pr
 
   console.log("[email] Password reset email sent:", data?.id);
 }
+
+export async function sendEmailVerificationEmail(to: string, verificationToken: string, firstName?: string | null): Promise<void> {
+  if (!resend) {
+    console.warn("[email] Skipping send — Resend not configured");
+    return;
+  }
+
+  const verifyUrl = `${PUBLIC_APP_URL}/verify-email?token=${verificationToken}`;
+  const greeting = firstName ? `Hi ${firstName},` : "Welcome to Field View!";
+
+  const { data, error } = await resend.emails.send({
+    from: FROM,
+    to,
+    subject: "Verify your email for Field View",
+    html: `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 560px; margin: 0 auto; padding: 40px 20px; color: #111;">
+        <h1 style="font-size: 24px; margin-bottom: 16px;">Verify your email</h1>
+        <p style="font-size: 16px; line-height: 1.5; margin-bottom: 24px;">
+          ${greeting} Please confirm your email address to finish setting up your Field View account.
+        </p>
+        <p style="margin-bottom: 24px;">
+          <a href="${verifyUrl}" style="background: #f97316; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+            Verify email
+          </a>
+        </p>
+        <p style="font-size: 14px; color: #666; line-height: 1.5; margin-bottom: 8px;">
+          Or copy this link into your browser:
+        </p>
+        <p style="font-size: 13px; color: #666; word-break: break-all; margin-bottom: 24px;">
+          ${verifyUrl}
+        </p>
+        <p style="font-size: 14px; color: #666; line-height: 1.5;">
+          This link will expire in 1 hour. If you didn't sign up for Field View, you can safely ignore this email.
+        </p>
+        <hr style="border: none; border-top: 1px solid #eee; margin: 32px 0;">
+        <p style="font-size: 12px; color: #999;">
+          Field View &middot; <a href="https://field-view.com" style="color: #999;">field-view.com</a>
+        </p>
+      </div>
+    `,
+    text: `Verify your email for Field View\n\n${greeting} Please confirm your email address to finish setting up your Field View account:\n\n${verifyUrl}\n\nThis link will expire in 1 hour. If you didn't sign up, you can safely ignore this email.\n\n— Field View`,
+  });
+
+  if (error) {
+    console.error("[email] Failed to send verification email:", error);
+    throw new Error(`Email send failed: ${error.message}`);
+  }
+
+  console.log("[email] Verification email sent:", data?.id);
+}

@@ -14,6 +14,8 @@ import LoginPage from "@/pages/login";
 import RegisterPage from "@/pages/register";
 import ForgotPasswordPage from "@/pages/forgot-password";
 import ResetPasswordPage from "@/pages/reset-password";
+import CheckEmailPage from "@/pages/check-email";
+import VerifyEmailPage from "@/pages/verify-email";
 import SubscribePage from "@/pages/subscribe";
 import DashboardPage from "@/pages/dashboard";
 import ProjectsPage from "@/pages/projects";
@@ -113,6 +115,8 @@ function AppContent() {
         <Route path="/register"><Redirect to="/signup" /></Route>
         <Route path="/forgot-password" component={ForgotPasswordPage} />
         <Route path="/reset-password" component={ResetPasswordPage} />
+        <Route path="/check-email" component={CheckEmailPage} />
+        <Route path="/verify-email" component={VerifyEmailPage} />
         <Route>
           <Redirect to="/signup" />
         </Route>
