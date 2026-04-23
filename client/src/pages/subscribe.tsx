@@ -19,7 +19,7 @@ export default function SubscribePage() {
   const { user, logout } = useAuth();
   const { toast } = useToast();
   const qc = useQueryClient();
-  const [billingCycle, setBillingCycle] = useState<"annual" | "monthly">("annual");
+  const [billingCycle, setBillingCycle] = useState<"annual" | "monthly">("monthly");
   const [teamSize, setTeamSize] = useState(3);
 
   useEffect(() => {
@@ -73,14 +73,23 @@ export default function SubscribePage() {
 
   const baseUsers = 3;
   const extraUsers = Math.max(0, teamSize - baseUsers);
-  const annualBase = 49;
-  const monthlyBase = 79;
-  const annualExtra = 24;
-  const monthlyExtra = 29;
 
-  const basePrice = billingCycle === "annual" ? annualBase : monthlyBase;
-  const extraPrice = billingCycle === "annual" ? annualExtra : monthlyExtra;
+  // Actual amounts billed per period (matches Stripe products):
+  // - Field View Monthly: $79/month
+  // - Field View Annual:  $588/year (≈ $49/month equivalent → "Save 38%")
+  // - Additional User Seat: $29/month (annualized to $288/year for display on annual)
+  const monthlyBase = 79;
+  const annualBase = 588;
+  const monthlyExtra = 29;
+  const annualExtra = 288;
+
+  const isAnnual = billingCycle === "annual";
+  const basePrice = isAnnual ? annualBase : monthlyBase;
+  const extraPrice = isAnnual ? annualExtra : monthlyExtra;
   const totalPrice = basePrice + extraUsers * extraPrice;
+  const periodSuffix = isAnnual ? "/year" : "/month";
+  const periodShort = isAnnual ? "/yr" : "/mo";
+  const ctaPeriodLabel = isAnnual ? "/year" : "/mo";
 
   const features = [
     "Unlimited photo documentation",
@@ -232,8 +241,8 @@ export default function SubscribePage() {
 
           <CardContent className="p-6 space-y-6">
             <div className="flex items-baseline gap-1">
-              <span className="text-4xl font-bold text-foreground">${totalPrice}</span>
-              <span className="text-muted-foreground">/month</span>
+              <span className="text-4xl font-bold text-foreground" data-testid="text-total-price">${totalPrice}</span>
+              <span className="text-muted-foreground" data-testid="text-period-suffix">{periodSuffix}</span>
             </div>
 
             <div className="bg-muted/50 rounded-lg p-4 space-y-3">
@@ -262,13 +271,18 @@ export default function SubscribePage() {
               <div className="text-sm text-muted-foreground space-y-1">
                 <div className="flex justify-between">
                   <span>Base ({baseUsers} users)</span>
-                  <span>${basePrice}/mo</span>
+                  <span data-testid="text-base-price">${basePrice}{periodShort}</span>
                 </div>
                 {extraUsers > 0 && (
                   <div className="flex justify-between">
                     <span>{extraUsers} additional user{extraUsers !== 1 ? "s" : ""}</span>
-                    <span>+${extraUsers * extraPrice}/mo</span>
+                    <span data-testid="text-extra-price">+${extraUsers * extraPrice}{periodShort}</span>
                   </div>
+                )}
+                {isAnnual && extraUsers > 0 && (
+                  <p className="text-xs pt-1 italic">
+                    Note: additional seats are billed monthly at ${monthlyExtra}/seat.
+                  </p>
                 )}
               </div>
             </div>
@@ -299,12 +313,12 @@ export default function SubscribePage() {
               ) : status === "none" || !status ? (
                 <>
                   <CreditCard className="mr-2 h-5 w-5" />
-                  Start Free Trial — ${totalPrice}/mo after trial
+                  Start Free Trial — ${totalPrice}{ctaPeriodLabel} after trial
                 </>
               ) : (
                 <>
                   <CreditCard className="mr-2 h-5 w-5" />
-                  Subscribe — ${totalPrice}/month
+                  Subscribe — ${totalPrice}{periodSuffix}
                 </>
               )}
             </Button>
