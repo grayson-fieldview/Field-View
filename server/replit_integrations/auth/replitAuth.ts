@@ -13,6 +13,7 @@ import { db, pool } from "../../db";
 import { eq, and, isNull, gt } from "drizzle-orm";
 import { passwordResetTokens, emailVerificationTokens, users, accounts, invitations, type User } from "@shared/models/auth";
 import { sendPasswordResetEmail, sendEmailVerificationEmail } from "../../services/email";
+import { verifyRecaptchaToken } from "../../services/recaptcha";
 import {
   loginLimiter,
   registerLimiter,
@@ -291,6 +292,16 @@ export async function setupAuth(app: Express) {
 
   app.post("/api/register", registerLimiter, async (req, res) => {
     try {
+      const { recaptchaToken } = req.body;
+      const recaptchaResult = await verifyRecaptchaToken(recaptchaToken, "signup");
+      if (!recaptchaResult.valid) {
+        console.warn(`[register] reCAPTCHA failed for ${req.body.email}: ${recaptchaResult.reason}, score: ${recaptchaResult.score}`);
+        return res.status(403).json({
+          error: "security_check_failed",
+          message: "Security verification failed. Please try again.",
+        });
+      }
+
       const { email, password, firstName, lastName, inviteToken } = req.body;
 
       if (!email || !password) {

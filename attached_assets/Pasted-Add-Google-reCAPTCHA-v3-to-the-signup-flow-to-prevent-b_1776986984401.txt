@@ -1,0 +1,165 @@
+Add Google reCAPTCHA v3 to the signup flow to prevent bot signups that burn Stripe trial credits.
+
+=== DESIGN DECISIONS ===
+- reCAPTCHA v3 (invisible, score-based: 0.0 = bot, 1.0 = human)
+- Apply ONLY to POST /api/register — not login, not password reset (rate limiting handles those)
+- Score threshold: 0.5 (Google's recommended default — rejects obvious bots, allows unsure cases)
+- Action tag: "signup" (for analytics in reCAPTCHA admin console)
+- Fail-closed: if verification API is unreachable or returns invalid response, BLOCK the signup (safer default than fail-open)
+- Dev skip: bypass reCAPTCHA entirely when NODE_ENV === "development" for local testing
+
+=== ENV VARS (already set in Vercel) ===
+- VITE_RECAPTCHA_SITE_KEY (public, frontend, available at build time via import.meta.env)
+- RECAPTCHA_SECRET_KEY (private, backend only, via process.env)
+
+=== STEP 1: Install frontend package ===
+
+npm install --save react-google-recaptcha-v3
+
+This is the standard React wrapper for reCAPTCHA v3 with ~500k weekly downloads.
+
+=== STEP 2: Wrap the app with GoogleReCaptchaProvider ===
+
+In client/src/App.tsx (or wherever the main app component is), wrap the app with GoogleReCaptchaProvider from react-google-recaptcha-v3. Pass the site key from import.meta.env.VITE_RECAPTCHA_SITE_KEY.
+
+Important:
+- If VITE_RECAPTCHA_SITE_KEY is undefined (local dev without env var), still render children without the provider. Don't crash the app.
+- Set scriptProps={{ async: true, defer: true, appendTo: "head" }} so the reCAPTCHA script loads performantly and doesn't block page render
+
+=== STEP 3: Hook into signup form ===
+
+In client/src/pages/register.tsx (or wherever the signup form is):
+
+1. Import useGoogleReCaptcha from react-google-recaptcha-v3
+2. In the component, get executeRecaptcha from the hook
+3. In the form submit handler, BEFORE the POST to /api/register:
+   - Check if executeRecaptcha is available. If not (script didn't load), show error toast: "Security check failed. Please refresh and try again."
+   - Call const token = await executeRecaptcha("signup")
+   - Include the token in the POST body as recaptchaToken
+
+Example in submit handler:
+
+const handleSubmit = async (formData) => {
+  if (!executeRecaptcha) {
+    toast({ title: "Security check unavailable", description: "Please refresh and try again." });
+    return;
+  }
+  const recaptchaToken = await executeRecaptcha("signup");
+  const res = await apiRequest("POST", "/api/register", { ...formData, recaptchaToken });
+  // ... existing success/error handling
+};
+
+Leave all other signup logic intact.
+
+=== STEP 4: Backend verification ===
+
+Create server/services/recaptcha.ts:
+
+interface RecaptchaVerifyResult {
+  success: boolean;
+  score?: number;
+  action?: string;
+  hostname?: string;
+  errorCodes?: string[];
+}
+
+export async function verifyRecaptchaToken(token: string, expectedAction: string): Promise<{ valid: boolean; reason?: string; score?: number }> {
+  const secret = process.env.RECAPTCHA_SECRET_KEY;
+  
+  if (process.env.NODE_ENV === "development") {
+    console.log("[recaptcha] dev mode — bypassing verification");
+    return { valid: true, score: 1.0 };
+  }
+  
+  if (!secret) {
+    console.error("[recaptcha] RECAPTCHA_SECRET_KEY not set — failing closed");
+    return { valid: false, reason: "misconfigured" };
+  }
+
+  if (!token) {
+    return { valid: false, reason: "missing_token" };
+  }
+
+  try {
+    const response = await fetch("https://www.google.com/recaptcha/api/siteverify", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ secret, response: token }).toString(),
+    });
+
+    if (!response.ok) {
+      console.error("[recaptcha] verify API HTTP error:", response.status);
+      return { valid: false, reason: "api_error" };
+    }
+
+    const data = await response.json() as RecaptchaVerifyResult;
+
+    if (!data.success) {
+      console.warn("[recaptcha] verification failed:", data.errorCodes);
+      return { valid: false, reason: "invalid_token", score: data.score };
+    }
+
+    if (data.action !== expectedAction) {
+      console.warn(`[recaptcha] action mismatch — expected ${expectedAction}, got ${data.action}`);
+      return { valid: false, reason: "action_mismatch", score: data.score };
+    }
+
+    const SCORE_THRESHOLD = 0.5;
+    if ((data.score ?? 0) < SCORE_THRESHOLD) {
+      console.warn(`[recaptcha] low score: ${data.score} (threshold: ${SCORE_THRESHOLD})`);
+      return { valid: false, reason: "low_score", score: data.score };
+    }
+
+    console.log(`[recaptcha] verified, score: ${data.score}`);
+    return { valid: true, score: data.score };
+  } catch (err) {
+    console.error("[recaptcha] verification threw:", err);
+    return { valid: false, reason: "exception" };
+  }
+}
+
+=== STEP 5: Gate the register endpoint ===
+
+In server/replit_integrations/auth/replitAuth.ts, modify the POST /api/register handler:
+
+1. Import verifyRecaptchaToken at top of file.
+
+2. At the VERY START of the handler (before all other validation), extract recaptchaToken from req.body and verify it:
+
+const { recaptchaToken } = req.body;
+const recaptchaResult = await verifyRecaptchaToken(recaptchaToken, "signup");
+if (!recaptchaResult.valid) {
+  console.warn(`[register] reCAPTCHA failed for ${req.body.email}: ${recaptchaResult.reason}, score: ${recaptchaResult.score}`);
+  return res.status(403).json({ 
+    error: "security_check_failed", 
+    message: "Security verification failed. Please try again." 
+  });
+}
+
+3. Continue with all existing validation (email format, password length, duplicate check, etc.).
+
+=== STEP 6: Optional polish — show reCAPTCHA badge disclosure ===
+
+Google's Terms require you to either:
+(a) Show the reCAPTCHA badge (default behavior — a floating badge in the bottom right)
+(b) Hide the badge but show this disclosure text on the signup form:
+"This site is protected by reCAPTCHA and the Google Privacy Policy and Terms of Service apply."
+
+Default behavior is fine (keep badge visible). If you want to hide the badge later, we can add the disclosure and CSS to hide it.
+
+=== CONSTRAINTS ===
+- Do NOT add reCAPTCHA to /api/login, /api/forgot-password, /api/reset-password, or any OAuth flows
+- Do NOT modify any other handler logic in /api/register
+- Do NOT add any other npm dependencies besides react-google-recaptcha-v3
+- Do NOT modify the existing email verification or rate limiting
+- DO fail-closed if verification fails (block signup), not fail-open
+
+=== WORKFLOW ===
+1. Report files you'll touch before writing code
+2. Install react-google-recaptcha-v3
+3. Create server/services/recaptcha.ts
+4. Add reCAPTCHA check to /api/register
+5. Wrap App with GoogleReCaptchaProvider
+6. Hook into register.tsx form submission
+7. Commit with message: feat(auth): add reCAPTCHA v3 to signup
+8. Report what changed. Do NOT push — I'll push from Git pane.

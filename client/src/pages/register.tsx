@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Eye, EyeOff, Loader2, CheckCircle2, Users } from "lucide-react";
+import { useGoogleReCaptcha } from "react-google-recaptcha-v3";
 import { SocialAuthButtons } from "./login";
 import faviconImg from "@assets/Favicon-01_1772067008525.png";
 
@@ -22,6 +23,7 @@ export default function RegisterPage() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const { executeRecaptcha } = useGoogleReCaptcha();
 
   const params = new URLSearchParams(searchString);
   const inviteToken = params.get("token");
@@ -51,6 +53,16 @@ export default function RegisterPage() {
       if (password.length < 8) {
         throw new Error("Password must be at least 8 characters");
       }
+
+      const hasRecaptcha = Boolean(import.meta.env.VITE_RECAPTCHA_SITE_KEY);
+      let recaptchaToken: string | undefined;
+      if (hasRecaptcha) {
+        if (!executeRecaptcha) {
+          throw new Error("Security check unavailable. Please refresh and try again.");
+        }
+        recaptchaToken = await executeRecaptcha("signup");
+      }
+
       const res = await fetch("/api/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -61,6 +73,7 @@ export default function RegisterPage() {
           firstName,
           lastName,
           ...(inviteToken ? { inviteToken } : {}),
+          ...(recaptchaToken ? { recaptchaToken } : {}),
         }),
       });
       if (!res.ok) {
