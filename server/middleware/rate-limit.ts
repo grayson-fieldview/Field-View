@@ -15,6 +15,7 @@ type LimiterConfig = {
 function makeLimiter({ keyPrefix, points, durationSeconds, message, logLabel }: LimiterConfig): RequestHandler {
   const limiter = new RateLimiterPostgres({
     storeClient: pool,
+    storeType: "pg",
     tableName: "auth_rate_limits",
     keyPrefix,
     points,
