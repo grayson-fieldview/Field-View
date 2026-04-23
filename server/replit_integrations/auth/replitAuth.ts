@@ -13,6 +13,14 @@ import { db, pool } from "../../db";
 import { eq, and, isNull, gt } from "drizzle-orm";
 import { passwordResetTokens, emailVerificationTokens, users, accounts, invitations, type User } from "@shared/models/auth";
 import { sendPasswordResetEmail, sendEmailVerificationEmail } from "../../services/email";
+import {
+  loginLimiter,
+  registerLimiter,
+  forgotPasswordLimiter,
+  resetPasswordLimiter,
+  resendVerificationLimiter,
+  verifyEmailLimiter,
+} from "../../middleware/rate-limit";
 
 function getBaseUrl(req?: Request) {
   if (process.env.OAUTH_BASE_URL) return process.env.OAUTH_BASE_URL;
@@ -281,7 +289,7 @@ export async function setupAuth(app: Express) {
     }
   });
 
-  app.post("/api/register", async (req, res) => {
+  app.post("/api/register", registerLimiter, async (req, res) => {
     try {
       const { email, password, firstName, lastName, inviteToken } = req.body;
 
@@ -358,7 +366,7 @@ export async function setupAuth(app: Express) {
     }
   });
 
-  app.post("/api/login", (req, res, next) => {
+  app.post("/api/login", loginLimiter, (req, res, next) => {
     passport.authenticate("local", (err: any, user: any, info: any) => {
       if (err) return next(err);
       if (!user) {
@@ -466,7 +474,7 @@ export async function setupAuth(app: Express) {
     });
   });
 
-  app.post("/api/forgot-password", async (req, res) => {
+  app.post("/api/forgot-password", forgotPasswordLimiter, async (req, res) => {
     try {
       const { email } = req.body;
       if (!email) {
@@ -505,7 +513,7 @@ export async function setupAuth(app: Express) {
     }
   });
 
-  app.post("/api/reset-password", async (req, res) => {
+  app.post("/api/reset-password", resetPasswordLimiter, async (req, res) => {
     try {
       const { token, password } = req.body;
       if (!token || !password) {
@@ -545,7 +553,7 @@ export async function setupAuth(app: Express) {
     }
   });
 
-  app.get("/api/verify-email", async (req, res) => {
+  app.get("/api/verify-email", verifyEmailLimiter, async (req, res) => {
     try {
       const token = req.query.token as string;
       if (!token) return res.status(400).json({ error: "Token required" });
@@ -577,7 +585,7 @@ export async function setupAuth(app: Express) {
     }
   });
 
-  app.post("/api/resend-verification", async (req, res) => {
+  app.post("/api/resend-verification", resendVerificationLimiter, async (req, res) => {
     try {
       const { email } = req.body;
       if (!email) return res.status(400).json({ error: "Email required" });

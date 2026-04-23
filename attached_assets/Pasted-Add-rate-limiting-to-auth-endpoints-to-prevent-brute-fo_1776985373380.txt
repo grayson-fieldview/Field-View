@@ -1,0 +1,104 @@
+Add rate limiting to auth endpoints to prevent brute-force attacks, enumeration, and abuse.
+
+=== DESIGN DECISIONS ===
+- Use express-rate-limit package with a Postgres store (rate-limit-postgres or rate-limiter-flexible) so limits work across Vercel serverless instances
+- Rate limit per IP address (standard for auth endpoints)
+- Return 429 Too Many Requests with a Retry-After header when limits are hit
+- Limits per endpoint (see below)
+- Exclude health checks and non-auth routes
+
+=== RATE LIMITS TO APPLY ===
+
+Per IP address:
+- POST /api/login: 10 attempts per 15 minutes
+- POST /api/register: 5 attempts per 60 minutes (prevents account farming)
+- POST /api/forgot-password: 5 attempts per 60 minutes
+- POST /api/reset-password: 10 attempts per 15 minutes
+- POST /api/resend-verification: 5 attempts per 60 minutes
+- GET /api/verify-email: 20 attempts per 15 minutes (more lenient since this is legitimately triggered by email clicks)
+
+=== STEP 1: Install packages ===
+
+npm install --save express-rate-limit rate-limit-postgres
+
+Note: if rate-limit-postgres isn't maintained, use rate-limiter-flexible instead which supports Postgres via the RateLimiterPostgres class. Pick whichever is more actively maintained.
+
+=== STEP 2: Create rate limiter configuration ===
+
+Create server/middleware/rate-limit.ts with reusable rate limiter instances for each endpoint. Each should:
+- Use the Postgres store backed by our existing db connection
+- Return a JSON error: { error: "too_many_requests", message: "Please wait before trying again." }
+- Set standard Retry-After headers
+- Skip in development mode (process.env.NODE_ENV === "development") so local testing isn't annoying
+- Log rate limit hits to console for monitoring
+
+Example structure:
+
+export const loginLimiter = rateLimit({
+  store: new PostgresStore({ ...pg connection... }),
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => process.env.NODE_ENV === "development",
+  handler: (req, res) => {
+    console.warn(`[rate-limit] login blocked for IP ${req.ip}`);
+    res.status(429).json({ error: "too_many_requests", message: "Too many login attempts. Please try again in 15 minutes." });
+  },
+});
+
+Export similar limiters for each endpoint.
+
+=== STEP 3: Apply middleware to routes ===
+
+In server/replit_integrations/auth/replitAuth.ts, attach the appropriate limiter to each auth route:
+
+app.post("/api/login", loginLimiter, ...existing handler);
+app.post("/api/register", registerLimiter, ...existing handler);
+app.post("/api/forgot-password", forgotPasswordLimiter, ...existing handler);
+app.post("/api/reset-password", resetPasswordLimiter, ...existing handler);
+app.post("/api/resend-verification", resendVerificationLimiter, ...existing handler);
+app.get("/api/verify-email", verifyEmailLimiter, ...existing handler);
+
+Do NOT modify any handler logic. Only attach the middleware.
+
+=== STEP 4: Database table ===
+
+The rate-limit-postgres (or rate-limiter-flexible) package will need a table to store attempt counts. Check the package documentation and either:
+- Let the package auto-create the table on first use, OR
+- Add the table to shared/models/auth.ts as part of the schema and run db:push
+
+Report which approach you used.
+
+=== STEP 5: Trust proxy configuration ===
+
+Vercel puts requests through proxies, so Express's req.ip defaults to the proxy's IP, not the real client IP. This means all requests look like they come from one IP and get rate-limited together.
+
+In server/index.ts (or wherever Express is initialized), add:
+  app.set("trust proxy", 1);
+
+This tells Express to read the X-Forwarded-For header from Vercel's proxy. Verify this doesn't break anything else.
+
+=== STEP 6: Test ===
+
+Smoke test with curl from dev (but remember the skip rule means rate limits don't trigger in dev — you'd need to temporarily set NODE_ENV=production to test locally). Verify:
+- First N requests succeed
+- Request N+1 returns 429 with Retry-After header
+- After the window expires, requests succeed again
+
+Report test results.
+
+=== CONSTRAINTS ===
+- Do NOT modify any handler logic — only attach middleware
+- Do NOT rate-limit non-auth routes (keep /api/* other endpoints unaffected)
+- Do NOT use in-memory rate limiting — it doesn't work across serverless instances
+- Do NOT change response shapes for successful requests
+
+=== WORKFLOW ===
+1. Report the files you'll touch and the package you chose (rate-limit-postgres vs rate-limiter-flexible)
+2. Install packages
+3. Create middleware file
+4. Apply to routes
+5. Configure trust proxy
+6. Commit with message: feat(auth): add rate limiting to auth endpoints
+7. Report what changed. Do NOT push — I'll push from Git pane.
