@@ -558,7 +558,19 @@ export async function setupAuth(app: Express) {
       await db.update(users).set({ emailVerified: true }).where(eq(users.id, row.userId));
       await db.update(emailVerificationTokens).set({ usedAt: new Date() }).where(eq(emailVerificationTokens.id, row.id));
 
-      res.json({ success: true, message: "Email verified successfully" });
+      const [verifiedUser] = await db.select().from(users).where(eq(users.id, row.userId));
+      if (!verifiedUser) {
+        return res.json({ success: true, message: "Email verified successfully" });
+      }
+
+      req.login(verifiedUser, (err) => {
+        if (err) {
+          console.error("[verify-email] req.login failed:", err);
+          return res.json({ success: true, message: "Email verified successfully" });
+        }
+        const { password: _, ...safeUser } = verifiedUser;
+        res.json({ success: true, message: "Email verified successfully", user: safeUser });
+      });
     } catch (error) {
       console.error("Verify email error:", error);
       res.status(500).json({ error: "Verification failed" });

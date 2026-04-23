@@ -1,0 +1,59 @@
+UX improvement: when a user verifies their email, auto-login them and redirect to the app so they land on the subscribe page (as an authenticated user). Currently they have to re-enter credentials after verifying, which is poor UX.
+
+=== STEP 1: Backend — auto-login on verify ===
+
+In server/replit_integrations/auth/replitAuth.ts, modify GET /api/verify-email:
+
+1. Keep all existing validation logic (missing token, invalid, used, expired checks).
+
+2. After the user is marked verified and the token is marked used, fetch the fully-updated user row:
+   const [verifiedUser] = await db.select().from(users).where(eq(users.id, row.userId));
+
+3. Call req.login(verifiedUser, (err) => {...}) to establish a session — mirror the same pattern already used in POST /api/register (before we removed it) or POST /api/login for how to call req.login and handle errors.
+
+4. On successful session creation, return:
+   { success: true, message: "Email verified successfully", user: { ...strip password... } }
+
+5. If req.login fails (unlikely but possible), log the error and return the success response WITHOUT the user field. Frontend will handle this by redirecting to /login instead of /.
+
+=== STEP 2: Frontend — verify-email page UX ===
+
+In client/src/pages/verify-email.tsx, modify the success flow:
+
+1. When GET /api/verify-email?token=... returns 200 with { success: true, user: {...} }:
+   - Show a polished success state for 2 seconds:
+     - Large green checkmark icon
+     - Headline: "Email verified!"
+     - Subtext: "Welcome to Field View. Taking you to your account..."
+   - Set user state in whatever auth context/query the app uses (e.g., if you use React Query for the current user, invalidate the /api/auth/user query so it refetches).
+   - After 2 seconds, call setLocation("/") — this triggers SubscriptionGate to render /subscribe automatically since the user has no active subscription.
+
+2. If the response has { success: true } but NO user field (req.login failed):
+   - Show the same success UI for 2 seconds
+   - Redirect to /login instead of /
+
+3. Error states unchanged (keep the existing "Invalid token" / "Token expired" / "Token used" handling).
+
+=== STEP 3: Visual polish on the success state ===
+
+Make the 2-second success state feel premium, not janky:
+
+- Fade in the checkmark with a slight scale animation (from 0.8 to 1.0, over 300ms)
+- Use a bright success green (e.g., #10b981 or whatever the app's existing success green is)
+- Center everything on a clean white card
+- The headline and subtext should fade in 100ms after the checkmark
+- Reference the visual language of the existing /check-email success state (green envelope) for consistency
+
+=== CONSTRAINTS ===
+- Do NOT modify /api/login, /api/register, or /api/resend-verification
+- Do NOT modify SubscriptionGate or any subscription-related code
+- Do NOT modify the login page — user won't need it in this flow
+- Do NOT change the error states of /verify-email page
+- Preserve the existing rate limiting, token validation, and enumeration protection logic
+
+=== WORKFLOW ===
+1. Report the exact changes you plan to make before writing code
+2. Modify the verify-email backend handler
+3. Modify the verify-email frontend page
+4. Commit with message: feat(auth): auto-login on email verification, redirect to subscribe
+5. Report what changed. Do NOT push — I'll push from the Git pane.
