@@ -1,0 +1,37 @@
+Diagnostic only. Do NOT change any code.
+
+A user appears to have signed up for the Monthly plan ($49/mo after 14-day trial) but Stripe is showing an Annual plan charge ($588) queued for end of trial. Investigate the price ID mapping to find the bug.
+
+1. Find the /api/create-checkout-session endpoint (should be around line 1828 in server/routes.ts). Paste the FULL handler including the request body parsing, price ID selection logic, and checkout session creation.
+
+2. Find the /api/stripe/prices endpoint (the one the frontend calls to get available plans). Paste the full handler.
+
+3. Find client/src/pages/subscribe.tsx. Paste:
+   - The section that fetches prices from /api/stripe/prices
+   - The section that handles plan selection (Monthly vs Annual toggle)
+   - The section that makes the POST request to /api/create-checkout-session
+   - Specifically, what data is sent in the request body when a user clicks "Start Free Trial"?
+
+4. Check for any hardcoded Stripe price IDs in the codebase:
+   - Search for "price_" (Stripe price ID prefix)
+   - Search for "priceId" and "price_id"
+   - Search for any environment variables like STRIPE_PRICE_MONTHLY, STRIPE_PRICE_ANNUAL, STRIPE_PRICE_ID
+   - Report every match with file path and line number
+
+5. Connect to the Stripe dashboard via the secret key and list all prices:
+   - Use the Stripe SDK to run stripe.prices.list({ limit: 20, active: true })
+   - Report each price: id, nickname, unit_amount, currency, recurring.interval
+   - Also report the product_id each price belongs to, and the product name
+
+6. Connect to Stripe and fetch recent subscriptions created in the last 24 hours:
+   - stripe.subscriptions.list({ limit: 10, created: { gte: <24h ago timestamp> } })
+   - For each subscription, report: customer email, status, trial_end date, the items[].price.id, items[].price.nickname, items[].price.unit_amount, items[].price.recurring.interval
+
+7. Check the users table in Postgres for any users created today (last 24 hours). For each, report: email, stripeCustomerId, stripeSubscriptionId, subscriptionStatus. Cross-reference with the Stripe subscription data from step 6.
+
+8. Analyze and report:
+   - Is there a mismatch between what the frontend sends for plan selection and what the backend uses to pick the price ID?
+   - Are the environment variables STRIPE_PRICE_MONTHLY and STRIPE_PRICE_ANNUAL (or whatever they're named) set correctly — do they match the $49/mo and $588/year prices in Stripe?
+   - Is there a default fallback that always picks the annual price regardless of user selection?
+
+Report findings in detail with file paths, line numbers, and actual values. No code changes.

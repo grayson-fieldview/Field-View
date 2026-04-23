@@ -1,0 +1,36 @@
+Fix pricing page display to clearly show annual vs monthly billing
+The current pricing page has a UX issue where toggling to "Annual" still displays "$49/month" as the price, which is misleading — users think they're being charged monthly when they're actually being charged $588 upfront for the year. Make the following changes to the trial/checkout pricing page:
+1. Default toggle state
+
+Change the default selected billing period from Annual to Monthly on initial page load
+The Monthly pill should be the highlighted/active state when the page first renders
+
+2. Annual pricing display
+
+When the user toggles to Annual, the main price should display as $588/year (not $49/month)
+Format: large "$588" with "/year" as the smaller suffix, matching the existing typographic treatment
+The "Save 38%" badge should only appear when Annual is selected (hide it on Monthly)
+Keep the CTA button text consistent with the selection: "Start Free Trial — $588/year after trial" when Annual is active, "Start Free Trial — $49/mo after trial" when Monthly is active
+
+3. Additional user / team size line item
+
+The "Base (3 users)" row currently shows "$49/mo" regardless of billing period. Fix this so it reflects the selected period:
+
+Monthly selected → show "$49/mo"
+Annual selected → show "$588/yr" (or whatever the annualized base equivalent is)
+
+
+When users increment team size beyond the base plan, the incremental per-user cost must also display in the matching period:
+
+Monthly: "+$X/mo per additional user"
+Annual: "+$Y/yr per additional user" (annualized — i.e., monthly per-user cost × 12, reflecting the same 38% discount logic applied to the base)
+
+
+The running total at the bottom of the team size section should sum to the correct period total (monthly total when Monthly, annual total when Annual)
+
+4. Consistency check
+
+Audit the entire pricing card to make sure no "/mo" or "/month" labels remain visible when Annual is selected — every dollar figure on the card should read in the same billing period as the active toggle
+The Stripe checkout session that gets created on "Start Free Trial" click must pass the correct price ID (monthly $79 product vs annual $588 product) based on the toggle state — verify the handler reads the current toggle value at click time, not at page load
+
+Diagnose first, fix second — before changing anything, walk through the current component's state management for the billing toggle and show me where the price display, badge visibility, team size line item, and CTA button each read from. I want to see the full data flow mapped out before edits so we don't end up with a fix that only patches the visible price and leaves the Stripe handler or team-size math out of sync.
