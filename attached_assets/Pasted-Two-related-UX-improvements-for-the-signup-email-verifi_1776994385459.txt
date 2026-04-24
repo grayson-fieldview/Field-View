@@ -1,0 +1,84 @@
+Two related UX improvements for the signup / email verification flow.
+
+DIAGNOSE FIRST — do not make changes until you confirm the following:
+
+1. Locate the email verification send call. Find every place in server/ that calls Resend to send the verification email. Report:
+   - File path(s)
+   - Current `from` and `reply_to` values
+   - Current subject line
+
+2. Locate the /check-email page component on the frontend. Based on prior context this is at client/src/pages/check-email.tsx or similar. Report the file path and current implementation.
+
+3. Locate whether there is already a "resend verification email" endpoint on the backend. Search for "resend-verification" or similar. If it exists, report the path. If it doesn't, note that it needs to be created.
+
+4. Report whether the rate limiter (already installed as rate-limiter-flexible) has a keyPrefix for a resend-verification endpoint.
+
+After reporting the above, wait for approval before making changes.
+
+THEN IMPLEMENT:
+
+A. UPDATE EMAIL "FROM" ADDRESS:
+Change the `from` on the verification email (and any other transactional emails using the same default) from "noreply@send.field-view.com" to:
+
+  From: "Field View <hello@field-view.com>"
+  Reply-To: "support@field-view.com"
+
+Use the root domain field-view.com, not send.field-view.com — field-view.com is also verified in Resend per my earlier confirmation.
+
+Do NOT change the From on the welcome email (that one is already set to come from Grayson at grayson@field-view.com).
+Do NOT change the From on the password reset email if it's currently different — only update if it matches the "noreply@send.field-view.com" pattern. Report any inconsistencies you find.
+
+B. CREATE /api/resend-verification ENDPOINT (if it doesn't exist):
+- Accepts { email: string } in the request body
+- Looks up user by email
+- If user exists AND emailVerified is false:
+  - Generate new verification token (invalidate previous if the schema supports it)
+  - Send verification email using the same template/flow as signup
+  - Return 200 { message: "Verification email sent" }
+- If user doesn't exist OR is already verified:
+  - Still return 200 with the same message (do not reveal account existence — standard security practice)
+- Rate limit with rate-limiter-flexible: 3 attempts per 60 minutes per IP, keyPrefix "resend-verification"
+- If rate limit exceeded, return 429 with Retry-After header
+
+If endpoint already exists, skip creation and just confirm it has the rate limiter applied correctly.
+
+C. REBUILD /check-email PAGE:
+
+The page currently exists but needs better UX. Replace its content with:
+
+- Main heading: "Check your email"
+- Subheading: "We sent a verification link to {email}" where {email} is pulled from the ?email= query parameter (already present in the URL per the Sentry error we saw)
+- Body paragraph: "The link should arrive within a minute. Be sure to check your spam or promotions folder if you don't see it."
+- Helper text in smaller gray: "On AT&T, Bellsouth, Yahoo, or AOL? Delivery may take up to 5 minutes."
+- A "Resend email" button that:
+  - Calls POST /api/resend-verification with the email from the URL
+  - Shows a success toast/message on success: "Verification email sent again. Check your inbox in a minute."
+  - Shows a rate-limit message on 429: "You've requested too many emails. Please wait an hour and try again."
+  - Is disabled for 60 seconds after each click with a countdown: "Resend (available in 45s)" → "Resend (available in 44s)" etc.
+  - Re-enables with just "Resend email" after the countdown
+- Below the resend button, small gray text: "Wrong email? Start over" with link to /register
+
+FIX THE SENTRY ERROR WHILE HERE:
+The Sentry issue from Apr 23 9:15 PM showed an unhandled promise rejection on /check-email with type=CustomEvent. This was likely an unhandled fetch failure. In your rebuild:
+
+- Wrap every fetch/mutation call in proper try/catch
+- For the resend-verification call specifically, handle: network errors, 429, 500, 404 — all with user-friendly messages and no thrown promise rejections
+- Do NOT add a blanket window.addEventListener('unhandledrejection') handler — fix the root cause by properly awaiting and catching every async call
+
+D. STYLING:
+Match the existing /register page styling — same card width, same fonts, same orange #F09000 accent for the button. Keep it consistent.
+
+E. DO NOT CHANGE:
+- Email verification logic
+- Signup logic  
+- Rate limiter infrastructure (only add the new keyPrefix)
+- Any other pages or auth flows
+
+AFTER IMPLEMENTATION:
+1. Show diff grouped by file.
+2. Confirm TypeScript compiles with no new errors.
+3. Confirm the 60-second countdown UI works without leaking timers (proper useEffect cleanup).
+4. Do not commit or push — I will review and push manually.
+5. Flag any risks or edge cases.
+
+Minimal surgical changes. No refactoring. No new dependencies.
