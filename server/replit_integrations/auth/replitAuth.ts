@@ -108,7 +108,7 @@ async function findOrCreateOAuthUser(opts: {
 }
 
 export function getSession() {
-  const sessionTtlSeconds = 7 * 24 * 60 * 60;
+  const sessionTtlSeconds = 14 * 24 * 60 * 60;
   const pgStore = connectPg(session);
   const sessionStore = new pgStore({
     pool,
@@ -121,6 +121,7 @@ export function getSession() {
     store: sessionStore,
     resave: false,
     saveUninitialized: false,
+    rolling: true,
     cookie: {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
@@ -556,6 +557,10 @@ export async function setupAuth(app: Express) {
         .update(passwordResetTokens)
         .set({ usedAt: new Date() })
         .where(eq(passwordResetTokens.id, resetRecord.id));
+
+      req.session.destroy((err) => {
+        if (err) console.error("Session destroy after password reset:", err);
+      });
 
       res.json({ message: "Password has been reset successfully. You can now sign in." });
     } catch (error) {
