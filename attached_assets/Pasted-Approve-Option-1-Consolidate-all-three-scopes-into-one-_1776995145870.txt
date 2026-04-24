@@ -1,0 +1,49 @@
+Approve Option 1. Consolidate all three scopes into one implementation:
+
+1. Install @react-email/components and @react-email/render
+2. Create server/emails/welcome.tsx with the full welcome email copy, including the REVISED trial paragraph ("You've got 14 days to kick the tires. If it's not for you, cancel anytime before the trial ends and you won't be charged.")
+3. Add sendWelcomeEmail() to server/services/email.ts, from "Grayson at Field View <grayson@field-view.com>" with reply-to grayson@field-view.com
+4. Wire fire-and-forget welcome send into /api/verify-email (after emailVerified is set to true, wrapped in try/catch, does not block the response)
+5. Update FROM default to "Field View <support@field-view.com>" and add REPLY_TO = "support@field-view.com"; pass replyTo in sendPasswordResetEmail and sendEmailVerificationEmail. Do NOT pass support@ reply-to in sendWelcomeEmail — welcome gets grayson@ reply-to instead.
+6. Rebuild client/src/pages/check-email.tsx per the spec (countdown, carrier text, branched 429 messaging, "Start over" link, safety wrapping)
+
+Welcome email full copy (use this exactly, with {firstName} as the personalization token):
+
+Subject: Welcome to Field View — here's how to get the most out of it
+
+Preview text: A note from the founder + how to get value in your first week
+
+Body:
+
+Hey {firstName},
+
+Thanks for starting your Field View trial. I'm Grayson, the founder, and I wanted to personally welcome you in.
+
+Quick context: I also run a painting company in South Florida, and Field View exists because I couldn't find a photo documentation tool that actually worked the way contractors work. Most of the tools out there are either too expensive, too complicated, or clearly built by people who've never been on a job site. We're trying to be the opposite.
+
+A few things that'll help you get value quickly:
+
+1. Create your first project — Pick an active job and get it into the system. Takes about 30 seconds. The whole app is built around projects, so nothing else makes sense until you have one.
+
+2. Invite your crew — Field View gets 10x more useful when your team is uploading photos too. You can invite up to 3 users on your plan.
+
+You've got 14 days to kick the tires. If it's not for you, cancel anytime before the trial ends and you won't be charged.
+
+If you get stuck, hit reply to this email. I read every message.
+
+Grayson
+Founder, Field View
+grayson@field-view.com
+
+Styling: React Email components (Html, Head, Body, Container, Section, Text, Heading, Link, Hr). Plain typography, max 560px width, system font stack, 16px body, #1a1a1a on white, "Field View" wordmark in bold at top (no image logo), numbered list with bold number + bold heading phrase, #F09000 orange for email links, horizontal rule above signature.
+
+AFTER IMPLEMENTATION — CRITICAL:
+1. Run `git status` and show me the output
+2. Run `git diff --stat HEAD` and show me the output — I need to see every file that has changes
+3. Show me the actual contents of server/emails/welcome.tsx using cat or view (not just the diff) to confirm the file exists on disk
+4. Show me the actual contents of the relevant section of server/services/email.ts to confirm sendWelcomeEmail exists
+5. Render welcome.tsx to HTML with firstName="John" and paste the output
+6. Confirm TypeScript compiles cleanly (tsc --noEmit)
+7. Do NOT commit or push — I will review each of the above items before deciding to push
+
+Minimal surgical changes. No refactoring beyond what's needed. No additional dependencies beyond the two react-email packages.

@@ -12,7 +12,7 @@ import { authStorage } from "./storage";
 import { db, pool } from "../../db";
 import { eq, and, isNull, gt } from "drizzle-orm";
 import { passwordResetTokens, emailVerificationTokens, users, accounts, invitations, type User } from "@shared/models/auth";
-import { sendPasswordResetEmail, sendEmailVerificationEmail } from "../../services/email";
+import { sendPasswordResetEmail, sendEmailVerificationEmail, sendWelcomeEmail } from "../../services/email";
 import { verifyRecaptchaToken } from "../../services/recaptcha";
 import { CURRENT_TERMS_VERSION } from "@shared/constants";
 import {
@@ -596,6 +596,11 @@ export async function setupAuth(app: Express) {
       if (!verifiedUser) {
         return res.json({ success: true, message: "Email verified successfully" });
       }
+
+      // Fire-and-forget welcome email — never block verification on send failure
+      sendWelcomeEmail(verifiedUser.email!, verifiedUser.firstName).catch((err) => {
+        console.error("[verify-email] welcome email send failed:", err);
+      });
 
       req.login(verifiedUser, (err) => {
         if (err) {

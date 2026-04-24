@@ -1,7 +1,12 @@
 import { Resend } from "resend";
+import { render } from "@react-email/render";
+import WelcomeEmail from "../emails/welcome";
 
 const API_KEY = process.env.RESEND_API_KEY;
-const FROM = process.env.EMAIL_FROM || "Field View <noreply@send.field-view.com>";
+const FROM = process.env.EMAIL_FROM || "Field View <support@field-view.com>";
+const REPLY_TO = process.env.EMAIL_REPLY_TO || "support@field-view.com";
+const WELCOME_FROM = "Grayson at Field View <grayson@field-view.com>";
+const WELCOME_REPLY_TO = "grayson@field-view.com";
 const PUBLIC_APP_URL = process.env.PUBLIC_APP_URL || "https://app.field-view.com";
 
 if (!API_KEY) {
@@ -20,6 +25,7 @@ export async function sendPasswordResetEmail(to: string, resetToken: string): Pr
 
   const { data, error } = await resend.emails.send({
     from: FROM,
+    replyTo: REPLY_TO,
     to,
     subject: "Reset your Field View password",
     html: `
@@ -70,6 +76,7 @@ export async function sendEmailVerificationEmail(to: string, verificationToken: 
 
   const { data, error } = await resend.emails.send({
     from: FROM,
+    replyTo: REPLY_TO,
     to,
     subject: "Verify your email for Field View",
     html: `
@@ -107,4 +114,31 @@ export async function sendEmailVerificationEmail(to: string, verificationToken: 
   }
 
   console.log("[email] Verification email sent:", data?.id);
+}
+
+export async function sendWelcomeEmail(to: string, firstName?: string | null): Promise<void> {
+  if (!resend) {
+    console.warn("[email] Skipping welcome send — Resend not configured");
+    return;
+  }
+
+  const name = firstName && firstName.trim().length > 0 ? firstName.trim() : "there";
+  const html = await render(WelcomeEmail({ firstName: name }));
+  const text = await render(WelcomeEmail({ firstName: name }), { plainText: true });
+
+  const { data, error } = await resend.emails.send({
+    from: WELCOME_FROM,
+    replyTo: WELCOME_REPLY_TO,
+    to,
+    subject: "Welcome to Field View — here's how to get the most out of it",
+    html,
+    text,
+  });
+
+  if (error) {
+    console.error("[email] Failed to send welcome email:", error);
+    throw new Error(`Welcome email send failed: ${error.message}`);
+  }
+
+  console.log("[email] Welcome email sent:", data?.id);
 }
