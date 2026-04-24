@@ -1,0 +1,52 @@
+Implement session timeout and idle expiration for Field View.
+
+DIAGNOSE FIRST — do not make changes until you confirm the following:
+
+1. Locate the current session configuration. Search the codebase for `session(`, `express-session`, or similar session middleware setup. Report back:
+   - Which session library is in use (express-session, iron-session, jwt, next-auth, lucia, etc.)
+   - The exact file path and current config
+   - Whether sessions are stored in Postgres (connect-pg-simple), memory, Redis, or JWT
+
+2. Locate the password reset completion endpoint (probably in server/routes/auth.ts or similar). Report the file path and current implementation.
+
+3. Confirm there is no existing maxAge, rolling, or session TTL configuration before you add one. If there is, report what's there and do not overwrite without confirming.
+
+After reporting the above, wait for approval before making changes.
+
+THEN IMPLEMENT:
+
+Goal: 14-day idle (rolling) session timeout with secure cookie configuration, plus session invalidation on password change.
+
+Changes required:
+
+A. Update the session middleware configuration to include:
+   - rolling: true  (resets cookie expiration on each request = idle timeout)
+   - cookie.maxAge: 14 * 24 * 60 * 60 * 1000  (14 days in milliseconds)
+   - cookie.httpOnly: true
+   - cookie.secure: true in production (process.env.NODE_ENV === 'production')
+   - cookie.sameSite: 'lax'
+   - resave: false
+   - saveUninitialized: false
+
+   Preserve any existing store configuration (connect-pg-simple, etc.) — do not change the session store.
+
+B. In the password reset completion endpoint (where the new password is saved after token validation), add session destruction so the user must log in again with the new password:
+
+   req.session.destroy((err) => {
+     if (err) console.error('Session destroy after password reset:', err);
+   });
+
+   Place this AFTER the password is successfully updated in the database, not before.
+
+C. Do NOT change the login endpoint, rate limiter, reCAPTCHA code, or any auth logic other than the two specific changes above.
+
+D. Do NOT modify mobile auth — mobile likely uses a separate token mechanism. Report if you find any mobile-specific session code but do not change it.
+
+AFTER IMPLEMENTATION:
+
+1. Show a diff of exactly what changed.
+2. Explain what each change does in plain English.
+3. Do not commit or push — I will review the diff first.
+4. Flag any risks or edge cases you noticed during implementation (e.g., existing sessions in the database that might behave unexpectedly after this change).
+
+Do not install new dependencies. Do not refactor surrounding code. Minimal surgical changes only.
