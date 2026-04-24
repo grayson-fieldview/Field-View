@@ -1,0 +1,51 @@
+Welcome email is not being sent after users complete email verification. Need to diagnose why before any fix.
+
+CONTEXT:
+- A welcome email implementation was added in recent commits: server/emails/welcome.tsx (React Email template) and sendWelcomeEmail() function in server/services/email.ts
+- It was wired as fire-and-forget into the GET /api/verify-email handler in server/replit_integrations/auth/replitAuth.ts
+- Verification emails are sending correctly from support@field-view.com (confirmed in Resend dashboard)
+- Welcome emails are NOT appearing in the Resend dashboard at all — meaning either the code path isn't being reached, or the Resend API call is throwing before it registers an attempt
+- Expected sender for welcome: Grayson at Field View <grayson@field-view.com>
+- Test user just verified: graysongladu+test1@gmail.com — confirm this user exists in the users table with emailVerified=true and firstName populated
+
+DIAGNOSE ONLY — DO NOT CHANGE ANY CODE.
+
+Run these checks in order and report findings for each:
+
+1. CODE PRESENCE CHECK
+   - Does server/emails/welcome.tsx exist on disk? Show the first 30 lines.
+   - Does sendWelcomeEmail function exist in server/services/email.ts? Show the function definition.
+   - Is the function exported? Show the export line.
+   - Is sendWelcomeEmail imported in server/replit_integrations/auth/replitAuth.ts? Show the import line.
+   - In the GET /api/verify-email handler, show the lines where sendWelcomeEmail is called, including the surrounding context (5 lines before, 5 lines after).
+
+2. CODE PATH CHECK
+   - In the /api/verify-email handler, is sendWelcomeEmail called BEFORE or AFTER the response is sent to the client?
+   - Is it inside a try/catch that might be silently swallowing errors?
+   - Is it guarded by any conditional that might be preventing execution (e.g., "if firstName exists", "if user was just created", etc.)?
+   - Report the exact conditional flow.
+
+3. RUNTIME LOG CHECK
+   - Connect to Vercel production logs (or ask user to provide recent logs if tooling doesn't support direct access — but first check if there's a way to query logs from within the environment)
+   - If Vercel log access isn't available, output exactly what I should search for: the expected console.error message format if sendWelcomeEmail throws, and the expected success log if any.
+   - Specifically look for: "welcome email send failed" or any Resend API error mentioning grayson@field-view.com
+
+4. RESEND API KEY CHECK
+   - Confirm RESEND_API_KEY is set in the environment (don't print the value, just confirm presence)
+   - Confirm the same Resend client instance is used for both verification emails and welcome emails, OR if they use separate clients, confirm both are configured identically
+
+5. DOMAIN VERIFICATION ASSUMPTION CHECK
+   - The welcome email sends from grayson@field-view.com, which requires the apex domain field-view.com to be verified in Resend (not just send.field-view.com)
+   - Check the code: what exact "from" string does sendWelcomeEmail pass to Resend? Show the raw string.
+
+6. RENDER CHECK
+   - sendWelcomeEmail renders the React component to HTML before sending. If the render() call throws, no email is sent.
+   - Can you run a quick test render: require the welcome template, call render() on it with { firstName: "John" }, and report whether it returns a non-empty HTML string or throws an error?
+   - Run this via a one-off node/tsx script — do NOT modify any source files.
+
+7. USER RECORD CHECK
+   - Query the database for user with email graysongladu+test1@gmail.com
+   - Report: does the user exist? Is emailVerified true? Is firstName null, empty string, or populated?
+   - A null or empty firstName could cause the welcome email to fail if the template requires it
+
+Report findings from all 7 checks. Do NOT modify any code, do NOT commit, do NOT push. After the diagnostic report, I will decide the fix based on findings.
