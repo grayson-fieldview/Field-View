@@ -1,0 +1,53 @@
+DIAGNOSE ONLY — DO NOT CHANGE ANY CODE.
+
+I need a comprehensive audit of how photo URLs are generated and served in the Field View codebase. We're going to integrate CloudFront as a CDN in front of the S3 bucket, and I need to know exactly what to change before touching anything.
+
+CloudFront distribution domain: d14rk4r8qyh1ff.cloudfront.net
+S3 bucket: fieldview-storage
+Current S3 region: us-east-2
+
+Run these checks in order and report findings for each:
+
+1. PHOTO UPLOAD FLOW
+   - Find where photos get uploaded to S3
+   - Report the file path, line numbers, and function name
+   - Does it use presigned POST URLs, presigned PUT URLs, direct upload through the backend, or something else?
+   - What's the S3 key format? (e.g., photos/UUID.jpg, projects/{projectId}/{photoId}.jpg)
+   - Are S3 keys using UUIDs (unguessable) or predictable IDs?
+
+2. PHOTO URL GENERATION (for reading/displaying)
+   - Find every place in the codebase that generates URLs for displaying photos
+   - Report file paths and line numbers for each
+   - Are these presigned GET URLs, or something else?
+   - How long do they live (expiration)?
+   - Is there a central helper function, or is URL generation scattered?
+
+3. PHOTO STORAGE IN DATABASE
+   - What's the schema for the photos/media table?
+   - Does it store a full URL, just a path, just an S3 key, or something else?
+   - Count the existing photos: SELECT COUNT(*) FROM photos (or media, whatever the table is)
+
+4. GALLERY ROUTE
+   - /gallery/:token route — where does it render? Report the component file
+   - How does it fetch photos for a given gallery token?
+   - Does it generate presigned URLs at request time, or does it use pre-generated URLs from the DB?
+
+5. API ENDPOINTS THAT RETURN PHOTO URLS
+   - List every API endpoint that returns photo URLs in its response
+   - For each, report: endpoint path, file location, whether it generates presigned URLs inline or retrieves pre-generated ones
+
+6. ENV VAR / CONFIG CHECK
+   - What env vars are used for S3 configuration today?
+   - Is there a central config file for storage/URL generation?
+
+7. SIGNED URL EXPIRATION
+   - How long do current presigned URLs live?
+   - Is there any refresh mechanism if a URL expires while a page is open?
+
+8. FRONTEND IMAGE RENDERING
+   - Where do img tags or background-image references actually render photos?
+   - Are there any optimization wrappers (Next.js Image, lazy loading, etc.)?
+
+Report findings from all 8 checks in detail with exact file paths and line numbers. Do NOT modify any code. Do NOT commit. Do NOT push.
+
+After the audit, I'll decide the specific changes to make.
