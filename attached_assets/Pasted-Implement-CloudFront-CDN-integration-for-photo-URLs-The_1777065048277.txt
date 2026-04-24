@@ -1,0 +1,69 @@
+Implement CloudFront CDN integration for photo URLs. The goal: replace S3 presigned URLs with permanent public CloudFront URLs for reading photos. Uploads stay the same (S3 presigned PUT URLs).
+
+CONTEXT:
+- CloudFront distribution created and tested working
+- Distribution domain: d14rk4r8qyh1ff.cloudfront.net
+- CloudFront ID: E2J90HPGRDSOTL
+- Origin: fieldview-storage.s3.us-east-2.amazonaws.com
+- OAC configured, S3 bucket policy auto-updated
+- Manually verified: CloudFront serves photos correctly
+- Based on prior audit: server/s3.ts is the single source of URL generation
+- Based on prior audit: photos already use unguessable 16-char hex random keys
+- Security model: permanent public CloudFront URLs, protected by unguessable S3 keys and gallery token access control at page level
+
+DIAGNOSE FIRST — do not make changes until you confirm:
+
+1. Open server/s3.ts and report the current full contents
+2. Report exact line numbers for:
+   - getPresignedUrl function
+   - isS3Url function
+   - extractS3KeyFromUrl function
+   - BUCKET constant
+   - Any helper that constructs the S3 URL format
+3. Verify whether CLOUDFRONT_DOMAIN is already referenced anywhere in the codebase (grep the whole repo)
+
+After confirming, wait for approval.
+
+THEN IMPLEMENT in server/s3.ts ONLY:
+
+A. Add new env var read at the top of the file (near other env vars):
+   const CLOUDFRONT_DOMAIN = process.env.CLOUDFRONT_DOMAIN || "d14rk4r8qyh1ff.cloudfront.net";
+
+B. Replace getPresignedUrl(key) so it returns a permanent CloudFront URL instead of a signed S3 URL. The new implementation:
+   export async function getPresignedUrl(key: string): Promise<string> {
+     return `https://${CLOUDFRONT_DOMAIN}/${key}`;
+   }
+   Note: keeping the function name and async signature identical so no call sites need to change. The return is just a simple URL now — no actual signing happens.
+
+C. Update isS3Url helper to also recognize CloudFront URLs. The new version should return true for:
+   - URLs containing `.s3.` and `.amazonaws.com` (existing S3 format)
+   - URLs containing the CloudFront domain
+   Example signature (adjust to match existing style):
+   export function isS3Url(url: string): boolean {
+     if (!url) return false;
+     if (url.includes(CLOUDFRONT_DOMAIN)) return true;
+     return url.includes(`.s3.`) && url.includes(`.amazonaws.com`);
+   }
+
+D. Update extractS3KeyFromUrl helper to handle both S3 and CloudFront URL formats.
+   - For CloudFront URLs: `https://d14rk4r8qyh1ff.cloudfront.net/photos/xyz.jpg` → key is `photos/xyz.jpg`
+   - For S3 URLs (existing format): unchanged behavior
+   - For URLs with query strings (presigned S3 URLs stored historically): strip query string before extracting path
+
+E. DO NOT CHANGE:
+- getPresignedPutUrl (uploads still use S3 presigned PUT — CloudFront is read-only)
+- uploadToS3 (legacy, but don't touch)
+- getS3Url (still used for writing raw URLs to DB — decide below)
+- The URL that gets written to media.url on upload — leave as S3 URL. The read-time helper handles the translation.
+
+F. Actually, on reflection — change getS3Url(key) to return a CloudFront URL directly. This way new rows in media.url get stored as CloudFront URLs from day one. Existing rows remain as S3 URLs and get rewritten at read time via the updated isS3Url + extractS3KeyFromUrl + getPresignedUrl chain. This is cleaner long-term.
+
+Confirm: getS3Url(key) should return `https://${CLOUDFRONT_DOMAIN}/${key}`.
+
+AFTER IMPLEMENTATION:
+1. Show the full updated server/s3.ts file
+2. Run TypeScript check (npx tsc --noEmit) — confirm 0 new errors
+3. Run git status — should show only server/s3.ts modified
+4. Do NOT commit. Do NOT push. I will review manually.
+
+REMINDER: Verify with git diff and cat server/s3.ts that the changes actually persisted to disk before considering this complete. (We had ghost-commit issues earlier this week where chat showed diffs that didn't persist.)
