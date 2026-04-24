@@ -1,0 +1,83 @@
+Build the Field View welcome email: a React Email template sent via Resend when a user completes email verification.
+
+DIAGNOSE FIRST — do not make changes until you confirm the following:
+
+1. Locate the email verification completion endpoint. Based on prior work, this is likely in server/replit_integrations/auth/replitAuth.ts. Find the route/handler that runs when a user clicks the verification link and their emailVerified status is updated from false to true. Report the file path and line numbers.
+
+2. Locate the existing Resend integration. Report:
+   - Where the Resend client is initialized
+   - How existing transactional emails (password reset, email verification) are being sent — are they plain strings, HTML strings, React Email components, or something else?
+   - The sender address currently used for outbound emails
+   - Whether react-email / @react-email/components is already installed in package.json
+
+3. Locate where user firstName is stored on the user record so we can personalize the email.
+
+4. Confirm there is no existing welcome email being sent anywhere in the codebase. Grep for "welcome" in server/ — report any matches.
+
+After reporting the above, wait for approval before making changes.
+
+THEN IMPLEMENT:
+
+A. INSTALL REACT EMAIL (only if not already present):
+If @react-email/components is not in package.json, install:
+  npm install @react-email/components @react-email/render
+
+If it is already installed, skip this step.
+
+B. CREATE THE EMAIL TEMPLATE:
+Create server/emails/welcome.tsx (or match the existing email template directory if one exists — if existing emails live in server/emails/, put it there; if they live elsewhere, match the existing convention).
+
+Use React Email components. The template should be a functional component that accepts { firstName: string } as props.
+
+Template content (use this exact copy — do not modify wording):
+
+Subject: Welcome to Field View — here's how to get the most out of it
+
+Preview text (the gray inbox preview): A note from the founder + how to get value in your first week
+
+Body:
+
+Hey {firstName},
+
+Thanks for starting your Field View trial. I'm Grayson, the founder, and I wanted to personally welcome you in.
+
+Quick context: I also run a painting company in South Florida, and Field View exists because I couldn't find a photo documentation tool that actually worked the way contractors work. Most of the tools out there are either too expensive, too complicated, or clearly built by people who've never been on a job site. We're trying to be the opposite.
+
+A few things that'll help you get value quickly:
+
+1. Create your first project — Pick an active job and get it into the system. Takes about 30 seconds. The whole app is built around projects, so nothing else makes sense until you have one.
+
+2. Invite your crew — Field View gets 10x more useful when your team is uploading photos too. You can invite up to 3 users on your plan.
+
+You've got 14 days to kick the tires. No card needed yet, and if it's not working for you, just don't subscribe — no hard feelings.
+
+If you get stuck, hit reply to this email. I read every message.
+
+Grayson
+Founder, Field View
+grayson@field-view.com
+
+STYLING GUIDANCE:
+- Use React Email's standard components: Html, Head, Body, Container, Section, Text, Heading, Link, Hr
+- Plain, readable typography — no heavy branding, no giant logo header. Text-forward, personal-feeling.
+- Max width 560px
+- Body font: system font stack (-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif)
+- Font size: 16px body, 14px signature
+- Line height: 1.6 on body
+- Color: #1a1a1a on #ffffff background
+- One small Field View wordmark or text at the top — just "Field View" in bold, no image. Do not include a logo image file.
+- The numbered list items should be formatted with the number bold, followed by the bolded heading phrase, then regular text. For example: "1. Create your first project — Pick an active job..."
+- Links (like grayson@field-view.com) should be styled with Field View orange #F09000 and underlined
+- Horizontal rule above the signature
+
+C. WIRE IT TO EMAIL VERIFICATION:
+In the email verification completion handler (from your diagnosis), after the user's emailVerified is successfully set to true and before the response is returned:
+
+- Import the welcome template
+- Render it to HTML using @react-email/render
+- Send via the existing Resend client to the user's email address
+- From: Grayson at Field View <grayson@field-view.com>
+- Reply-To: grayson@field-view.com
+- Subject: Welcome to Field View — here's how to get the most out of it
+- Wrap the send in try/catch so that if the welcome email fails to send, it does NOT break email verification. Log the error to console but let the verification success response continue normally.
+- Do NOT block on the email send — the user should be redirected/logged in as fast as possible. If the existing code does `await` on other email sends, follow the same 
