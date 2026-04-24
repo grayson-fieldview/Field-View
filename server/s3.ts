@@ -12,14 +12,14 @@ const s3Client = new S3Client({
 });
 
 const BUCKET = process.env.AWS_S3_BUCKET || "fieldview-storage";
+const CLOUDFRONT_DOMAIN = process.env.CLOUDFRONT_DOMAIN || "d14rk4r8qyh1ff.cloudfront.net";
 
 export function getS3Url(key: string): string {
-  return `https://${BUCKET}.s3.${process.env.AWS_REGION || "us-east-2"}.amazonaws.com/${key}`;
+  return `https://${CLOUDFRONT_DOMAIN}/${key}`;
 }
 
 export async function getPresignedUrl(key: string): Promise<string> {
-  const command = new GetObjectCommand({ Bucket: BUCKET, Key: key });
-  return getSignedUrl(s3Client, command, { expiresIn: 3600 });
+  return `https://${CLOUDFRONT_DOMAIN}/${key}`;
 }
 
 export async function getPresignedPutUrl(
@@ -40,6 +40,8 @@ export async function getPresignedPutUrl(
 }
 
 export function isS3Url(url: string): boolean {
+  if (!url) return false;
+  if (url.includes(CLOUDFRONT_DOMAIN)) return true;
   return url.includes(".s3.") && url.includes("amazonaws.com");
 }
 
@@ -75,10 +77,16 @@ export async function deleteFromS3(key: string): Promise<void> {
 }
 
 export function extractS3KeyFromUrl(url: string): string | null {
-  if (!url.includes(".s3.")) return null;
+  if (!url) return null;
   try {
     const urlObj = new URL(url);
-    return urlObj.pathname.slice(1);
+    if (urlObj.hostname === CLOUDFRONT_DOMAIN) {
+      return urlObj.pathname.slice(1);
+    }
+    if (urlObj.hostname.includes(".s3.") && urlObj.hostname.endsWith("amazonaws.com")) {
+      return urlObj.pathname.slice(1);
+    }
+    return null;
   } catch {
     return null;
   }
