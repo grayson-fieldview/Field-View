@@ -1,0 +1,48 @@
+Verification email links are landing on a 404 page. Need to diagnose why.
+
+CONTEXT:
+- Users receive verification emails with a link: https://app.field-view.com/verify-email?token=XYZ
+- Clicking that link results in a 404 "Page Not Found" in the React app
+- The backend has a handler for GET /api/verify-email (confirmed in prior diagnosis at server/replit_integrations/auth/replitAuth.ts)
+- The frontend appears to have no route for /verify-email (no /api prefix)
+- Because the page 404s, the backend handler is never called, so users stay unverified and welcome emails never fire
+
+DIAGNOSE ONLY — DO NOT CHANGE ANY CODE.
+
+1. EMAIL TEMPLATE CHECK
+   Find the email verification template file. Based on prior work, this is probably in server/emails/ or server/services/email.ts as inline HTML. Report:
+   - The file path
+   - The exact URL string the template uses for the verify button/link
+   - Is it pointing to /verify-email (frontend) or /api/verify-email (backend)?
+
+2. FRONTEND ROUTE CHECK
+   Find the frontend router config. Based on prior context this uses wouter. Search for:
+   - Any route matching /verify-email
+   - Any route matching /api/verify-email
+   - The file path of the router config (likely client/src/App.tsx or similar)
+   - List ALL currently defined routes so I can see the full routing landscape
+   - Report whether there's a VerifyEmail or VerifyEmailPage component file anywhere in client/src/pages/
+
+3. BACKEND ROUTE CHECK
+   Confirm the backend handler exists and what it does:
+   - File path and line numbers for GET /api/verify-email
+   - Does it return JSON, or does it redirect (res.redirect) to a frontend URL after successful verification?
+   - If it redirects, where does it redirect to?
+
+4. INTENDED FLOW CHECK
+   Based on the code, what is the ORIGINAL intended verification flow? Pick one:
+   a) Email link → frontend /verify-email page → frontend calls backend API → frontend shows success UI and redirects
+   b) Email link → backend /api/verify-email → backend verifies and redirects to a frontend page (like /dashboard or /subscribe)
+   c) Something else — describe
+
+5. GIT HISTORY CHECK
+   Run: git log --all --oneline -- client/src/pages/verify-email.tsx client/src/pages/VerifyEmail.tsx
+   Also run: git log --all --oneline --diff-filter=D -- "client/src/pages/**"
+   Report any files that were deleted in recent commits.
+
+6. DATABASE VERIFICATION STATE CHECK
+   Query the database:
+   SELECT email, email_verified, created_at FROM users WHERE email LIKE '%test2%' OR email LIKE '%test1%' ORDER BY created_at DESC LIMIT 5;
+   Report whether these test users have email_verified = true or false.
+
+Report findings from all 6 checks. Do NOT modify code. Do NOT commit. Do NOT push.
