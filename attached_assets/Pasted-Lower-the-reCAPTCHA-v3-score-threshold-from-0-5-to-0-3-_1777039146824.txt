@@ -1,0 +1,46 @@
+Lower the reCAPTCHA v3 score threshold from 0.5 to 0.3 on the signup endpoint.
+
+CONTEXT:
+- reCAPTCHA v3 is currently rejecting legitimate users in incognito/fresh browser sessions because Google's behavioral model has no signal on them and assigns low scores (often 0.1-0.3)
+- The current 0.5 threshold is overly aggressive for reCAPTCHA v3 on signup flows
+- 0.3 is the industry-standard threshold for v3 signup forms
+- We already have additional bot defenses: email verification (humans only), rate limiting (5/hour/IP), and Terms consent checkbox
+
+DIAGNOSE FIRST — do not make changes until you confirm:
+
+1. Locate the reCAPTCHA verification code. Based on prior work, it's in server/services/recaptcha.ts. Report:
+   - The file path
+   - The current score threshold value (should be 0.5)
+   - Whether the threshold is hardcoded or read from an env var
+   - Every place in the codebase that calls the reCAPTCHA verification function (should be at least POST /api/register)
+
+2. Confirm that POST /api/register is the ONLY endpoint currently gated by reCAPTCHA. Report any other gated endpoints.
+
+After reporting, wait for approval.
+
+THEN IMPLEMENT:
+
+A. Change the score threshold from 0.5 to 0.3 in server/services/recaptcha.ts.
+
+B. If the threshold is hardcoded as a magic number, refactor into a named constant at the top of the file:
+   const RECAPTCHA_MIN_SCORE = 0.3;
+   And reference that constant. This makes future threshold tuning a one-line change.
+
+C. Add logging so we can monitor actual scores in production:
+   - Log the score for every verification attempt (success or failure)
+   - Format: console.log(`[recaptcha] score=${score} action=${action} passed=${score >= RECAPTCHA_MIN_SCORE}`)
+   - This lets us see in Vercel logs what scores real users are getting, so we can tune the threshold based on data
+
+D. DO NOT CHANGE:
+- The reCAPTCHA client library or frontend integration
+- Any other logic in the verification function
+- Any env vars
+- Which endpoints are gated
+
+AFTER IMPLEMENTATION:
+1. Show the diff
+2. Confirm TypeScript compiles cleanly
+3. Run git status — should show only server/services/recaptcha.ts modified
+4. Do NOT commit or push — I will review and push manually
+
+Minimal surgical changes. No refactoring beyond the named-constant extraction.
