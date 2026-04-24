@@ -64,8 +64,6 @@ export default function CheckEmailPage() {
       });
     },
     onError: (error: any) => {
-      setCooldown(RESEND_COOLDOWN_SECONDS);
-
       if (error?.kind === "network") {
         toast({
           title: "Couldn't reach the server",
@@ -76,13 +74,14 @@ export default function CheckEmailPage() {
       }
 
       if (error?.status === 429) {
+        setCooldown(RESEND_COOLDOWN_SECONDS);
         const retry = error.retryAfterSeconds;
-        const isShortThrottle = typeof retry === "number" && retry < 120;
+        const isLongThrottle = typeof retry === "number" && retry >= 120;
         toast({
           title: "Too many requests",
-          description: isShortThrottle
-            ? "You just requested an email a moment ago. Please wait about a minute before requesting another."
-            : "You've requested too many emails. Please wait an hour and try again.",
+          description: isLongThrottle
+            ? "You've requested too many emails. Please wait an hour and try again."
+            : "You just requested an email a moment ago. Please wait about a minute before requesting another.",
           variant: "destructive",
         });
         return;
