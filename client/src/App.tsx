@@ -117,7 +117,6 @@ function AppContent() {
         <Route path="/forgot-password" component={ForgotPasswordPage} />
         <Route path="/reset-password" component={ResetPasswordPage} />
         <Route path="/check-email" component={CheckEmailPage} />
-        <Route path="/verify-email" component={VerifyEmailPage} />
         <Route>
           <Redirect to="/signup" />
         </Route>
@@ -140,6 +139,7 @@ function App() {
             <Route path="/gallery/:token">
               {(params) => <GalleryPage token={params.token} />}
             </Route>
+            <Route path="/verify-email" component={VerifyEmailPage} />
             <Route>
               <AppContent />
             </Route>
