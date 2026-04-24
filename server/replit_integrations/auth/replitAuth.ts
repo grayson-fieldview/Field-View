@@ -14,6 +14,7 @@ import { eq, and, isNull, gt } from "drizzle-orm";
 import { passwordResetTokens, emailVerificationTokens, users, accounts, invitations, type User } from "@shared/models/auth";
 import { sendPasswordResetEmail, sendEmailVerificationEmail } from "../../services/email";
 import { verifyRecaptchaToken } from "../../services/recaptcha";
+import { CURRENT_TERMS_VERSION } from "@shared/constants";
 import {
   loginLimiter,
   registerLimiter,
@@ -72,6 +73,9 @@ async function findOrCreateOAuthUser(opts: {
   let accountId: string;
   let role: string;
 
+  // TODO: Terms acceptance gate for OAuth signups. Users signing up via Google
+  // currently bypass the terms checkbox on /register. Consider adding a
+  // post-OAuth acceptance page that blocks access until terms_accepted_at is set.
   if (opts.inviteToken) {
     const [invitation] = await db.select().from(invitations).where(
       and(eq(invitations.token, opts.inviteToken), eq(invitations.status, "pending"))
@@ -303,6 +307,10 @@ export async function setupAuth(app: Express) {
         });
       }
 
+      if (req.body.termsAccepted !== true) {
+        return res.status(400).json({ message: "You must accept the Terms of Service and Privacy Policy to continue." });
+      }
+
       const { email, password, firstName, lastName, inviteToken } = req.body;
 
       if (!email || !password) {
@@ -353,6 +361,8 @@ export async function setupAuth(app: Express) {
         emailVerified: false,
         subscriptionStatus: "none",
         trialEndsAt: null,
+        termsAcceptedAt: new Date(),
+        termsVersion: CURRENT_TERMS_VERSION,
       });
 
       const verificationToken = crypto.randomBytes(32).toString("hex");

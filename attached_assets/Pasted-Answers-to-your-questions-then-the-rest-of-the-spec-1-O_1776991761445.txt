@@ -1,0 +1,98 @@
+Answers to your questions, then the rest of the spec:
+
+1. OAuth (Google) signup terms gate — DO NOT BUILD tonight. Add a TODO comment in findOrCreateOAuthUser flagging that Google OAuth signups currently bypass terms acceptance. This is a known gap to address separately.
+
+2. Existing users — leave terms_accepted_at NULL. No backfill. Do not modify existing user rows.
+
+3. Terms version value — use "2026-04-23" (today's ISO date as version string). Create shared/constants.ts with:
+
+   export const CURRENT_TERMS_VERSION = "2026-04-23";
+
+   Import this constant in both the register handler and the frontend if needed.
+
+4. Invite flow — yes, invited users also must accept. The checkbox applies to all paths through /api/register.
+
+5. Error contract — yes, 400 { message: "You must accept the Terms of Service and Privacy Policy to continue." } to match existing handler patterns.
+
+NOW THE REST OF THE SPEC:
+
+A. SCHEMA (shared/schema.ts / shared/models/auth.ts):
+Add two nullable columns to users table:
+- terms_accepted_at: timestamp (nullable)
+- terms_version: text (nullable)
+
+Generate the migration file via `npm run db:push --dry-run` or equivalent so I can see the SQL. Do NOT actually run the migration — I will run it manually against production before deploying the code.
+
+B. FRONTEND (client/src/pages/register.tsx):
+- Add controlled state: const [termsAccepted, setTermsAccepted] = useState(false);
+- Add checkbox above the submit button:
+
+  <label className="flex items-start gap-2 text-sm">
+    <input
+      type="checkbox"
+      checked={termsAccepted}
+      onChange={(e) => setTermsAccepted(e.target.checked)}
+      required
+    />
+    <span>
+      I agree to the{" "}
+      <a href="https://field-view.com/terms" target="_blank" rel="noopener noreferrer" className="underline">
+        Terms of Service
+      </a>{" "}
+      and{" "}
+      <a href="https://field-view.com/privacy" target="_blank" rel="noopener noreferrer" className="underline">
+        Privacy Policy
+      </a>
+    </span>
+  </label>
+
+  Match existing Tailwind/styling patterns on the page — adjust className to fit.
+
+- In the submit handler, before calling the mutation:
+  if (!termsAccepted) {
+    throw new Error("You must agree to the Terms of Service and Privacy Policy to create an account.");
+  }
+
+- Disable the submit button when termsAccepted is false (visual feedback).
+
+- Include termsAccepted: true in the POST body to /api/register.
+
+C. BACKEND (POST /api/register in server/replit_integrations/auth/replitAuth.ts):
+- After reCAPTCHA verification and before the duplicate check, add:
+
+  if (req.body.termsAccepted !== true) {
+    return res.status(400).json({ message: "You must accept the Terms of Service and Privacy Policy to continue." });
+  }
+
+- In the authStorage.upsertUser({...}) call, add:
+  termsAcceptedAt: new Date(),
+  termsVersion: CURRENT_TERMS_VERSION,
+
+  (Import CURRENT_TERMS_VERSION from shared/constants.ts at the top of the file.)
+
+- This applies to BOTH branches (invite-token and new-account) since both go through upsertUser.
+
+D. OAUTH TODO:
+In findOrCreateOAuthUser (around line ~95), add a comment:
+
+// TODO: Terms acceptance gate for OAuth signups. Users signing up via Google
+// currently bypass the terms checkbox on /register. Consider adding a
+// post-OAuth acceptance page that blocks access until terms_accepted_at is set.
+
+E. DO NOT CHANGE:
+- Login endpoint
+- Password reset flow
+- Session configuration
+- Rate limiting
+- reCAPTCHA logic
+- Email verification flow
+- Any other auth logic not listed above
+
+AFTER IMPLEMENTATION:
+1. Show diff grouped by file.
+2. Show the migration SQL that will be generated.
+3. Confirm TypeScript compiles cleanly.
+4. Do NOT commit or push — I will review and push manually.
+5. Flag any risks.
+
+Minimal surgical changes. No refactoring.

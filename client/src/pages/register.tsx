@@ -23,6 +23,7 @@ export default function RegisterPage() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(false);
   const { executeRecaptcha } = useGoogleReCaptcha();
 
   const params = new URLSearchParams(searchString);
@@ -47,6 +48,9 @@ export default function RegisterPage() {
 
   const registerMutation = useMutation({
     mutationFn: async () => {
+      if (!termsAccepted) {
+        throw new Error("You must agree to the Terms of Service and Privacy Policy to create an account.");
+      }
       if (password !== confirmPassword) {
         throw new Error("Passwords do not match");
       }
@@ -74,6 +78,7 @@ export default function RegisterPage() {
           lastName,
           ...(inviteToken ? { inviteToken } : {}),
           ...(recaptchaToken ? { recaptchaToken } : {}),
+          termsAccepted: true,
         }),
       });
       if (!res.ok) {
@@ -222,10 +227,42 @@ export default function RegisterPage() {
                 data-testid="input-confirm-password"
               />
             </div>
+            <label className="flex items-start gap-2 text-sm text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={termsAccepted}
+                onChange={(e) => setTermsAccepted(e.target.checked)}
+                required
+                className="mt-1 h-4 w-4 rounded border-input accent-[#F09000]"
+                data-testid="checkbox-terms"
+              />
+              <span>
+                I agree to the{" "}
+                <a
+                  href="https://field-view.com/terms"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[#F09000] underline hover:no-underline"
+                  data-testid="link-terms"
+                >
+                  Terms of Service
+                </a>{" "}
+                and{" "}
+                <a
+                  href="https://field-view.com/privacy"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[#F09000] underline hover:no-underline"
+                  data-testid="link-privacy"
+                >
+                  Privacy Policy
+                </a>
+              </span>
+            </label>
             <Button
               type="submit"
               className="w-full bg-[#F09000] hover:bg-[#d98000] text-white"
-              disabled={registerMutation.isPending}
+              disabled={registerMutation.isPending || !termsAccepted}
               data-testid="button-register"
             >
               {registerMutation.isPending ? (
