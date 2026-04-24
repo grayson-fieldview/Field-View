@@ -1,3 +1,5 @@
+const RECAPTCHA_MIN_SCORE = 0.3;
+
 interface RecaptchaVerifyResult {
   success: boolean;
   score?: number;
@@ -41,21 +43,24 @@ export async function verifyRecaptchaToken(
 
     if (!data.success) {
       console.warn("[recaptcha] verification failed:", data["error-codes"]);
+      console.log(`[recaptcha] score=${data.score} action=${data.action} passed=false reason=invalid-token`);
       return { valid: false, reason: "invalid_token", score: data.score };
     }
 
     if (data.action !== expectedAction) {
       console.warn(`[recaptcha] action mismatch — expected ${expectedAction}, got ${data.action}`);
+      console.log(`[recaptcha] score=${data.score} action=${data.action} passed=false reason=action-mismatch`);
       return { valid: false, reason: "action_mismatch", score: data.score };
     }
 
-    const SCORE_THRESHOLD = 0.5;
-    if ((data.score ?? 0) < SCORE_THRESHOLD) {
-      console.warn(`[recaptcha] low score: ${data.score} (threshold: ${SCORE_THRESHOLD})`);
+    if ((data.score ?? 0) < RECAPTCHA_MIN_SCORE) {
+      console.warn(`[recaptcha] low score: ${data.score} (threshold: ${RECAPTCHA_MIN_SCORE})`);
+      console.log(`[recaptcha] score=${data.score} action=${data.action} passed=false reason=low-score`);
       return { valid: false, reason: "low_score", score: data.score };
     }
 
     console.log(`[recaptcha] verified, score: ${data.score}`);
+    console.log(`[recaptcha] score=${data.score} action=${data.action} passed=true reason=ok`);
     return { valid: true, score: data.score };
   } catch (err) {
     console.error("[recaptcha] verification threw:", err);
