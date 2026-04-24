@@ -1,0 +1,84 @@
+Multiple updates to the signup / email verification flow. Read fully before starting.
+
+DIAGNOSE FIRST — do not make changes until you confirm the following:
+
+1. Locate the shared email sender constant in server/services/email.ts. Report:
+   - Current FROM value
+   - Whether a REPLY_TO constant exists
+
+2. Locate the welcome email template (likely server/emails/welcome.tsx based on earlier work). Report the file path and show me the current body copy for the paragraph that mentions the 14-day trial and "no card needed."
+
+3. Confirm that support@field-view.com is already wired as a Help Scout inbox (should be from earlier setup).
+
+4. Everything else from the previous diagnosis is already confirmed — rate limiter stays as-is, /check-email page rebuild proceeds, etc.
+
+After reporting the above, wait for approval before making changes.
+
+THEN IMPLEMENT:
+
+A. UPDATE SHARED EMAIL SENDER (server/services/email.ts):
+- Change the FROM constant default from "Field View <noreply@send.field-view.com>" to "Field View <support@field-view.com>"
+- Add a new REPLY_TO constant with value "support@field-view.com"
+- Update both sendEmailVerificationEmail and sendPasswordResetEmail to pass the REPLY_TO value as the replyTo parameter in the Resend send call
+- Do NOT change sendWelcomeEmail — it stays as Grayson at grayson@field-view.com with reply-to grayson@field-view.com
+
+B. UPDATE WELCOME EMAIL COPY (server/emails/welcome.tsx):
+Find the paragraph that currently reads:
+
+"You've got 14 days to kick the tires. No card needed yet, and if it's not working for you, just don't subscribe — no hard feelings."
+
+Replace with:
+
+"You've got 14 days to kick the tires. If it's not for you, cancel anytime before the trial ends and you won't be charged."
+
+Do NOT change any other copy in the welcome email. The greeting, the founder paragraph, the two numbered items (Create first project / Invite crew), the "hit reply" line, and the signature all stay exactly as they are.
+
+C. REBUILD /check-email PAGE (client/src/pages/check-email.tsx):
+
+Replace the current page content with a rebuilt version that includes:
+
+- Main heading: "Check your email"
+- Subheading: "We sent a verification link to {email}" where {email} is pulled from the ?email= query parameter
+- Body paragraph: "The link should arrive within a minute. Be sure to check your spam or promotions folder if you don't see it."
+- Smaller gray helper text below: "On AT&T, Bellsouth, Yahoo, or AOL? Delivery may take up to 5 minutes."
+- A "Resend email" button that:
+  - Calls POST /api/resend-verification with the email from the URL
+  - On 200 success: toast "Verification email sent again. Check your inbox in a minute."
+  - On error, branch based on response body:
+    - If response JSON has retryAfterSeconds field AND its value is under 120: toast "You just requested an email a moment ago. Please wait about a minute before requesting another."
+    - If retryAfterSeconds is 120+ OR the field is missing (generic error): toast "You've requested too many emails. Please wait an hour and try again."
+  - Disabled for 60 seconds after each click with a visible countdown: "Resend (available in 45s)" etc.
+  - Re-enables with just "Resend email" after countdown
+- Below the resend button, small gray text "Wrong email? Start over" with link to /register
+- Keep existing "Back to sign in" link to /login if it exists, or add one below the Start Over link
+
+STYLING:
+- Match existing /register page card styling — same width, same fonts, same orange #F09000 accent for button
+- Keep the existing Field View logo header if there is one
+
+COUNTDOWN TIMER REQUIREMENTS:
+- Use setInterval (not setTimeout recursion) for the countdown
+- Use useEffect cleanup to clearInterval on unmount AND when timer reaches 0
+- Button disabled state tied to both isPending (TanStack Query) AND countdown > 0
+
+SAFETY:
+- All fetch/mutation calls wrapped in TanStack Query mutation with onError handler
+- No bare .then/.catch chains
+- No throwing inside async handlers that aren't caught
+
+D. DO NOT CHANGE:
+- Rate limiter configuration (keep 5/hour with rl_resend as-is)
+- /api/resend-verification endpoint logic (it already exists and works)
+- /api/register endpoint
+- Password reset flow
+- Session config
+- Any other pages
+
+AFTER IMPLEMENTATION:
+1. Show diff grouped by file
+2. Confirm TypeScript compiles with no new errors
+3. Render the updated welcome email template to HTML with firstName="John" and paste the output so I can verify the copy change landed correctly
+4. Do NOT commit or push — I will review and push manually
+5. Flag any risks
+
+Minimal surgical changes. No refactoring. No new dependencies.
