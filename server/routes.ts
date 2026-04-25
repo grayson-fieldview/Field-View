@@ -3,6 +3,7 @@ import { createServer, type Server } from "http";
 import crypto from "crypto";
 import { storage } from "./storage";
 import { setupAuth, registerAuthRoutes, isAuthenticated, requireActiveSubscription } from "./replit_integrations/auth";
+import { requireAdmin, requireAdminOrManager } from "./middleware/auth";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
 import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertReportSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertReportTemplateSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, reports, projectAssignments } from "@shared/schema";
@@ -944,12 +945,9 @@ export async function registerRoutes(
   });
 
   // Invitations
-  app.get("/api/invitations", requireActiveSubscription, async (req: any, res) => {
+  app.get("/api/invitations", requireActiveSubscription, requireAdminOrManager, async (req: any, res) => {
     try {
       const currentUser = req.user;
-      if (currentUser.role !== "admin" && currentUser.role !== "manager") {
-        return res.status(403).json({ message: "Only admins and managers can view invitations" });
-      }
       const accountId = currentUser.accountId;
       const result = await db.select({
         id: invitations.id,
@@ -971,12 +969,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/invitations", requireActiveSubscription, async (req: any, res) => {
+  app.post("/api/invitations", requireActiveSubscription, requireAdminOrManager, async (req: any, res) => {
     try {
       const currentUser = req.user;
-      if (currentUser.role !== "admin" && currentUser.role !== "manager") {
-        return res.status(403).json({ message: "Only admins and managers can invite users" });
-      }
       const { email, role } = req.body;
       if (!email) return res.status(400).json({ message: "Email is required" });
       const validRoles = ["admin", "manager", "standard", "restricted"];
@@ -1020,12 +1015,9 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/invitations/:id", requireActiveSubscription, async (req: any, res) => {
+  app.delete("/api/invitations/:id", requireActiveSubscription, requireAdminOrManager, async (req: any, res) => {
     try {
       const currentUser = req.user;
-      if (currentUser.role !== "admin" && currentUser.role !== "manager") {
-        return res.status(403).json({ message: "Only admins and managers can cancel invitations" });
-      }
       const { id } = req.params;
       const [invitation] = await db.select().from(invitations).where(eq(invitations.id, id));
       if (!invitation || invitation.accountId !== currentUser.accountId) {
@@ -1038,12 +1030,9 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/users/:userId", requireActiveSubscription, async (req: any, res) => {
+  app.delete("/api/users/:userId", requireActiveSubscription, requireAdminOrManager, async (req: any, res) => {
     try {
       const currentUser = req.user;
-      if (currentUser.role !== "admin" && currentUser.role !== "manager") {
-        return res.status(403).json({ message: "Only admins and managers can remove users" });
-      }
       const { userId } = req.params;
       if (userId === currentUser.id) {
         return res.status(400).json({ message: "You cannot remove yourself" });
@@ -1083,12 +1072,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/projects/:id/assignments", requireActiveSubscription, async (req: any, res) => {
+  app.post("/api/projects/:id/assignments", requireActiveSubscription, requireAdminOrManager, async (req: any, res) => {
     try {
       const currentUser = req.user;
-      if (currentUser.role !== "admin" && currentUser.role !== "manager") {
-        return res.status(403).json({ message: "Only admins and managers can assign users to projects" });
-      }
       const projectId = parseInt(req.params.id);
       if (!(await verifyProjectAccess(projectId, currentUser.accountId))) return res.status(403).json({ message: "Access denied" });
       const { userId } = req.body;
@@ -1110,12 +1096,9 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/projects/:id/assignments/:userId", requireActiveSubscription, async (req: any, res) => {
+  app.delete("/api/projects/:id/assignments/:userId", requireActiveSubscription, requireAdminOrManager, async (req: any, res) => {
     try {
       const currentUser = req.user;
-      if (currentUser.role !== "admin" && currentUser.role !== "manager") {
-        return res.status(403).json({ message: "Only admins and managers can remove project assignments" });
-      }
       const projectId = parseInt(req.params.id);
       if (!(await verifyProjectAccess(projectId, currentUser.accountId))) return res.status(403).json({ message: "Access denied" });
       await db.delete(projectAssignments).where(
@@ -1177,12 +1160,9 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/users/:userId/role", requireActiveSubscription, async (req: any, res) => {
+  app.patch("/api/users/:userId/role", requireActiveSubscription, requireAdmin, async (req: any, res) => {
     try {
       const currentUser = req.user;
-      if (currentUser.role !== "admin") {
-        return res.status(403).json({ message: "Only admins can change roles" });
-      }
       const { userId } = req.params;
       const targetUser = await authStorage.getUser(userId);
       if (!targetUser) return res.status(404).json({ message: "User not found" });

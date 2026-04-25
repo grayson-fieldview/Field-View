@@ -1,0 +1,73 @@
+Implement role-based authorization middleware and apply it to existing endpoints.
+Server-side only — do NOT touch the frontend in this prompt.
+Do NOT push to git. Show me the diff and wait for approval.
+
+# Context
+
+Field View has a 4-role permission model: admin, manager, standard, restricted.
+Roles are stored as a varchar on the users table: shared/models/auth.ts:31.
+Today, role checks are done inline in each route handler (e.g., 
+"if (currentUser.role !== 'admin' && currentUser.role !== 'manager')"). 
+This is repetitive and easy to get wrong. We're consolidating to reusable middleware.
+
+# Task
+
+## Step 1: Create middleware file
+
+Create a new file: server/middleware/auth.ts
+
+Export three middleware functions:
+
+1. requireAdmin(req, res, next)
+   - 401 if not authenticated
+   - 403 with { error: 'forbidden', message: 'Admin role required' } if req.user.role !== 'admin'
+   - Otherwise next()
+
+2. requireAdminOrManager(req, res, next)
+   - 401 if not authenticated
+   - 403 with { error: 'forbidden', message: 'Admin or Manager role required' } 
+     if req.user.role is not in ['admin', 'manager']
+   - Otherwise next()
+
+3. requireOwnerAdmin(req, res, next)
+   - 401 if not authenticated
+   - 403 if req.user.role !== 'admin'
+   - 403 if req.user.id !== req.user.account.owner_id
+   - Otherwise next()
+   - NOTE: accounts.owner_id does not exist yet — it's added in a future migration.
+     Implement this middleware now but mark it with a TODO comment that says:
+     "TODO: requires accounts.owner_id column (Session 1 schema migration). 
+     Currently always returns 403 for safety. Do not apply to any route until owner_id exists."
+   - Do NOT apply this middleware to any route in this prompt. Just create it.
+
+All three middleware should use the existing isAuthenticated check pattern already 
+used elsewhere in the codebase (look at how server/routes.ts does it today and match the style).
+
+## Step 2: Apply middleware to existing endpoints
+
+Replace inline role checks with the new middleware on these endpoints. 
+Keep all other logic identical — only replace the role-check lines.
+
+User management endpoints (use requireAdminOrManager):
+- GET    /api/invitations                  (server/routes.ts ~line 947)
+- POST   /api/invitations                  (~line 974)
+- DELETE /api/invitations/:id              (~line 1023)
+- DELETE /api/users/:userId                (~line 1041)
+- POST   /api/projects/:id/assignments     (~line 1086)
+- DELETE /api/projects/:id/assignments/:userId (~line 1113)
+
+PATCH /api/users/:userId/role:
+- KEEP this as requireAdmin for now. We will widen it to allow Manager in Prompt 3.
+  Just replace the inline check with requireAdmin middleware in this prompt.
+
+Billing endpoints — DO NOT TOUCH IN THIS PROMPT.
+We will gate billing endpoints with requireAdmin in a future session 
+once we restructure billing from per-user to per-account. Touching them now 
+risks breaking billing for the 2 existing paying users.
+
+## Step 3: Preserve special-case logic
+
+Some endpoints have additional checks BEYOND the basic role check. Preserve these:
+
+- POST /api/invitations: after middleware passes, KEEP the existing check 
+  that prevents Manager from inviting users with role
