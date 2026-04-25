@@ -1,0 +1,69 @@
+Two small changes to close out this session. Do NOT push to git.
+Show me the diff and wait for approval.
+
+# Change 1: Widen PATCH /api/users/:userId/role to allow Manager
+
+## Context
+
+Per the spec, Manager should be able to change user roles, with one caveat: 
+Manager cannot promote a user to admin or manager (only Admin can grant 
+admin/manager roles). This matches the same restriction already in place on 
+POST /api/invitations (server/routes.ts ~line 984).
+
+Today, PATCH /api/users/:userId/role uses requireAdmin middleware, blocking Manager.
+
+## Task
+
+In server/routes.ts, find PATCH /api/users/:userId/role (around line 1180-1202).
+
+1. Change the middleware from requireAdmin to requireAdminOrManager.
+2. After the middleware passes, add an inline check that mirrors the invitation 
+   restriction: if the current user is a manager AND the target role is "admin" 
+   or "manager", return 403 with a clear message: "Managers can only assign 
+   standard or restricted roles".
+3. Preserve every other check in the existing handler (account scoping, target 
+   user lookup, valid roles whitelist, etc).
+4. Do NOT touch any other endpoint.
+
+# Change 2: Add /team route guard on the frontend
+
+## Context
+
+The /team route is correctly hidden from the sidebar nav for Standard and 
+Restricted users (client/src/components/app-sidebar.tsx). However, if a 
+Standard or Restricted user types app.field-view.com/team directly in the 
+address bar, the page still loads (it's inert because the underlying API 
+returns 403, but the page chrome renders, which is confusing).
+
+We want the route itself to redirect non-admin/non-manager users to /dashboard 
+(or wherever the default authenticated landing page is).
+
+## Task
+
+1. Open client/src/pages/team.tsx.
+2. Inside the component, near the top (after auth state is loaded), add a 
+   useEffect that checks the user's role. If role is not in ["admin", "manager"], 
+   call setLocation("/dashboard") (or whatever the existing app uses for 
+   programmatic navigation — match existing patterns in the codebase, likely 
+   wouter's useLocation or react-router's useNavigate).
+3. While the redirect is in flight (or if the user object is still loading), 
+   render null or a brief loading state. Don't render the team page content 
+   for unauthorized roles even momentarily.
+4. Use the same useUser/auth hook the rest of the codebase uses. Don't 
+   reinvent — match existing patterns.
+
+## Important
+
+- Frontend redirect is UX, not security. The server-side gating on the 
+  invitation/user-management endpoints is what actually protects the data. 
+  Do not remove or weaken any server-side checks.
+- Do NOT touch any other client component.
+
+# Output
+
+1. Diff for the role endpoint change in server/routes.ts.
+2. Diff (or full new file) for client/src/pages/team.tsx showing the redirect logic.
+3. Confirm TS error count stays at 33 (the baseline).
+4. Confirm no other files modified.
+
+Wait for me to review before doing anything else.

@@ -1174,7 +1174,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/users/:userId/role", requireActiveSubscription, requireAdmin, async (req: any, res) => {
+  app.patch("/api/users/:userId/role", requireActiveSubscription, requireAdminOrManager, async (req: any, res) => {
     try {
       const currentUser = req.user;
       const { userId } = req.params;
@@ -1185,6 +1185,9 @@ export async function registerRoutes(
       const validRoles = ["admin", "manager", "standard", "restricted"];
       if (!validRoles.includes(role)) {
         return res.status(400).json({ message: "Invalid role" });
+      }
+      if (currentUser.role === "manager" && (role === "admin" || role === "manager")) {
+        return res.status(403).json({ message: "Managers can only assign standard or restricted roles" });
       }
       const updated = await db.update(users).set({ role }).where(eq(users.id, userId)).returning();
       if (updated.length === 0) return res.status(404).json({ message: "User not found" });

@@ -35,7 +35,8 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Users, Search, Mail, Calendar, Shield, UserPlus, X, Clock, Loader2, Trash2, Copy, Check } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import type { User } from "@shared/models/auth";
@@ -53,11 +54,18 @@ export default function TeamPage() {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState("standard");
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
-  const { user: currentUser } = useAuth();
+  const { user: currentUser, isLoading: authLoading } = useAuth();
+  const [, setLocation] = useLocation();
   const { toast } = useToast();
   const isAdmin = currentUser?.role === "admin";
   const isManager = currentUser?.role === "manager";
   const canManageUsers = isAdmin || isManager;
+
+  useEffect(() => {
+    if (!authLoading && currentUser && !canManageUsers) {
+      setLocation("/");
+    }
+  }, [authLoading, currentUser, canManageUsers, setLocation]);
 
   const { data: users, isLoading } = useQuery<User[]>({
     queryKey: ["/api/users"],
@@ -138,6 +146,10 @@ export default function TeamPage() {
   const availableRoles = isAdmin
     ? ["admin", "manager", "standard", "restricted"]
     : ["standard", "restricted"];
+
+  if (authLoading || !currentUser || !canManageUsers) {
+    return null;
+  }
 
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-5xl mx-auto">
