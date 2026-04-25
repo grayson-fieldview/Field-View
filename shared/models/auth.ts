@@ -46,7 +46,9 @@ export const users = pgTable("users", {
   termsVersion: text("terms_version"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+}, (table) => [
+  index("users_account_id_idx").on(table.accountId),
+]);
 
 export const passwordResetTokens = pgTable("password_reset_tokens", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -80,7 +82,10 @@ export const invitations = pgTable("invitations", {
   invitedById: varchar("invited_by_id").references(() => users.id),
   expiresAt: timestamp("expires_at").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (table) => [
+  index("invitations_account_id_idx").on(table.accountId),
+  index("invitations_token_idx").on(table.token),
+]);
 
 export type UpsertUser = typeof users.$inferInsert;
 export type User = typeof users.$inferSelect;

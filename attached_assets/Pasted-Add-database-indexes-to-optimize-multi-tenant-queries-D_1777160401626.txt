@@ -1,0 +1,74 @@
+Add database indexes to optimize multi-tenant queries.
+Drizzle ORM, Postgres. Do NOT push to git. 
+Show me the diff and wait for approval.
+
+# Context
+
+Field View filters most queries by accountId for multi-tenant isolation
+(every authenticated request scopes data to req.user.accountId). However, 
+no indexes exist on accountId columns today. This means every query does 
+a full table scan, which is fine at 2 users but will degrade fast as we 
+add customers.
+
+We're adding indexes to the highest-traffic tables tonight.
+
+# Task
+
+## 1. Add indexes to schema files
+
+Open shared/models/auth.ts AND shared/schema.ts.
+
+Find the following table definitions and add indexes on accountId 
+(and a few other high-traffic columns) following Drizzle's index() syntax. 
+Match the existing pattern used in the sessions table at the top of 
+shared/models/auth.ts (which has an index on expire).
+
+Tables that need indexes:
+
+In shared/models/auth.ts:
+- users table → index on accountId (named users_account_id_idx)
+- invitations table → index on accountId, and a separate index on token 
+  (invitations_account_id_idx, invitations_token_idx)
+
+In shared/schema.ts:
+- projects → index on accountId (projects_account_id_idx)
+- projects → index on createdById (projects_created_by_id_idx) — used 
+  by the Restricted user filter
+- media → index on projectId (media_project_id_idx) — heavy read in 
+  project detail page
+- tasks → index on accountId (tasks_account_id_idx)
+- tasks → index on projectId (tasks_project_id_idx)
+- checklists → index on projectId (checklists_project_id_idx)
+- project_assignments → composite index on (userId, projectId) named 
+  project_assignments_user_project_idx — used by Restricted user filter 
+  and project access checks
+- comments → index on projectId (comments_project_id_idx)
+- reports → index on projectId (reports_project_id_idx)
+- calendar_events → index on accountId (calendar_events_account_id_idx)
+
+If any of these tables don't exist or have different column names than 
+expected, list them in your output and SKIP that table — do not invent.
+
+## 2. Apply via npm run db:push
+
+Run npm run db:push to apply to Neon dev. Show me the SQL it generates 
+(or the output of the command if no SQL is printed).
+
+## 3. Verify
+
+Run psql against $DATABASE_URL and verify the indexes exist:
+
+  psql $DATABASE_URL -c "\\di"
+
+Show me the output filtered to just the new indexes (grep for 
+"_idx" or similar).
+
+# Output
+
+1. The diffs for shared/models/auth.ts and shared/schema.ts
+2. Confirmation that db:push succeeded
+3. The list of new indexes from \\di
+4. TS error count (should still be 33)
+5. Confirm: no production DB touched, no git operations
+
+Wait for me to review before doing anything else.

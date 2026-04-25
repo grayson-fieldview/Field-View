@@ -1,5 +1,5 @@
 import { sql, relations } from "drizzle-orm";
-import { pgTable, text, varchar, integer, timestamp, boolean, real, pgEnum, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, timestamp, boolean, real, pgEnum, jsonb, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -31,7 +31,10 @@ export const projects = pgTable("projects", {
   createdById: varchar("created_by_id").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (table) => [
+  index("projects_account_id_idx").on(table.accountId),
+  index("projects_created_by_id_idx").on(table.createdById),
+]);
 
 export const media = pgTable("media", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
@@ -46,7 +49,9 @@ export const media = pgTable("media", {
   longitude: real("longitude"),
   tags: text("tags").array().default(sql`'{}'::text[]`),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => [
+  index("media_project_id_idx").on(table.projectId),
+]);
 
 export const mediaAnnotations = pgTable("media_annotations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -77,7 +82,9 @@ export const tasks = pgTable("tasks", {
   dueDate: timestamp("due_date"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (table) => [
+  index("tasks_project_id_idx").on(table.projectId),
+]);
 
 export const checklists = pgTable("checklists", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
@@ -90,7 +97,9 @@ export const checklists = pgTable("checklists", {
   dueDate: timestamp("due_date"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (table) => [
+  index("checklists_project_id_idx").on(table.projectId),
+]);
 
 export const checklistItems = pgTable("checklist_items", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
@@ -112,7 +121,9 @@ export const reports = pgTable("reports", {
   createdById: varchar("created_by_id").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (table) => [
+  index("reports_project_id_idx").on(table.projectId),
+]);
 
 export const checklistTemplates = pgTable("checklist_templates", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
@@ -159,7 +170,9 @@ export const projectAssignments = pgTable("project_assignments", {
   userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
   assignedById: varchar("assigned_by_id").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => [
+  index("project_assignments_user_project_idx").on(table.userId, table.projectId),
+]);
 
 export const insertSharedGallerySchema = createInsertSchema(sharedGalleries).omit({
   id: true,
@@ -222,7 +235,9 @@ export const calendarEvents = pgTable("calendar_events", {
   syncStatus: eventSyncStatusEnum("sync_status").default("pending").notNull(),
   syncMessage: text("sync_message"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => [
+  index("calendar_events_account_id_idx").on(table.accountId),
+]);
 
 export const insertCalendarEventSchema = createInsertSchema(calendarEvents, {
   startsAt: z.coerce.date(),
