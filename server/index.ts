@@ -28,7 +28,8 @@ export function log(message: string, source = "express") {
 }
 
 function getPublicBaseUrl(): string | null {
-  if (process.env.OAUTH_BASE_URL) return process.env.OAUTH_BASE_URL.replace(/\/$/, "");
+  if (process.env.OAUTH_BASE_URL)
+    return process.env.OAUTH_BASE_URL.replace(/\/$/, "");
   if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
   if (process.env.REPLIT_DOMAINS) {
     const first = process.env.REPLIT_DOMAINS.split(",")[0]?.trim();
@@ -56,45 +57,56 @@ export async function ensureAuthColumns() {
 export async function initStripe() {
   let databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
-    throw new Error('DATABASE_URL environment variable is required for Stripe integration.');
+    throw new Error(
+      "DATABASE_URL environment variable is required for Stripe integration.",
+    );
   }
 
-  if (databaseUrl.includes("rds.amazonaws.com") && !databaseUrl.includes("sslmode=")) {
-    databaseUrl += (databaseUrl.includes("?") ? "&" : "?") + "sslmode=no-verify";
+  if (
+    databaseUrl.includes("rds.amazonaws.com") &&
+    !databaseUrl.includes("sslmode=")
+  ) {
+    databaseUrl +=
+      (databaseUrl.includes("?") ? "&" : "?") + "sslmode=no-verify";
   }
 
   try {
-    console.log('Initializing Stripe schema...');
-    await runMigrations({ databaseUrl, schema: 'stripe' });
-    console.log('Stripe schema ready');
+    console.log("Initializing Stripe schema...");
+    await runMigrations({ databaseUrl, schema: "stripe" });
+    console.log("Stripe schema ready");
 
     const stripeSync = await getStripeSync();
 
-    console.log('Setting up managed webhook...');
+    console.log("Setting up managed webhook...");
     const baseUrl = getPublicBaseUrl();
     if (baseUrl) {
       try {
         const result = await stripeSync.findOrCreateManagedWebhook(
-          `${baseUrl}/api/stripe/webhook`
+          `${baseUrl}/api/stripe/webhook`,
         );
-        console.log(`Webhook configured: ${result?.webhook?.url || 'setup complete'}`);
+        console.log(
+          `Webhook configured: ${result?.webhook?.url || "setup complete"}`,
+        );
       } catch (webhookError: any) {
-        console.warn('Webhook setup warning:', webhookError.message);
+        console.warn("Webhook setup warning:", webhookError.message);
       }
     } else {
-      console.warn('No public base URL detected; skipping managed webhook setup. Set OAUTH_BASE_URL or VERCEL_URL.');
+      console.warn(
+        "No public base URL detected; skipping managed webhook setup. Set OAUTH_BASE_URL or VERCEL_URL.",
+      );
     }
 
-    console.log('Syncing Stripe data...');
-    stripeSync.syncBackfill()
+    console.log("Syncing Stripe data...");
+    stripeSync
+      .syncBackfill()
       .then(() => {
-        console.log('Stripe data synced');
+        console.log("Stripe data synced");
       })
       .catch((err: any) => {
-        console.error('Error syncing Stripe data:', err);
+        console.error("Error syncing Stripe data:", err);
       });
   } catch (error) {
-    console.error('Failed to initialize Stripe:', error);
+    console.error("Failed to initialize Stripe:", error);
   }
 }
 
@@ -106,12 +118,31 @@ export async function bootstrapAdminAndOrphans() {
     const { eq, isNull } = await import("drizzle-orm");
 
     const adminAccounts = [
-      { email: "grayson@field-view.com", password: "Georgia#22", firstName: "Grayson", lastName: "Gladu" },
-      { email: "grant@field-view.com", password: "Roswell#2018", firstName: "Grant", lastName: "" },
+      {
+        email: "grayson@field-view.com",
+        password: "Georgia#22",
+        firstName: "Grayson",
+        lastName: "Gladu",
+      },
+      {
+        email: "grant@field-view.com",
+        password: "Roswell#2018",
+        firstName: "Grant",
+        lastName: "",
+      },
     ];
 
     for (const admin of adminAccounts) {
-      const [existing] = await db.select({ id: users.id, subscriptionStatus: users.subscriptionStatus, accountId: users.accountId, firstName: users.firstName, lastName: users.lastName }).from(users).where(eq(users.email, admin.email));
+      const [existing] = await db
+        .select({
+          id: users.id,
+          subscriptionStatus: users.subscriptionStatus,
+          accountId: users.accountId,
+          firstName: users.firstName,
+          lastName: users.lastName,
+        })
+        .from(users)
+        .where(eq(users.email, admin.email));
       if (existing) {
         const updates: Record<string, any> = {};
         if (existing.subscriptionStatus !== "active") {
@@ -119,17 +150,29 @@ export async function bootstrapAdminAndOrphans() {
           updates.role = "admin";
         }
         if (!existing.accountId) {
-          const [newAccount] = await db.insert(accounts).values({ name: `${existing.firstName || "Field View"}'s Team` }).returning();
+          const [newAccount] = await db
+            .insert(accounts)
+            .values({ name: `${existing.firstName || "Field View"}'s Team` })
+            .returning();
           updates.accountId = newAccount.id;
           console.log(`Created account for ${admin.email}: ${newAccount.id}`);
         }
         if (Object.keys(updates).length > 0) {
-          await db.update(users).set(updates).where(eq(users.email, admin.email));
-          console.log(`Admin account ${admin.email} updated:`, Object.keys(updates).join(", "));
+          await db
+            .update(users)
+            .set(updates)
+            .where(eq(users.email, admin.email));
+          console.log(
+            `Admin account ${admin.email} updated:`,
+            Object.keys(updates).join(", "),
+          );
         }
       } else {
         const hash = await bcryptMod.default.hash(admin.password, 12);
-        const [newAccount] = await db.insert(accounts).values({ name: `${admin.firstName || "Field View"}'s Team` }).returning();
+        const [newAccount] = await db
+          .insert(accounts)
+          .values({ name: `${admin.firstName || "Field View"}'s Team` })
+          .returning();
         await db.insert(users).values({
           email: admin.email,
           password: hash,
@@ -139,25 +182,59 @@ export async function bootstrapAdminAndOrphans() {
           accountId: newAccount.id,
           subscriptionStatus: "active",
         });
-        console.log(`Created admin account ${admin.email} with account ${newAccount.id}`);
+        console.log(
+          `Created admin account ${admin.email} with account ${newAccount.id}`,
+        );
       }
     }
 
-    const orphanUsers = await db.select({ id: users.id, firstName: users.firstName, lastName: users.lastName, email: users.email, role: users.role }).from(users).where(isNull(users.accountId));
+    const orphanUsers = await db
+      .select({
+        id: users.id,
+        firstName: users.firstName,
+        lastName: users.lastName,
+        email: users.email,
+        role: users.role,
+      })
+      .from(users)
+      .where(isNull(users.accountId));
     for (const orphan of orphanUsers) {
-      const [newAccount] = await db.insert(accounts).values({ name: `${orphan.firstName || "User"} ${orphan.lastName || ""}`.trim() + "'s Team" }).returning();
-      await db.update(users).set({ accountId: newAccount.id }).where(eq(users.id, orphan.id));
-      console.log(`Created account for orphan user ${orphan.email}: ${newAccount.id} (role preserved: ${orphan.role})`);
+      const [newAccount] = await db
+        .insert(accounts)
+        .values({
+          name:
+            `${orphan.firstName || "User"} ${orphan.lastName || ""}`.trim() +
+            "'s Team",
+        })
+        .returning();
+      await db
+        .update(users)
+        .set({ accountId: newAccount.id })
+        .where(eq(users.id, orphan.id));
+      console.log(
+        `Created account for orphan user ${orphan.email}: ${newAccount.id} (role preserved: ${orphan.role})`,
+      );
     }
 
     const { projects } = await import("@shared/schema");
-    const orphanProjects = await db.select({ id: projects.id, createdById: projects.createdById }).from(projects).where(isNull(projects.accountId));
+    const orphanProjects = await db
+      .select({ id: projects.id, createdById: projects.createdById })
+      .from(projects)
+      .where(isNull(projects.accountId));
     for (const proj of orphanProjects) {
       if (proj.createdById) {
-        const [creator] = await db.select({ accountId: users.accountId }).from(users).where(eq(users.id, proj.createdById));
+        const [creator] = await db
+          .select({ accountId: users.accountId })
+          .from(users)
+          .where(eq(users.id, proj.createdById));
         if (creator?.accountId) {
-          await db.update(projects).set({ accountId: creator.accountId }).where(eq(projects.id, proj.id));
-          console.log(`Fixed orphan project ${proj.id} -> account ${creator.accountId}`);
+          await db
+            .update(projects)
+            .set({ accountId: creator.accountId })
+            .where(eq(projects.id, proj.id));
+          console.log(
+            `Fixed orphan project ${proj.id} -> account ${creator.accountId}`,
+          );
         }
       }
     }
@@ -181,7 +258,9 @@ async function handleSubscriptionEvent(event: any) {
           let appStatus = "trialing";
           try {
             const stripe = await getUncachableStripeClient();
-            const sub = await stripe.subscriptions.retrieve(subscriptionId as string);
+            const sub = await stripe.subscriptions.retrieve(
+              subscriptionId as string,
+            );
             if (sub.status === "active") appStatus = "active";
             else if (sub.status === "trialing") appStatus = "trialing";
             else if (sub.status === "past_due") appStatus = "past_due";
@@ -190,7 +269,9 @@ async function handleSubscriptionEvent(event: any) {
             stripeSubscriptionId: subscriptionId as string,
             subscriptionStatus: appStatus,
           });
-          console.log(`User ${user.id} subscription updated to ${appStatus} via checkout`);
+          console.log(
+            `User ${user.id} subscription updated to ${appStatus} via checkout`,
+          );
         }
       }
     } else if (type === "customer.subscription.updated") {
@@ -202,7 +283,8 @@ async function handleSubscriptionEvent(event: any) {
         if (status === "active") appStatus = "active";
         else if (status === "trialing") appStatus = "trialing";
         else if (status === "past_due") appStatus = "past_due";
-        else if (status === "canceled" || status === "unpaid") appStatus = "canceled";
+        else if (status === "canceled" || status === "unpaid")
+          appStatus = "canceled";
 
         await authStorage.updateUser(user.id, {
           subscriptionStatus: appStatus,
@@ -226,43 +308,42 @@ async function handleSubscriptionEvent(event: any) {
 }
 
 app.post(
-  '/api/stripe/webhook',
-  express.raw({ type: 'application/json' }),
+  "/api/stripe/webhook",
+  express.raw({ type: "application/json" }),
   async (req, res) => {
-    const signature = req.headers['stripe-signature'];
+    const signature = req.headers["stripe-signature"];
 
     if (!signature) {
-      return res.status(400).json({ error: 'Missing stripe-signature' });
+      return res.status(400).json({ error: "Missing stripe-signature" });
     }
 
     try {
       const sig = Array.isArray(signature) ? signature[0] : signature;
 
       if (!Buffer.isBuffer(req.body)) {
-        console.error('STRIPE WEBHOOK ERROR: req.body is not a Buffer.');
-        return res.status(500).json({ error: 'Webhook processing error' });
+        console.error("STRIPE WEBHOOK ERROR: req.body is not a Buffer.");
+        return res.status(500).json({ error: "Webhook processing error" });
       }
 
       await WebhookHandlers.processWebhook(req.body as Buffer, sig);
 
       try {
         const stripe = await getUncachableStripeClient();
-        const event = stripe.webhooks.constructEvent(req.body, sig, '');
+        const event = stripe.webhooks.constructEvent(req.body, sig, "");
         await handleSubscriptionEvent(event);
       } catch (eventErr: any) {
         try {
           const rawEvent = JSON.parse(req.body.toString());
           await handleSubscriptionEvent(rawEvent);
-        } catch (parseErr) {
-        }
+        } catch (parseErr) {}
       }
 
       res.status(200).json({ received: true });
     } catch (error: any) {
-      console.error('Webhook error:', error.message);
-      res.status(400).json({ error: 'Webhook processing error' });
+      console.error("Webhook error:", error.message);
+      res.status(400).json({ error: "Webhook processing error" });
     }
-  }
+  },
 );
 
 app.use(
