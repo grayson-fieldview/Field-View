@@ -71,9 +71,8 @@ function isAllowedUpload(originalName: string, mimeType: string): boolean {
   return mimeType.startsWith("image/") || mimeType.startsWith("video/");
 }
 
-// 50 MB per file — comfortably covers 4K iPhone photos (~12 MB) and short
-// jobsite video clips while preventing storage cost abuse from rogue uploads.
-const MAX_FILE_SIZE = 50 * 1024 * 1024;
+const MAX_IMAGE_SIZE = 50 * 1024 * 1024;  // 50 MB — covers 4K iPhone photos with headroom
+const MAX_VIDEO_SIZE = 500 * 1024 * 1024; // 500 MB — covers ~30s of 4K video, ~2 min of 1080p
 
 export async function registerRoutes(
   httpServer: Server,
@@ -219,8 +218,9 @@ export async function registerRoutes(
           if (!isAllowedUpload(f.originalName, f.mimeType)) {
             throw new Error(`File type not allowed: ${f.originalName}`);
           }
-          if (typeof f.fileSize !== "number" || !Number.isFinite(f.fileSize) || f.fileSize <= 0 || f.fileSize > MAX_FILE_SIZE) {
-            throw new Error(`File size must be between 1 byte and 50 MB: ${f.originalName}`);
+          const sizeLimit = f.mimeType.startsWith("video/") ? MAX_VIDEO_SIZE : MAX_IMAGE_SIZE;
+          if (typeof f.fileSize !== "number" || !Number.isFinite(f.fileSize) || f.fileSize <= 0 || f.fileSize > sizeLimit) {
+            throw new Error(`File size must be between 1 byte and ${Math.round(sizeLimit / (1024 * 1024))} MB: ${f.originalName}`);
           }
           return getPresignedPutUrl(f.originalName, f.mimeType, "photos", f.fileSize);
         })
