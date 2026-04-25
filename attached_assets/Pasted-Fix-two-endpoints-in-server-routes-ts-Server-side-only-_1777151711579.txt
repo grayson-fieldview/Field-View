@@ -1,0 +1,52 @@
+Fix two endpoints in server/routes.ts. Server-side only.
+Do NOT push to git. Show me the diff and wait for approval.
+
+# Context
+
+Field View has a Restricted role: users in this role can only access projects
+they personally created OR were explicitly assigned to via the project_assignments table.
+
+GET /api/projects/:id (around line 109) correctly enforces this:
+  - First checks project.accountId matches user's accountId
+  - Then for restricted users: looks up project_assignments and verifies either 
+    assignment exists OR project.createdById === user.id
+  - Returns 403 if neither
+
+PATCH /api/projects/:id (around line 154) and DELETE /api/projects/:id (around line 173) 
+do NOT enforce this. They only check accountId. This means a Restricted user 
+can edit or delete any project in their account by guessing the integer ID, 
+even though they can't see those projects in their list.
+
+This is a real security bug. We're closing it tonight.
+
+# Task
+
+For both PATCH /api/projects/:id and DELETE /api/projects/:id:
+
+1. Find the existing accountId check (returns 403 if project.accountId !== req.user.accountId).
+2. After that check passes, add the same Restricted-user assignment check that 
+   GET /api/projects/:id uses.
+3. The check should look up project_assignments for this user + project, and if no 
+   assignment exists AND project.createdById !== req.user.id AND req.user.role === "restricted", 
+   return 403 with a clear error message.
+4. Reuse the EXACT same logic shape as GET /api/projects/:id — copy/paste from there 
+   to keep it consistent. Don't reinvent.
+
+# Behavior after fix
+
+- Admin / Manager / Standard users: unchanged. They can still edit/delete any project 
+  in their account (matches current behavior and the spec).
+- Restricted users: can only edit/delete projects they created OR are assigned to.
+  Other projects in the account return 403 (same as GET).
+
+# Requirements
+
+- Do NOT change any other endpoints.
+- Do NOT change the GET /api/projects/:id endpoint.
+- Do NOT touch the frontend.
+- Do NOT change any tests, schemas, or migrations.
+- Do NOT modify the new middleware files we just added.
+- Show the unified diff for both endpoints.
+- Confirm TS error count stays at 33 (the baseline).
+
+Wait for me to review the diff before doing anything else.

@@ -158,6 +158,13 @@ export async function registerRoutes(
       const project = await storage.getProject(id);
       if (!project) return res.status(404).json({ message: "Project not found" });
       if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
+      if (req.user.role === "restricted") {
+        const [assignment] = await db.select().from(projectAssignments)
+          .where(and(eq(projectAssignments.projectId, id), eq(projectAssignments.userId, req.user.id)));
+        if (!assignment && project.createdById !== req.user.id) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+      }
       const allowed = ["name", "description", "status", "address", "latitude", "longitude", "color", "coverPhotoId", "tags"];
       const filtered: Record<string, any> = {};
       for (const key of allowed) {
@@ -177,6 +184,13 @@ export async function registerRoutes(
       const project = await storage.getProject(id);
       if (!project) return res.status(404).json({ message: "Project not found" });
       if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
+      if (req.user.role === "restricted") {
+        const [assignment] = await db.select().from(projectAssignments)
+          .where(and(eq(projectAssignments.projectId, id), eq(projectAssignments.userId, req.user.id)));
+        if (!assignment && project.createdById !== req.user.id) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+      }
       await storage.deleteProject(id);
       res.json({ message: "Deleted" });
     } catch (error) {
