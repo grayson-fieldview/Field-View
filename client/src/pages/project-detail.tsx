@@ -400,6 +400,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
           files: files.map((f) => ({
             originalName: f.name,
             mimeType: f.type || "application/octet-stream",
+            fileSize: f.size,
           })),
         }),
       });

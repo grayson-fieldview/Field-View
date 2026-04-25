@@ -25,7 +25,8 @@ export async function getPresignedUrl(key: string): Promise<string> {
 export async function getPresignedPutUrl(
   originalName: string,
   mimeType: string,
-  folder: string = "photos"
+  folder: string = "photos",
+  contentLength?: number
 ): Promise<{ key: string; uploadUrl: string; publicUrl: string }> {
   const ext = path.extname(originalName);
   const uniqueName = `${Date.now()}-${crypto.randomBytes(8).toString("hex")}${ext}`;
@@ -34,6 +35,7 @@ export async function getPresignedPutUrl(
     Bucket: BUCKET,
     Key: key,
     ContentType: mimeType,
+    ...(typeof contentLength === "number" ? { ContentLength: contentLength } : {}),
   });
   const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 600 });
   return { key, uploadUrl, publicUrl: getS3Url(key) };

@@ -71,6 +71,8 @@ function isAllowedUpload(originalName: string, mimeType: string): boolean {
   return mimeType.startsWith("image/") || mimeType.startsWith("video/");
 }
 
+const MAX_FILE_SIZE = 50 * 1024 * 1024;
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -215,7 +217,10 @@ export async function registerRoutes(
           if (!isAllowedUpload(f.originalName, f.mimeType)) {
             throw new Error(`File type not allowed: ${f.originalName}`);
           }
-          return getPresignedPutUrl(f.originalName, f.mimeType);
+          if (typeof f.fileSize !== "number" || !Number.isFinite(f.fileSize) || f.fileSize <= 0 || f.fileSize > MAX_FILE_SIZE) {
+            throw new Error(`File size must be between 1 byte and 50 MB: ${f.originalName}`);
+          }
+          return getPresignedPutUrl(f.originalName, f.mimeType, "photos", f.fileSize);
         })
       );
       res.json(signed);

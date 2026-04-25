@@ -392,7 +392,7 @@ export default function PhotoViewer({
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({
-          files: [{ originalName: fileName, mimeType: "image/jpeg" }],
+          files: [{ originalName: fileName, mimeType: "image/jpeg", fileSize: blob.size }],
         }),
       });
       if (!signRes.ok) throw new Error(await signRes.text());

@@ -1,0 +1,65 @@
+Add file size validation to the upload sign endpoint.
+Server-side only. Do NOT push to git. Show me the diff and wait for approval.
+
+# Context
+
+POST /api/uploads/sign in server/routes.ts (around line 215-235) generates 
+presigned S3 PUT URLs for client uploads. It currently validates MIME type 
+via isAllowedUpload(originalName, mimeType) but does NOT validate file size. 
+An authenticated user could request a presigned URL for an arbitrarily large 
+file, causing S3 storage cost explosion or denial of service.
+
+# Task
+
+## 1. Add fileSize to each file object in the request
+
+Each item in the files array should be required to include a fileSize 
+field (number of bytes). The frontend already knows the file size 
+(File.size in JS) so this is just a contract change.
+
+## 2. Validate fileSize server-side
+
+After the existing originalName/mimeType check, add a fileSize check:
+
+const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB per file
+
+If fileSize is missing, not a number, <= 0, or > MAX_FILE_SIZE, throw an 
+error with a clear message: "File size must be between 1 byte and 50 MB" 
+(or include the actual file's name in the error to help users identify which file).
+
+Define MAX_FILE_SIZE as a constant at the top of the file (or near the 
+existing constants). 50 MB is a reasonable upper bound for jobsite photos 
+including 4K iPhone images. Document the choice with a brief comment.
+
+## 3. Pass fileSize through to getPresignedPutUrl
+
+If getPresignedPutUrl in server/s3.ts can accept a content-length 
+parameter, pass it through and use it to set the presigned URL's 
+Content-Length condition (so the actual upload is bounded by the URL 
+itself, not just our server-side check). 
+
+If it's a meaningful refactor to add this, skip it for now — server-side 
+validation is the main protection. Just flag it in your output.
+
+## 4. Update the frontend to send fileSize
+
+Find the call to /api/uploads/sign in the frontend (probably 
+client/src/pages/project-detail.tsx or a hook). Update it to include 
+fileSize: file.size for each file in the request body.
+
+If there are multiple call sites (e.g., project upload + project-detail 
+upload + photo browser), update all of them.
+
+## 5. Test
+
+Confirm TypeScript compiles cleanly (target: 33 errors, no regression).
+
+# Output
+
+1. Diff for server/routes.ts
+2. Diff for server/s3.ts (if modified)
+3. Diff for any frontend file(s) modified
+4. Final TS error count
+5. Confirm: no schema changes, no git operations
+
+Wait for me to review before doing anything else.
