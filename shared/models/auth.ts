@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { boolean, index, jsonb, pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
+import { boolean, index, integer, jsonb, pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
 
 export const sessions = pgTable(
   "sessions",
@@ -14,6 +14,14 @@ export const sessions = pgTable(
 export const accounts = pgTable("accounts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
+  ownerId: varchar("owner_id"),
+  stripeCustomerId: varchar("stripe_customer_id"),
+  stripeSubscriptionId: varchar("stripe_subscription_id"),
+  subscriptionStatus: varchar("subscription_status"),
+  trialEndsAt: timestamp("trial_ends_at"),
+  seatCount: integer("seat_count").default(3),
+  billingCycle: varchar("billing_cycle"),
+  subscriptionLapsedAt: timestamp("subscription_lapsed_at"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

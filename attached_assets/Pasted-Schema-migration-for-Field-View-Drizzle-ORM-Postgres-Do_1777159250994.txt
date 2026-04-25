@@ -1,0 +1,73 @@
+Schema migration for Field View. Drizzle ORM, Postgres.
+Do NOT push to git. Show me the diff and wait for approval.
+
+# Context
+
+We're moving Field View from per-user billing to per-account billing. 
+Tonight is the additive schema migration: new columns on the accounts table.
+No data backfill yet. No app behavior changes. No drops on the users table 
+yet (those happen in a future session after the new columns are populated 
+and the read path is migrated).
+
+The full spec for this work is in the project memory but the relevant part 
+is: each account will own one Stripe subscription, paid for by a designated 
+"owner" Admin, with a quantity-based seat model.
+
+# Task
+
+## 1. Add 8 new columns to the accounts table
+
+Open shared/models/auth.ts and find the accounts table definition (around lines 14-18).
+
+Add these columns. ALL must be nullable for now (we will backfill in a separate 
+migration script, then add NOT NULL constraints in a follow-up). Use the exact 
+column names below (snake_case in the DB, camelCase in the Drizzle definition):
+
+- ownerId: varchar("owner_id") — FK to users.id (no constraint enforced for now, 
+  just the column). Will hold the user ID of the billing-responsible Admin.
+- stripeCustomerId: varchar("stripe_customer_id") — to be migrated from users table
+- stripeSubscriptionId: varchar("stripe_subscription_id") — to be migrated from users table
+- subscriptionStatus: varchar("subscription_status") — to be migrated from users table
+- trialEndsAt: timestamp("trial_ends_at") — to be migrated from users table
+- seatCount: integer("seat_count").default(3) — current paid seat quantity
+- billingCycle: varchar("billing_cycle") — values: "monthly" or "annual"
+- subscriptionLapsedAt: timestamp("subscription_lapsed_at") — set when subscription_status 
+  flips to past_due, null when active. For grace period math.
+
+Match the existing code style of the file (varchar/text/timestamp imports etc.).
+
+## 2. Do NOT touch the users table
+
+The users table also has stripeCustomerId, stripeSubscriptionId, subscriptionStatus, 
+trialEndsAt — leave them alone. We'll deprecate them later, in a separate migration, 
+after the read path is on accounts.
+
+## 3. Generate and apply the migration
+
+Run drizzle-kit to generate the migration SQL, show me the SQL it generates, then 
+apply it to the dev DB (Neon). Do NOT run it against production RDS — just dev for now.
+
+Specifically:
+- npx drizzle-kit generate (to create the migration file)
+- Show me the SQL of the generated migration
+- npx drizzle-kit push (to apply to Neon)
+
+If the project uses drizzle-kit push directly (no separate generate step), that's 
+fine too — just show me what SQL gets executed.
+
+## 4. Verify
+
+After push, run psql against $DATABASE_URL and verify the 8 new columns exist:
+
+  psql $DATABASE_URL -c "\d accounts"
+
+Show me the output.
+
+# Output
+
+1. The diff for shared/models/auth.ts
+2. The migration SQL that ran
+3. The output of \d accounts showing the new columns
+4. Confirm: no changes to users table, no git operations, no production DB touched
+
+Wait for me to review before doing anything else.
