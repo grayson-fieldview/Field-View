@@ -1,0 +1,100 @@
+Read-only audit. Do NOT modify any code. Produce a written gap analysis only.
+
+## The intended permission model
+
+There are 4 roles. This is the source of truth I want the code audited against:
+
+- **Admin** — Has complete control over the account. Can do everything, including billing, account settings, user management, and access to every project. Admin is the ONLY role that can touch billing.
+- **Manager** — Access to all projects AND can manage users (invite, change roles, remove). Cannot access billing or account-level destructive actions.
+- **Standard** — Access to all projects, but CANNOT manage users. Read/write on projects, but no user invite/remove/role-change ability.
+- **Restricted** — Can only access projects they personally created OR were explicitly assigned to via project_assignments. Cannot see other projects in the account at all.
+
+## What I want you to do
+
+Go through the codebase and answer these questions. For each, cite the exact file paths and line numbers. If something is missing or inconsistent, flag it explicitly as a GAP.
+
+### 1. Role definition
+- Where are roles defined (enum, type, schema)? Show the actual definition.
+- Do all 4 roles (Admin, Manager, Standard, Restricted) exist in the code, with names matching the spec? If names differ (e.g., "owner" instead of "admin"), list every place the names appear.
+- Is there a default role assigned to new invitees? What is it, and where is it set?
+- Is there a default role for the user who signs up and creates the account (account creator)?
+
+### 2. User management enforcement (invite, change role, remove user)
+- Where are the API endpoints for: inviting users, changing a user's role, removing a user?
+- For each endpoint, what role check does it perform? Show the actual middleware or inline check.
+- GAP CHECK: Does the spec require Admin OR Manager to manage users? Confirm both can, and Standard/Restricted cannot.
+- On the frontend, where is the "Invite Team Member" button rendered? Is it conditionally hidden for Standard/Restricted users? Cite the component.
+
+### 3. Project access enforcement
+- Where is the API endpoint that lists projects (e.g., GET /api/projects)?
+- How does it filter results by role? Show the query.
+- GAP CHECK: For Restricted users, does it correctly filter to only (a) projects they created AND (b) projects they're assigned to via project_assignments? Confirm both branches of the OR exist in the query.
+- For Admin/Manager/Standard, does it return all projects in the account?
+- Where are the endpoints for opening, editing, and deleting individual projects? What role/ownership check do they each perform? Are Restricted users blocked from accessing projects they don't own or aren't assigned to?
+
+### 4. Account-level / billing actions (Admin-only)
+- Where are the endpoints for: changing the subscription, updating billing, account deletion, changing the account owner, viewing the Stripe Customer Portal?
+- For each, what role check is performed? Confirm only Admin can hit them.
+- GAP CHECK: Can a Manager currently access billing or account deletion? They should NOT be able to.
+
+### 5. Frontend gating
+- List every component or page that should be hidden or disabled based on role. For each, state whether the gating is currently implemented, and how (e.g., useUser hook + conditional render).
+- Common ones to check: Settings → Team page, Settings → Billing page, "Invite" button, "Delete project" button, "Edit project" button, role dropdown in invite modal.
+- GAP CHECK: Is there any sensitive UI that's currently visible to all roles when it shouldn't be?
+
+### 6. Database schema
+- What are the relevant tables? (Likely: users, accounts, project_assignments — confirm.)
+- Where is a user's role stored? (On the user row? On a join table? Per-account if multi-tenant?)
+- Is there any concept of role per-project, or is role strictly account-level?
+
+### 7. Hard requirement to verify explicitly: Admin-only billing
+
+**Admin is the ONLY role that can touch billing.** Manager, Standard, and Restricted must all be blocked from every billing-related surface.
+
+Specifically verify and report on:
+
+- **Stripe Customer Portal access** — endpoint that generates the portal session URL. Only Admin should be able to call it. Confirm the role check; if missing, that's a critical GAP.
+- **Subscription changes** — upgrading, downgrading, switching monthly/annual, adding seats, canceling. Every endpoint involved. Admin only.
+- **Payment method updates** — updating the card on file, changing default payment method. Admin only.
+- **Invoice access** — viewing past invoices, downloading receipts. Admin only.
+- **Promotion code / discount application** — if there's an endpoint to apply a code (e.g., BETA100), Admin only.
+- **Webhook-triggered side effects** — confirm Stripe webhooks themselves don't require role checks (they shouldn't — they're authenticated by webhook secret, not user role), but any user-triggered re-sync or refund action must be Admin only.
+- **Frontend Settings → Billing page** — must be hidden from the sidebar/nav for Manager/Standard/Restricted, AND the route itself must redirect or 403 if directly URL-accessed by a non-Admin. Verify both: hidden in nav AND server-side blocked.
+- **"Manage subscription" / "Update payment" / "Cancel" buttons anywhere in the app** — list every instance and confirm gating.
+
+For each item above, report: file path, line number, what role check exists (if any), and whether it correctly restricts to Admin only. If the only check is frontend hiding without a server-side check, flag that as a GAP — frontend hiding alone is not enforcement, it's UX.
+
+### 8. Summary table
+
+At the end, produce a markdown table with these columns: Action | Admin | Manager | Standard | Restricted | Currently enforced? (✓ / ✗ / partial)
+
+Rows should include at minimum:
+
+**Project actions:**
+- View all projects in account
+- View only own/assigned projects
+- Create project
+- Edit any project
+- Delete any project
+
+**User management actions:**
+- Invite users
+- Change user roles
+- Remove users
+
+**Account actions:**
+- Delete account
+
+**Billing actions (Admin only across the board):**
+- Open Stripe Customer Portal
+- Change subscription plan
+- Update payment method
+- View invoices
+- Cancel subscription
+- Apply promotion code
+
+For each: mark ✓ if the code currently enforces it correctly, ✗ if not enforced or wrongly enforced, "partial" if partially enforced. Cite the file enforcing each check.
+
+## Output format
+
+Structured headed sections matching the questions above, ending with the summary table. Be specific about file paths and line numbers. Don't recommend fixes yet — just describe current state and gaps.
