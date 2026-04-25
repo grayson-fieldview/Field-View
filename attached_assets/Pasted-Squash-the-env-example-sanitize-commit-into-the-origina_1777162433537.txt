@@ -1,0 +1,55 @@
+Squash the .env.example sanitize commit into the original 
+.env.example creation commit so GitHub Push Protection stops 
+flagging history. Do NOT push to git — I'll push manually after.
+
+# Context
+
+Earlier tonight we created .env.example in commit 319c6e7. The placeholders 
+in that commit were realistic enough to trigger GitHub's secret scanner. 
+We then added a follow-up commit that sanitized the placeholders. But 
+GitHub scans every commit in a push, not just the latest, so the original 
+319c6e7 still trips the scanner and rejects the entire push.
+
+We need to rewrite history so the bad placeholder values never exist in 
+any commit on main.
+
+# Task
+
+1. Run: git log --oneline -15  (so we can see exact commit hashes/order)
+2. Identify the two commits:
+   - The original .env.example commit (319c6e7 or similar — should say 
+     something like "Add example environment variables and update gitignore file")
+   - The sanitize commit (your most recent — should say something like 
+     "Sanitize .env.example placeholders" or similar)
+3. Use interactive rebase to squash the sanitize commit into the original. 
+   The cleanest way: 
+   
+   git rebase -i 319c6e7^
+   
+   Then in the editor, mark the sanitize commit with "fixup" so its changes 
+   merge into 319c6e7 silently.
+   
+4. After the rebase, verify with: 
+   - git log --oneline -10  (should show one fewer commit, 319c6e7 is now 
+     a different hash because it's been rewritten)
+   - git show <new-original-commit-hash>:.env.example | grep -E "STRIPE_SECRET_KEY|STRIPE_PUBLISHABLE_KEY"
+     (should show the SANITIZED values, not the original ones)
+5. Confirm working tree is still clean (git status).
+
+# Important
+
+- Do NOT force-push or push at all. I'll push manually from the Shell.
+- Do NOT touch any other commits. Only the .env.example creation commit 
+  and its sanitize follow-up should be affected.
+- If anything looks risky during the rebase, abort with git rebase --abort 
+  and tell me what you saw.
+
+# Output
+
+1. Output of git log --oneline -10 BEFORE the rebase
+2. The rebase command(s) you ran
+3. Output of git log --oneline -10 AFTER the rebase
+4. The grep verification showing sanitized values in the rewritten commit
+5. Output of git status (should be clean)
+
+Wait for me to confirm before doing anything else.

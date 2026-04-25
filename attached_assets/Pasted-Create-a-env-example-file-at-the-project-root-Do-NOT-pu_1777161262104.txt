@@ -1,0 +1,78 @@
+Create a .env.example file at the project root.
+Do NOT push to git. Show me the diff and wait for approval.
+
+# Context
+
+There's no .env.example file in the repo. The dev's audit flagged this 
+and it's a fair catch — without it, future contributors (or future-Grayson 
+rebuilding from scratch) have to grep the codebase to figure out which 
+environment variables the app needs.
+
+We're creating a .env.example with every variable the app expects, 
+each with a placeholder value and a brief comment.
+
+# Task
+
+## 1. Find all environment variables the app reads
+
+Grep the codebase for process.env.X patterns across server/ and client/. 
+List every unique variable name. Common ones to expect:
+
+- DATABASE_URL
+- SESSION_SECRET
+- STRIPE_SECRET_KEY
+- STRIPE_PUBLISHABLE_KEY
+- STRIPE_WEBHOOK_SECRET
+- AWS_ACCESS_KEY_ID
+- AWS_SECRET_ACCESS_KEY
+- AWS_REGION
+- S3_BUCKET_NAME (or similar)
+- CLOUDFRONT_DOMAIN
+- RESEND_API_KEY
+- GOOGLE_CLIENT_ID
+- GOOGLE_CLIENT_SECRET
+- GOOGLE_MAPS_API_KEY
+- NODE_ENV
+- VITE_* prefixed vars (for the frontend)
+- Any others you find
+
+Don't invent. Only include variables actually referenced in the code.
+
+## 2. Group by category and write the .env.example
+
+Create /.env.example at the project root with sections like:
+
+# Database
+DATABASE_URL=postgresql://user:password@host:port/database
+
+# Session
+SESSION_SECRET=change-me-to-a-long-random-string
+
+# Stripe
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_PUBLISHABLE_KEY=pk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+
+(etc. — group sensibly)
+
+For each variable:
+- Use realistic placeholder values (not "your_value_here")
+- Add a short comment ABOVE each section explaining what the values are for
+- For things like SESSION_SECRET, hint that it should be generated 
+  (e.g., # Generate with: openssl rand -base64 32)
+- For Stripe, include both test and live key prefixes as a comment
+
+## 3. Add to .gitignore if not already present
+
+Confirm .gitignore includes .env, .env.local, .env.*.local 
+(but NOT .env.example — that one SHOULD be committed). 
+If any are missing, add them.
+
+# Output
+
+1. The full contents of .env.example
+2. Confirm .gitignore is correct
+3. List of every env var found in the codebase, with file:line references
+4. Confirm: no other files modified, no git operations
+
+Wait for me to review.
