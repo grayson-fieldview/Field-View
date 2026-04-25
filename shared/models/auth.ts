@@ -84,7 +84,6 @@ export const invitations = pgTable("invitations", {
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => [
   index("invitations_account_id_idx").on(table.accountId),
-  index("invitations_token_idx").on(table.token),
 ]);
 
 export type UpsertUser = typeof users.$inferInsert;
