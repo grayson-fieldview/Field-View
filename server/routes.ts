@@ -71,6 +71,8 @@ function isAllowedUpload(originalName: string, mimeType: string): boolean {
   return mimeType.startsWith("image/") || mimeType.startsWith("video/");
 }
 
+// 50 MB per file — comfortably covers 4K iPhone photos (~12 MB) and short
+// jobsite video clips while preventing storage cost abuse from rogue uploads.
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
 
 export async function registerRoutes(
