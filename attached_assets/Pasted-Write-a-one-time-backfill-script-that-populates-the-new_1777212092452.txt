@@ -1,0 +1,106 @@
+Write a one-time backfill script that populates the new account-level 
+billing columns we added in Saturday's schema migration.
+Do NOT push to git. Do NOT run against production. 
+Show me the code and the dry-run output, then wait for approval.
+
+# Context
+
+Saturday we added 8 new columns to the accounts table:
+- ownerId (FK to users.id)
+- stripeCustomerId, stripeSubscriptionId, subscriptionStatus, trialEndsAt 
+  (all migrated from users table)
+- seatCount (default 3)
+- billingCycle (monthly/annual)
+- subscriptionLapsedAt
+
+All are currently NULL on existing accounts. We need to backfill them 
+from data on the users table before the read path can switch to 
+account-level billing.
+
+# Task
+
+## 1. Create the script
+
+Create a new file: scripts/backfill-account-billing.ts
+
+The script should:
+
+a. Accept a --dry-run flag. When set, log everything it would do but 
+   do NOT write to the database.
+
+b. Connect to the database via process.env.DATABASE_URL (same as the 
+   rest of the app).
+
+c. For each account in the accounts table:
+
+   STEP 1: Determine the owner Admin.
+   
+   - Find all users in this account where role === "admin".
+   - If multiple Admins: pick the one with a non-null stripeCustomerId. 
+     If multiple have one, pick the one with the oldest createdAt.
+   - If no Admins exist at all: pick the user with the oldest createdAt 
+     in this account, promote them to Admin (set role = "admin"), and 
+     log a warning: "[backfill] account {id} had no admin, promoting 
+     user {email} to admin".
+   - If the account has zero users: log an error and skip the account 
+     (this should not happen but be defensive).
+
+   STEP 2: If accounts.ownerId is already set, this account was already 
+   backfilled — skip it. Log: "[backfill] account {id} already has 
+   ownerId, skipping".
+
+   STEP 3: Copy billing columns from owner Admin's user row to the 
+   account row:
+   - accounts.ownerId = owner.id
+   - accounts.stripeCustomerId = owner.stripeCustomerId
+   - accounts.stripeSubscriptionId = owner.stripeSubscriptionId
+   - accounts.subscriptionStatus = owner.subscriptionStatus
+   - accounts.trialEndsAt = owner.trialEndsAt
+
+   STEP 4: Set seatCount.
+   - Count active users in the account: SELECT COUNT(*) FROM users 
+     WHERE accountId = X.
+   - seatCount = MAX(count, 3) — never less than the base 3 included seats.
+
+   STEP 5: Set billingCycle.
+   - We don't have a column on users that tracks monthly vs annual. 
+     Default to "monthly" for now. (We'll fix this in a future step 
+     by looking up the actual subscription in Stripe.)
+   - Log: "[backfill] account {id} billingCycle defaulted to monthly 
+     (will be reconciled with Stripe in next session)"
+
+d. After processing all accounts, print a summary:
+   - Total accounts processed
+   - Accounts skipped (already backfilled)
+   - Accounts where Admin was promoted
+   - Accounts with no users (errors)
+   - Accounts successfully backfilled
+
+e. In dry-run mode, every UPDATE/SET should be logged but NOT executed. 
+   Use console.log with a "[DRY RUN]" prefix.
+
+f. In real mode, wrap each account's updates in a transaction so partial 
+   failures don't leave inconsistent state.
+
+## 2. Run dry-run against Neon dev
+
+After writing the script, run it with --dry-run against the current 
+DATABASE_URL (which points to Neon dev). Show me the full output.
+
+The expected output should show:
+- The 5 seeded test accounts from earlier sessions
+- For each: which user becomes the owner, what billing data gets copied, 
+  what seatCount gets set
+- No actual DB writes
+
+DO NOT run against production. DO NOT remove the --dry-run flag without 
+my approval.
+
+# Output
+
+1. The full contents of scripts/backfill-account-billing.ts
+2. The full output of npm run script -- --dry-run (or however the 
+   project runs scripts — check package.json)
+3. Confirm: no DB writes happened, no git operations, no schema changes
+
+Wait for me to review before doing anything else.
