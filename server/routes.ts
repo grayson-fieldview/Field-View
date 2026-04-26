@@ -8,9 +8,9 @@ import { requireAdmin, requireAdminOrManager } from "./middleware/auth";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
 import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertReportSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertReportTemplateSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, reports, projectAssignments } from "@shared/schema";
-import { users, invitations } from "@shared/models/auth";
+import { users, invitations, accounts } from "@shared/models/auth";
 import { db } from "./db";
-import { eq, sql, and, or, inArray } from "drizzle-orm";
+import { eq, sql, and, or, inArray, count } from "drizzle-orm";
 import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, deleteFromS3 } from "./s3";
 
 async function verifyProjectAccess(projectId: number, accountId: string): Promise<boolean> {
@@ -979,6 +979,33 @@ export async function registerRoutes(
       res.json(safeUsers);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch users" });
+    }
+  });
+
+  // Account seat usage
+  app.get("/api/account/seats", requireAdmin, async (req: any, res) => {
+    try {
+      const accountId = req.user.accountId;
+      const accountRows = await db
+        .select({ seatCount: accounts.seatCount })
+        .from(accounts)
+        .where(eq(accounts.id, accountId))
+        .limit(1);
+      if (accountRows.length === 0) {
+        return res.status(404).json({ message: "Account not found" });
+      }
+      const total = accountRows[0].seatCount ?? 3;
+      const usedRows = await db
+        .select({ value: count() })
+        .from(users)
+        .where(eq(users.accountId, accountId));
+      const used = Number(usedRows[0]?.value ?? 0);
+      const available = Math.max(0, total - used);
+      const overCapacity = used > total;
+      return res.json({ used, total, available, overCapacity });
+    } catch (error) {
+      console.error("Error fetching seat usage:", error);
+      res.status(500).json({ message: "Failed to fetch seat usage" });
     }
   });
 

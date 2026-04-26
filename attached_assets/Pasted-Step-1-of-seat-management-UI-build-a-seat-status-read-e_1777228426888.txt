@@ -1,0 +1,86 @@
+Step 1 of seat management UI: build a seat-status read endpoint and 
+display "X of Y seats used" on the billing page.
+Server + frontend changes. Do NOT push to git. Show me the diff and 
+wait for approval.
+
+# Context
+
+Per the per-account billing spec, the billing page should show 
+"X of Y seats used" — where X is the number of active users in the 
+account and Y is accounts.seat_count.
+
+Today's billing card on settings.tsx (around lines 290-362, BillingCard 
+sub-component) shows subscription status + Manage Billing button. We're 
+adding a seat-count widget alongside it.
+
+# Task
+
+## 1. Backend: GET /api/account/seats
+
+Create a new endpoint in server/routes.ts. Mount it with requireAdmin 
+middleware (from server/middleware/auth.ts) so non-Admins get 403.
+
+Handler logic:
+- Get req.user.accountId
+- Query accounts table for the seat_count (Drizzle)
+- Count users where accountId = req.user.accountId
+- Return JSON:
+  {
+    used: <user count>,
+    total: <accounts.seat_count, or 3 if null>,
+    available: <max(0, total - used)>,
+    overCapacity: <used > total>
+  }
+
+If the account row doesn't exist (shouldn't happen), return 404 with 
+clear message.
+
+Use existing imports — db, accounts, users, eq, count from drizzle-orm 
+should already be available in routes.ts.
+
+## 2. Frontend: SeatCountWidget
+
+In client/src/pages/settings.tsx, add a new sub-component 
+SeatCountWidget that fetches /api/account/seats via React Query and 
+displays the seats used / total.
+
+Display format:
+- Heading: "Seats" (bold, small)
+- Body: "{used} of {total} seats used"
+- If available > 0: subtext " - {available} available" in muted color
+- If overCapacity: red warning badge "Over capacity by {used - total}"
+
+Visual style: match the existing card pattern in the file (look at how 
+BillingCard is structured — same Card component, same padding, same 
+typography hierarchy).
+
+Place the widget INSIDE the Settings page, ABOVE the BillingCard. Both 
+visible to Admin only — wrap in {isAdmin && (...)} where isAdmin comes 
+from useAuth().user.role === "admin" (look for existing patterns of 
+this in the file).
+
+If the user is not Admin, the widget doesn't render. (The endpoint 
+also returns 403 in that case — defense in depth.)
+
+## 3. Loading / error states
+
+Show a Skeleton while data is loading.
+Show "Unable to load seat count" gracefully on error.
+Don't throw on missing data.
+
+## 4. What NOT to change
+
+- The BillingCard component itself
+- Any other Settings page sub-components
+- The server-side billing endpoints we built in Steps 1-4 of read-path 
+  migration
+- Schema, webhooks, anything else
+
+# Output
+
+1. Diff for server/routes.ts (new endpoint)
+2. Diff for client/src/pages/settings.tsx (new widget + placement)
+3. TS error count (target: 33)
+4. Confirm: no schema changes, no other files modified, no git operations
+
+Wait for me to review.

@@ -9,6 +9,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { useTheme } from "@/components/theme-provider";
 import { useToast } from "@/hooks/use-toast";
@@ -33,6 +34,7 @@ import {
   Camera,
   FolderKanban,
   Trash2,
+  Users,
 } from "lucide-react";
 
 type CalendarConnection = {
@@ -270,6 +272,55 @@ function ConnectedCalendarsCard() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </Card>
+  );
+}
+
+type SeatUsage = {
+  used: number;
+  total: number;
+  available: number;
+  overCapacity: boolean;
+};
+
+function SeatCountWidget() {
+  const { data, isLoading, isError } = useQuery<SeatUsage>({
+    queryKey: ["/api/account/seats"],
+  });
+
+  return (
+    <Card className="p-6" data-testid="card-seats">
+      <div className="flex items-center gap-2 mb-4">
+        <Users className="h-5 w-5 text-primary" />
+        <h2 className="text-lg font-semibold">Seats</h2>
+      </div>
+      {isLoading ? (
+        <div className="space-y-2">
+          <Skeleton className="h-4 w-40" />
+          <Skeleton className="h-3 w-24" />
+        </div>
+      ) : isError || !data ? (
+        <p className="text-sm text-muted-foreground" data-testid="text-seats-error">
+          Unable to load seat count
+        </p>
+      ) : (
+        <div className="flex items-center gap-3 flex-wrap">
+          <p className="text-sm font-medium" data-testid="text-seats-usage">
+            {data.used} of {data.total} seats used
+            {data.available > 0 && (
+              <span className="text-muted-foreground font-normal">
+                {" "}
+                - {data.available} available
+              </span>
+            )}
+          </p>
+          {data.overCapacity && (
+            <Badge className="bg-red-500 text-white" data-testid="badge-seats-over-capacity">
+              Over capacity by {data.used - data.total}
+            </Badge>
+          )}
+        </div>
+      )}
     </Card>
   );
 }
@@ -566,6 +617,8 @@ export default function SettingsPage() {
 
       <TagManagerCard type="photo" title="Photo Tags" icon={Camera} />
       <TagManagerCard type="project" title="Project Tags" icon={FolderKanban} />
+
+      {user?.role === "admin" && <SeatCountWidget />}
 
       <BillingCard />
 
