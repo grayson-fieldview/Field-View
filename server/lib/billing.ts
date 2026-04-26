@@ -121,14 +121,22 @@ export function computeSeatCountFromSub(sub: any): number {
 export async function overlayAccountBillingOnUser<T extends Record<string, any>>(
   user: T,
   req: any,
-): Promise<T> {
+): Promise<T & { accessLevel: AccessLevel }> {
   const billing = await getAccountBilling(req);
-  if (billing.source === "user") return user;
+  const accessLevel = computeAccessLevel(
+    billing.subscriptionStatus,
+    billing.subscriptionLapsedAt,
+    billing.trialEndsAt,
+  );
+  if (billing.source === "user") {
+    return { ...user, accessLevel };
+  }
   return {
     ...user,
     subscriptionStatus: billing.subscriptionStatus,
     trialEndsAt: billing.trialEndsAt,
     stripeCustomerId: billing.stripeCustomerId,
     stripeSubscriptionId: billing.stripeSubscriptionId,
+    accessLevel,
   };
 }

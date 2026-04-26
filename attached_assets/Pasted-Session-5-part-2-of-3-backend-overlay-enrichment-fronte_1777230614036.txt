@@ -1,0 +1,174 @@
+Session 5 part 2 of 3: backend overlay enrichment + frontend 
+SubscriptionGate update for lapse handling.
+Do NOT push to git. Show me the diff and wait for approval.
+
+# Context
+
+Part 1 shipped: computeAccessLevel("full" | "read_only" | "locked"), 
+requireReadAccess/requireWriteAccess middleware, webhook transitions 
+that set/clear subscription_lapsed_at.
+
+Now: route the access level through to the frontend so the 
+SubscriptionGate can pick the right view.
+
+Approach: backend overlayAccountBillingOnUser() also attaches 
+accessLevel to the user object. Frontend SubscriptionGate reads it 
+directly. Single source of truth in computeAccessLevel.
+
+# Task
+
+## 1. Extend overlayAccountBillingOnUser
+
+In server/lib/billing.ts, modify the existing function to also 
+compute and attach accessLevel.
+
+Currently:
+  return { ...user, subscriptionStatus, trialEndsAt, stripeCustomerId, 
+    stripeSubscriptionId };
+
+New behavior — even when source === "user" (flag OFF), compute 
+accessLevel based on the user-level fields and attach it:
+
+  const billing = await getAccountBilling(req);
+  const accessLevel = computeAccessLevel(
+    billing.subscriptionStatus,
+    billing.subscriptionLapsedAt,  // null when source: "user"
+    billing.trialEndsAt,
+  );
+  
+  if (billing.source === "user") {
+    return { ...user, accessLevel };  // overlay just the access level
+  }
+  
+  return {
+    ...user,
+    subscriptionStatus: billing.subscriptionStatus,
+    trialEndsAt: billing.trialEndsAt,
+    stripeCustomerId: billing.stripeCustomerId,
+    stripeSubscriptionId: billing.stripeSubscriptionId,
+    accessLevel,
+  };
+
+Important: even with the flag OFF, the frontend gets accessLevel. 
+It's computed from user-level fields in that case, but the field is 
+always present. This means the frontend gate logic doesn't need a 
+flag check — it always reads accessLevel.
+
+## 2. Frontend SubscriptionGate
+
+In client/src/App.tsx, find the existing SubscriptionGate component 
+(around lines 80-94). Replace the existing logic.
+
+New logic:
+
+  function SubscriptionGate() {
+    const { user } = useAuth();
+    if (!user) return null;
+    const accessLevel = (user as any).accessLevel || "locked";  
+    // Cast to any: the User type may not yet have accessLevel typed 
+    // since it comes from the overlay. Acceptable for this single 
+    // access pattern.
+    
+    if (accessLevel === "full" || accessLevel === "read_only") {
+      return <AuthenticatedLayout />;
+    }
+    return <SubscribePage />;
+  }
+
+Note: We DELIBERATELY do NOT delete the legacy status/trial logic 
+elsewhere in the app — only this one component is rewriting its gate.
+
+The previous gate logic was:
+  status === "active" || "trialing" || ("trial" with non-expired trial)
+
+The new logic is equivalent because computeAccessLevel maps those 
+exact statuses to "full" or "read_only" (when past_due in grace).
+
+## 3. Banner placement (preparation only — actual banner in Part 3)
+
+In AuthenticatedLayout (probably exists in client/src/App.tsx or 
+similar), do NOT add the banner yet. Part 3 handles the banner. 
+For now, the gate just renders the layout normally — but read_only 
+and full both pass.
+
+## 4. Tighten the user type (optional but cleaner)
+
+In whatever file declares the User type (likely shared/models/auth.ts 
+or a frontend types file), add accessLevel as an optional field:
+
+  accessLevel?: "full" | "read_only" | "locked";
+
+Skip this if it gets messy — the cast-to-any in step 2 is acceptable 
+short-term.
+
+## 5. Double-check the four endpoints we updated in Step 4 read-path 
+migration
+
+These endpoints all call overlayAccountBillingOnUser:
+- GET /api/auth/user
+- POST /api/login (the response body)
+- POST /api/confirm-checkout (the response body)
+
+After this change, all three return user objects with accessLevel 
+attached. Verify by reading each handler — no code change needed 
+(they call the helper which now does the additional work).
+
+## 6. What NOT to change
+
+- The middleware functions added in Part 1 (requireReadAccess / 
+  requireWriteAccess) — no edits needed
+- Any existing endpoint's middleware assignments
+- The webhook handler (Part 1 already done)
+- The schema
+- The seat management UI
+- Any backend mutation logic
+
+## 7. Test mentally
+
+Trace these four scenarios with the flag OFF:
+
+a. User with subscriptionStatus = "active", trialEndsAt = null, 
+   subscriptionLapsedAt = null
+   → getAccountBilling returns source: "user" with status "active"
+   → computeAccessLevel("active", null, null) → "full"
+   → user object includes accessLevel: "full"
+   → SubscriptionGate shows app. ✓
+
+b. User with subscriptionStatus = "past_due", subscriptionLapsedAt 
+   = 5 days ago (in user-level data; flag OFF)
+   → getAccountBilling returns source: "user", lapsedAt is null 
+     (we don't read lapsedAt off user-level data — that field doesn't 
+     exist on users table)
+   → computeAccessLevel("past_due", null, null) → "read_only" 
+     (defensive fallback when lapsedAt is null on past_due)
+   → user object includes accessLevel: "read_only"
+   → SubscriptionGate shows app. ✓ (Mutation 402s will inform user.)
+
+c. With flag ON: User on past_due account, lapsedAt = 20 days ago
+   → getAccountBilling returns source: "account" with full data
+   → computeAccessLevel("past_due", 20 days ago, null) → "locked"
+   → SubscriptionGate shows SubscribePage. ✓
+
+d. User on canceled subscription
+   → computeAccessLevel("canceled", any, any) → "locked"
+   → SubscriptionGate shows SubscribePage. ✓
+
+Note (b): with flag OFF, we can't distinguish "in grace" from "locked 
+out" because users.subscription_lapsed_at doesn't exist as a column. 
+The fallback to "read_only" means we default to giving access (with 
+mutation blocks, when middleware lands). When the flag flips ON in 
+production, accurate lapse calculation kicks in. Acceptable for the 
+flag-OFF transition window.
+
+## 8. Output
+
+1. Diff for server/lib/billing.ts (overlay extension)
+2. Diff for client/src/App.tsx (SubscriptionGate update)
+3. Diff for any User type (if you do step 4 — optional)
+4. TS error count (target: 33)
+5. Confirm: no schema changes, no other backend changes, no git 
+   operations
+6. Mental trace results for the four scenarios in step 7 (just 
+   confirm "passes" or note any concern)
+
+Wait for me to review.

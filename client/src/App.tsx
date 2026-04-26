@@ -82,11 +82,9 @@ function SubscriptionGate() {
 
   if (!user) return null;
 
-  const status = user.subscriptionStatus;
-  const trialEndsAt = user.trialEndsAt ? new Date(user.trialEndsAt) : null;
-  const trialExpired = trialEndsAt && trialEndsAt < new Date();
+  const accessLevel = (user as any).accessLevel || "locked";
 
-  if (status === "active" || status === "trialing" || (status === "trial" && !trialExpired)) {
+  if (accessLevel === "full" || accessLevel === "read_only") {
     return <AuthenticatedLayout />;
   }
 
