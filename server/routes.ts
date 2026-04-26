@@ -1222,17 +1222,19 @@ export async function registerRoutes(
       const target = targetRows[0];
       const newOwnerWasAdmin = target.role === "admin";
 
-      await db
-        .update(accounts)
-        .set({ ownerId: newOwnerId })
-        .where(eq(accounts.id, accountId));
+      await db.transaction(async (tx) => {
+        await tx
+          .update(accounts)
+          .set({ ownerId: newOwnerId })
+          .where(eq(accounts.id, accountId));
 
-      if (!newOwnerWasAdmin) {
-        await db
-          .update(users)
-          .set({ role: "admin" })
-          .where(eq(users.id, newOwnerId));
-      }
+        if (!newOwnerWasAdmin) {
+          await tx
+            .update(users)
+            .set({ role: "admin" })
+            .where(eq(users.id, newOwnerId));
+        }
+      });
 
       console.log(
         "[ownership-transfer]",
