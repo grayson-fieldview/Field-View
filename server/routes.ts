@@ -238,6 +238,13 @@ export async function registerRoutes(
       const project = await storage.getProject(projectId);
       if (!project) return res.status(404).json({ message: "Project not found" });
       if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
+      if (req.user.role === "restricted") {
+        const [assignment] = await db.select().from(projectAssignments)
+          .where(and(eq(projectAssignments.projectId, projectId), eq(projectAssignments.userId, req.user.id)));
+        if (!assignment && project.createdById !== req.user.id) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+      }
 
       const items = req.body?.files;
       if (!Array.isArray(items) || items.length === 0) {
@@ -282,7 +289,16 @@ export async function registerRoutes(
     try {
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
-      const allTasks = await storage.getAllTasks(accountId);
+      let allTasks = await storage.getAllTasks(accountId);
+      if (req.user.role === "restricted") {
+        const assignedIds = await db.select({ projectId: projectAssignments.projectId })
+          .from(projectAssignments).where(eq(projectAssignments.userId, req.user.id));
+        const assignedSet = new Set(assignedIds.map(a => a.projectId));
+        const ownedIds = await db.select({ id: projects.id })
+          .from(projects).where(and(eq(projects.accountId, accountId), eq(projects.createdById, req.user.id)));
+        const ownedSet = new Set(ownedIds.map(p => p.id));
+        allTasks = allTasks.filter(t => assignedSet.has(t.projectId) || ownedSet.has(t.projectId));
+      }
       res.json(allTasks);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch tasks" });

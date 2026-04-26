@@ -1,0 +1,84 @@
+Two endpoints need the same Restricted-user gate we added earlier 
+to PATCH/DELETE /api/projects/:id. Server-side only. 
+Do NOT push to git. Show me the diff and wait for approval.
+
+# Context
+
+Earlier tonight we fixed PATCH /api/projects/:id and DELETE /api/projects/:id 
+to enforce that Restricted users can only edit/delete projects they 
+created OR are assigned to. The same class of bug exists on two other 
+endpoints. We're closing those tonight.
+
+# Task
+
+## 1. POST /api/projects/:id/media (around line 215-260 in server/routes.ts)
+
+This endpoint creates media records on a project. Today it only checks 
+project.accountId — meaning a Restricted user can upload photos to 
+projects they shouldn't be able to see, by guessing the project ID.
+
+After the existing accountId check passes, add the same Restricted-user 
+assignment check used in GET /api/projects/:id and PATCH/DELETE 
+/api/projects/:id:
+
+  if (req.user.role === "restricted") {
+    const [assignment] = await db.select().from(projectAssignments)
+      .where(and(eq(projectAssignments.projectId, projectId), eq(projectAssignments.userId, req.user.id)));
+    if (!assignment && project.createdById !== req.user.id) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+  }
+
+Reuse the exact same pattern. Don't reinvent.
+
+## 2. GET /api/tasks (around line 314-322 in server/routes.ts)
+
+This endpoint returns all tasks in the account. Today it has no 
+Restricted-user filter, meaning Restricted users see tasks for projects 
+they can't access.
+
+The fix is more involved than the previous one because it's a list 
+endpoint, not a single-item lookup. The pattern from GET /api/projects 
+(around line 88-107) applies:
+
+After fetching all tasks for the account, if req.user.role === "restricted",
+filter the result set to only tasks whose projectId is one of the projects 
+the user has access to (project they created OR project they're assigned to).
+
+Pseudocode:
+  let allTasks = await storage.getAllTasks(accountId);
+  if (req.user.role === "restricted") {
+    // Get all projects the restricted user can see
+    const accessibleProjects = await db.select({ id: projects.id })
+      .from(projects)
+      .leftJoin(projectAssignments, and(
+        eq(projectAssignments.projectId, projects.id),
+        eq(projectAssignments.userId, req.user.id)
+      ))
+      .where(and(
+        eq(projects.accountId, req.user.accountId),
+        or(
+          eq(projects.createdById, req.user.id),
+          isNotNull(projectAssignments.projectId)
+        )
+      ));
+    const accessibleIds = new Set(accessibleProjects.map(p => p.id));
+    allTasks = allTasks.filter(t => accessibleIds.has(t.projectId));
+  }
+  res.json(allTasks);
+
+Match the existing import patterns in the file. If or/isNotNull aren't 
+already imported from drizzle-orm, add them.
+
+If this is too big a change for the storage layer, just do the filter 
+in-memory on the existing allTasks result by checking each task's 
+projectId. Less efficient but simpler.
+
+# Output
+
+1. Diff for POST /api/projects/:id/media
+2. Diff for GET /api/tasks
+3. TS error count (target: 33)
+4. Confirm: no other endpoints touched, no schema changes, no git operations
+
+Wait for me to review.
