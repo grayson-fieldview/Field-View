@@ -7,6 +7,10 @@ import { runMigrations } from "stripe-replit-sync";
 import { getStripeSync, getUncachableStripeClient } from "./stripeClient";
 import { WebhookHandlers } from "./webhookHandlers";
 import { authStorage } from "./replit_integrations/auth/storage";
+import { db } from "./db";
+import { users, accounts } from "@shared/models/auth";
+import { eq } from "drizzle-orm";
+import { isAccountBillingEnabled } from "./lib/billing";
 
 const app = express();
 
@@ -243,6 +247,72 @@ export async function bootstrapAdminAndOrphans() {
   }
 }
 
+async function writeAccountBilling(
+  event: string,
+  stripeCustomerId: string,
+  fields: {
+    subscriptionStatus?: string;
+    stripeSubscriptionId?: string;
+    trialEndsAt?: Date | null;
+  },
+) {
+  if (!isAccountBillingEnabled()) return;
+  if (!stripeCustomerId) return;
+
+  const matches = await db
+    .select({ id: users.id, accountId: users.accountId })
+    .from(users)
+    .where(eq(users.stripeCustomerId, stripeCustomerId));
+
+  if (matches.length === 0) return;
+
+  const chosen = matches[0];
+
+  if (matches.length > 1) {
+    console.warn(
+      "[webhook-dual-write]",
+      JSON.stringify({
+        stripeCustomerId,
+        matchCount: matches.length,
+        chosenAccountId: chosen.accountId,
+        reason: "multiple_users_share_stripe_customer",
+      }),
+    );
+  }
+
+  if (!chosen.accountId) {
+    console.warn(
+      "[webhook-dual-write]",
+      JSON.stringify({
+        event,
+        stripeCustomerId,
+        userId: chosen.id,
+        reason: "user_has_no_account_id",
+      }),
+    );
+    return;
+  }
+
+  const cleanFields: Record<string, any> = {};
+  for (const [k, v] of Object.entries(fields)) {
+    if (v !== undefined) cleanFields[k] = v;
+  }
+  if (Object.keys(cleanFields).length === 0) return;
+
+  await db.update(accounts).set(cleanFields).where(eq(accounts.id, chosen.accountId));
+
+  console.log(
+    "[webhook-dual-write]",
+    JSON.stringify({
+      event,
+      accountId: chosen.accountId,
+      userId: chosen.id,
+      flagEnabled: isAccountBillingEnabled(),
+      fieldsWritten: Object.keys(cleanFields),
+    }),
+  );
+}
+
 async function handleSubscriptionEvent(event: any) {
   try {
     const type = event.type;
@@ -272,6 +342,10 @@ async function handleSubscriptionEvent(event: any) {
           console.log(
             `User ${user.id} subscription updated to ${appStatus} via checkout`,
           );
+          await writeAccountBilling(type, customerId as string, {
+            stripeSubscriptionId: subscriptionId as string,
+            subscriptionStatus: appStatus,
+          });
         }
       }
     } else if (type === "customer.subscription.updated") {
@@ -291,6 +365,10 @@ async function handleSubscriptionEvent(event: any) {
           stripeSubscriptionId: data.id,
         });
         console.log(`User ${user.id} subscription updated to ${appStatus}`);
+        await writeAccountBilling(type, customerId as string, {
+          subscriptionStatus: appStatus,
+          stripeSubscriptionId: data.id,
+        });
       }
     } else if (type === "customer.subscription.deleted") {
       const customerId = data.customer;
@@ -300,6 +378,9 @@ async function handleSubscriptionEvent(event: any) {
           subscriptionStatus: "canceled",
         });
         console.log(`User ${user.id} subscription canceled`);
+        await writeAccountBilling(type, customerId as string, {
+          subscriptionStatus: "canceled",
+        });
       }
     }
   } catch (err: any) {

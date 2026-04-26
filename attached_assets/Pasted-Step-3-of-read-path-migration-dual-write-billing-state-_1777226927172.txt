@@ -1,0 +1,141 @@
+Step 3 of read-path migration: dual-write billing state in the Stripe 
+webhook handler. Server-side only.
+Do NOT push to git. Show me the diff and wait for approval.
+
+# Context
+
+We have getAccountBilling() in server/lib/billing.ts and an 
+ACCOUNT_BILLING_ENABLED feature flag. Steps 1-2 wired the read path 
+through the helper for requireActiveSubscription middleware and 
+GET /api/subscription endpoint. Read path now: flag OFF reads users 
+(unchanged), flag ON reads accounts.
+
+Step 3 is the WRITE path in the Stripe webhook handler. Today, when 
+Stripe sends events like customer.subscription.updated, the handler 
+updates users.subscriptionStatus, users.stripeSubscriptionId, etc.
+
+Going forward we want DUAL WRITES when the flag is on:
+- Continue writing to users.* (so the read-path fallback in 
+  getAccountBilling stays accurate as a safety net)
+- ALSO write the same fields to accounts.* (the new source of truth 
+  when the flag is on)
+
+When the flag is OFF, write only to users.* (current behavior, no change).
+
+# Task
+
+## 1. Find the webhook handler
+
+Likely in server/webhookHandlers.ts or similar. Find every place inside 
+the webhook event handlers that does a database UPDATE on the users 
+table touching billing columns: subscriptionStatus, stripeSubscriptionId, 
+stripeCustomerId, trialEndsAt.
+
+Cite file path and line numbers for each write site.
+
+Common Stripe events that may have writes:
+- checkout.session.completed
+- customer.subscription.created
+- customer.subscription.updated
+- customer.subscription.deleted
+- invoice.payment_succeeded
+- invoice.payment_failed
+- customer.subscription.trial_will_end
+
+Don't assume the exact list — find what's actually there.
+
+## 2. For each write site, add a parallel write to accounts
+
+The pattern should be: keep the existing UPDATE on users (no change). 
+After it succeeds, IF isAccountBillingEnabled() returns true, ALSO 
+update the matching row in accounts.
+
+Two-step sequence to find the right account:
+
+Step A: Find the user by stripeCustomerId (this is the existing query 
+that already runs).
+
+Step B: Get the user's accountId from the loaded user record.
+
+Step C: UPDATE accounts SET <same fields> WHERE id = accountId.
+
+If multiple users somehow share a stripeCustomerId (defensive — shouldn't 
+happen but defend), use the first match (LIMIT 1) and log a warning:
+
+  console.warn("[webhook-dual-write]", JSON.stringify({
+    stripeCustomerId,
+    matchCount: <number>,
+    chosenAccountId: <id>,
+    reason: "multiple_users_share_stripe_customer"
+  }));
+
+## 3. Diagnostic logging
+
+For each event handler that does a dual-write, add ONE log line at the 
+end of the dual-write block:
+
+  console.log("[webhook-dual-write]", JSON.stringify({
+    event: <stripe event type>,
+    accountId,
+    userId,
+    flagEnabled: isAccountBillingEnabled(),
+    fieldsWritten: [...field names...],
+  }));
+
+Webhook events are rare (tens per day max) so this is not log spam.
+Will help us verify in Vercel logs that account writes are firing 
+correctly when we eventually flip the flag.
+
+## 4. Imports
+
+Add to the top of the webhook file:
+
+  import { isAccountBillingEnabled } from "./lib/billing";  // adjust path
+  import { accounts } from "@shared/models/auth";  // if not already imported
+  import { eq } from "drizzle-orm";  // if not already imported
+  import { db } from "./db";  // if not already imported
+
+## 5. Idempotency
+
+Stripe occasionally retries webhooks (network blips, etc). The existing 
+handler is presumably idempotent (UPDATE with the same values is a no-op). 
+The new accounts UPDATE should be idempotent the same way — using 
+specific WHERE clauses, not relying on row state.
+
+## 6. What NOT to change
+
+- Webhook signature verification — leave intact, do not modify
+- Webhook routing/dispatch logic — leave intact
+- The condition for whether a webhook is processed at all — unchanged
+- Any non-billing fields on users (e.g., updatedAt, lastSeenAt) — out of scope
+- The schema — no migration in this prompt
+- Any other endpoints outside the webhook handler
+
+## 7. If the flag check makes the code messy
+
+Some webhook handlers may have 5+ different update calls within a single 
+event. If wrapping each one in if (isAccountBillingEnabled()) creates ugly 
+duplication, extract a helper INSIDE the webhook file:
+
+  async function writeAccountBilling(stripeCustomerId: string, fields: { 
+    subscriptionStatus?: string;
+    stripeSubscriptionId?: string;
+    trialEndsAt?: Date | null;
+  }) {
+    if (!isAccountBillingEnabled()) return;
+    // find user by stripeCustomerId, get accountId, UPDATE accounts
+  }
+
+Then each handler just calls writeAccountBilling(...) after the users update.
+
+This keeps the cyclomatic complexity manageable.
+
+# Output
+
+1. List of every webhook write site found, with file:line for each
+2. Full diff of the changes
+3. Confirm dual-write only happens when flag is ON
+4. TS error count (target: 33)
+5. Confirm: no schema changes, no other files modified, no git operations
+
+Wait for me to review.
