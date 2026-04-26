@@ -21,4 +21,13 @@ if (process.env.DATABASE_URL?.includes("rds.amazonaws.com")) {
 }
 
 export const pool = new Pool(connectionConfig);
+
+pool.on("error", (err) => {
+  console.error(
+    "[pg-pool] background connection error:",
+    err.message,
+    err.stack,
+  );
+});
+
 export const db = drizzle(pool, { schema });
