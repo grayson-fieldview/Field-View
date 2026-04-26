@@ -24,6 +24,7 @@ import {
   resendVerificationLimiter,
   verifyEmailLimiter,
 } from "../../middleware/rate-limit";
+import { Sentry } from "../../lib/sentry";
 
 function getBaseUrl(req?: Request) {
   if (process.env.OAUTH_BASE_URL) return process.env.OAUTH_BASE_URL;
@@ -147,12 +148,21 @@ export async function setupAuth(app: Express) {
       { usernameField: "email", passwordField: "password", passReqToCallback: true },
       async (req: any, email: string, password: string, done: any) => {
         const logFail = (reason: string) => {
-          console.warn("[auth-fail]", JSON.stringify({
-            email: (email || "").toLowerCase(),
-            ip: req.ip || req.socket?.remoteAddress || "unknown",
-            reason,
-            ts: new Date().toISOString(),
-          }));
+          const normalizedEmail = (email || "").toLowerCase();
+          const ip = req.ip || req.socket?.remoteAddress || "unknown";
+          const ts = new Date().toISOString();
+          console.warn(
+            "[auth-fail]",
+            JSON.stringify({ email: normalizedEmail, ip, reason, ts }),
+          );
+          Sentry.captureMessage("Auth failure", {
+            level: "warning",
+            tags: {
+              reason,
+              auth_provider: "local",
+            },
+            extra: { email: normalizedEmail, ip, ts },
+          });
         };
         try {
           const user = await authStorage.getUserByEmail(email);

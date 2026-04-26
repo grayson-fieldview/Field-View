@@ -1,0 +1,163 @@
+Add server-side Sentry initialization and wire auth failures + 
+webhook errors to capture events.
+Do NOT push to git. Show me the diff and wait for approval.
+
+# Context
+
+Today's [auth-fail] structured logs land in stdout only — Vercel logs, 
+no alerting. The client already uses @sentry/react with VITE_SENTRY_DSN. 
+We're adding @sentry/node server-side, pointed at the same Sentry 
+project, so frontend + backend events live together in one dashboard.
+
+# Task
+
+## 1. Install @sentry/node
+
+  npm install @sentry/node
+
+Add to package.json. No need for @sentry/profiling-node — performance 
+profiling is overkill for current scale.
+
+## 2. Create server/lib/sentry.ts
+
+Module that initializes Sentry once at server startup and exports the 
+Sentry instance.
+
+  import * as Sentry from "@sentry/node";
+  
+  export function initSentry() {
+    const dsn = process.env.SENTRY_DSN;
+    if (!dsn) {
+      console.warn("[sentry] SENTRY_DSN not set — server-side Sentry disabled");
+      return;
+    }
+    
+    Sentry.init({
+      dsn,
+      environment: process.env.NODE_ENV || "development",
+      tracesSampleRate: 1.0,  // capture all transactions for now
+      // beforeSend hook can be added later if PII filtering needed
+    });
+    
+    console.log("[sentry] initialized for environment:", process.env.NODE_ENV);
+  }
+  
+  export { Sentry };
+
+If SENTRY_DSN is unset, init() is skipped. Calls to Sentry.captureMessage 
+or Sentry.captureException after that will be no-ops (Sentry SDK handles 
+this gracefully).
+
+## 3. Initialize at server boot
+
+In server/index.ts, near the top of the file (BEFORE any route 
+registration, BEFORE any other imports of Sentry — Sentry's docs are 
+strict about init being early):
+
+  import { initSentry } from "./lib/sentry";
+  initSentry();  // call before anything else
+
+If there's an existing first-call pattern (e.g., dotenv config), this 
+goes right after that.
+
+## 4. Wire [auth-fail] to Sentry
+
+In server/replit_integrations/auth/replitAuth.ts, find the logFail 
+helper around line 148-156. After the existing console.warn:
+
+  import { Sentry } from "../../lib/sentry";  // adjust path as needed
+  
+  // ... inside logFail:
+  console.warn("[auth-fail]", JSON.stringify({ email, ip, reason, ts }));
+  Sentry.captureMessage("Auth failure", {
+    level: "warning",
+    tags: {
+      reason,             // user_not_found / invalid_password / email_not_verified
+      auth_provider: "local",
+    },
+    extra: {
+      email,
+      ip,
+      ts,
+    },
+  });
+
+Tags are searchable filters in Sentry's UI; extra is metadata visible 
+on event detail. DO NOT put email or ip in tags (high cardinality).
+
+## 5. Wire Stripe webhook failures to Sentry
+
+In server/index.ts, find handleSubscriptionEvent (around line 246 
+based on prior session work). The existing catch block looks something 
+like:
+
+  } catch (err: any) {
+    console.error("Webhook subscription event error:", err);
+  }
+
+After the console.error, add:
+
+  Sentry.captureException(err, {
+    tags: {
+      webhook_event_type: event?.type || "unknown",
+    },
+    extra: {
+      eventId: event?.id,
+      customerId: event?.data?.object?.customer,
+    },
+  });
+
+Use captureException (not captureMessage) — these are real exceptions 
+with stack traces.
+
+Don't change the existing console.error — Sentry capture is additive.
+
+## 6. Wire webhook signature verification failures to Sentry
+
+In the webhook handler at server/index.ts around line 472, when 
+signature verification fails (the new Option C code from earlier 
+today), capture:
+
+  Sentry.captureMessage("Webhook signature verification failed", {
+    level: "error",
+    tags: { source: "stripe_webhook" },
+    extra: { /* the existing context */ },
+  });
+
+This is a security signal — failed signature verification means either 
+a misconfiguration (innocent) or a forgery attempt (not innocent). 
+Worth alerting on.
+
+## 7. Update .env.example
+
+Add SENTRY_DSN documentation:
+
+  # Sentry Data Source Name — server-side error/event capture.
+  # Get from Sentry Dashboard → Settings → Projects → [project] → Client Keys (DSN).
+  # Use the same Sentry project as VITE_SENTRY_DSN to correlate frontend/backend events.
+  # Optional — server runs without it (events skipped, warning logged on boot).
+  SENTRY_DSN=REPLACE_WITH_SENTRY_DSN_URL
+
+Use sanitized placeholder.
+
+## 8. What NOT to change
+
+- The client-side @sentry/react config (VITE_SENTRY_DSN, client/src/lib/sentry.ts)
+- The auth flow logic itself
+- The webhook handler routing or event processing
+- Any other endpoints
+- The schema
+- The dual-write logic
+- Any other log lines (only [auth-fail] and webhook catch blocks get Sentry wiring)
+
+# Output
+
+1. List of files modified (expect: package.json, server/lib/sentry.ts new, 
+   server/index.ts, server/replit_integrations/auth/replitAuth.ts, .env.example)
+2. Diffs for each
+3. TS error count (target: 33)
+4. Confirm: no git operations, no schema changes, no client changes
+5. Confirm SENTRY_DSN being unset on dev/Replit (which it likely is) 
+   doesn't break the server boot — should log warning + continue
+
+Wait for me to review.

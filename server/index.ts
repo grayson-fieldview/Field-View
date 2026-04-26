@@ -11,6 +11,9 @@ import { db } from "./db";
 import { users, accounts } from "@shared/models/auth";
 import { eq } from "drizzle-orm";
 import { isAccountBillingEnabled, computeSeatCountFromSub } from "./lib/billing";
+import { initSentry, Sentry } from "./lib/sentry";
+
+initSentry();
 
 const app = express();
 
@@ -465,6 +468,15 @@ async function handleSubscriptionEvent(event: any) {
     }
   } catch (err: any) {
     console.error("Error handling subscription event:", err.message);
+    Sentry.captureException(err, {
+      tags: {
+        webhook_event_type: event?.type || "unknown",
+      },
+      extra: {
+        eventId: event?.id,
+        customerId: event?.data?.object?.customer,
+      },
+    });
   }
 }
 
@@ -499,6 +511,14 @@ app.post(
             "Stripe webhook signature verification failed:",
             verifyErr.message,
           );
+          Sentry.captureMessage("Webhook signature verification failed", {
+            level: "error",
+            tags: { source: "stripe_webhook" },
+            extra: {
+              error: verifyErr.message,
+              ip: req.ip || "unknown",
+            },
+          });
           return res
             .status(400)
             .json({ error: "Webhook signature verification failed" });
