@@ -1,0 +1,79 @@
+Audit cookie and CSRF security configuration. Read-only first.
+Do NOT modify anything yet. Produce findings, then wait for my decision 
+on what to fix.
+
+# Context
+
+Field View uses session-based authentication via Passport with sessions 
+stored in Postgres (connect-pg-simple). The dev's audit flagged "no clear 
+evidence of CSRF protection" and "session configuration not fully reviewed 
+(secure cookies, etc)" — both worth verifying.
+
+# Audit checklist
+
+For each item below, find the actual code, cite file:line, and report 
+status as ✓ secure / ⚠️ partial / 🔴 issue.
+
+## 1. Session cookie configuration
+
+Find where express-session (or equivalent) is configured. Likely in 
+server/replit_integrations/auth/replitAuth.ts around line 124 (the 
+SESSION_SECRET reference) or in server/index.ts.
+
+Report on each cookie option:
+- httpOnly: should be true (prevents JS access to the cookie)
+- secure: should be true in production (HTTPS only)
+- sameSite: should be "lax" or "strict" (CSRF defense + UX balance)
+- maxAge: what's the value? Is it reasonable (e.g., 7-30 days)?
+- domain: should be unset or explicitly correct
+- path: should be "/"
+
+## 2. CSRF protection
+
+Two possible mechanisms:
+
+(a) SameSite cookies (modern default — sameSite: "lax" blocks most CSRF 
+attacks because cross-origin POSTs don't include the cookie).
+(b) CSRF tokens (csurf middleware or similar — older approach).
+
+Report which mechanism is in use. If sameSite is "lax" or "strict" AND 
+the app doesn't have any cross-origin POST endpoints that need to work, 
+sameSite alone is sufficient and adding csurf is overkill.
+
+If sameSite is "none" or unset → that's a real issue, CSRF tokens or 
+sameSite needs to be added.
+
+## 3. Cookie secrets and rotation
+
+- Is SESSION_SECRET being read from env? (Confirm — should not be hardcoded.)
+- Is there any fallback default secret that would silently work in 
+  production if env is missing? (That would be a critical issue.)
+
+## 4. Authentication endpoint protections
+
+- Are login/signup endpoints rate-limited? Check server/middleware/ 
+  for express-rate-limit or similar.
+- Is there account lockout after N failed attempts?
+- Is there any logging of failed auth attempts?
+
+## 5. CORS configuration
+
+Find where CORS is configured (likely server/index.ts). Report:
+- What origins are allowed?
+- Is credentials: true set? (It needs to be for cookie auth.)
+- Are wildcard origins allowed? (That would be a critical issue with 
+  credentialed requests.)
+
+## 6. Other cookies
+
+Are any other cookies set by the app besides the session cookie? 
+(Search for res.cookie calls, document.cookie, etc.) If yes, report 
+their configuration too.
+
+# Output
+
+A structured report covering all 6 sections with file:line citations 
+and clear ✓ / ⚠️ / 🔴 markers. After the report, list the top 3 things 
+worth fixing tonight (if any), in priority order.
+
+Do NOT modify any code in this prompt. Audit only.
