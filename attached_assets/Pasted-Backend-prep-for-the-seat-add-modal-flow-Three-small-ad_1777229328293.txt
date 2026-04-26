@@ -1,0 +1,78 @@
+Backend prep for the seat-add modal flow. Three small additions to 
+existing code.
+Do NOT push to git. Show me the diff and wait for approval.
+
+# Context
+
+We just shipped POST /api/account/seats (changes seat count via Stripe).
+Now we're building the frontend modal that calls it. The frontend modal 
+needs more context than the current GET /api/account/seats provides:
+- billingCycle (so the modal can show "$29/mo" vs "$243.60/yr")
+- Admin's name (so a Manager-triggered modal can say "you'll authorize 
+  a charge to [Admin name]'s subscription")
+
+Also: the spec caps trial accounts at 10 seats. Currently 
+POST /api/account/seats would happily set seat_count to 50 during a 
+trial. We need backend enforcement.
+
+# Task
+
+## 1. Enrich GET /api/account/seats response
+
+Today returns: { used, total, available, overCapacity }
+
+Add four new fields:
+- billingCycle: string | null  — accounts.billing_cycle ("monthly" / "annual" / null)
+- subscriptionStatus: string | null  — accounts.subscription_status
+- ownerName: string | null  — first name + last name of the owner Admin 
+  (joined via accounts.owner_id → users.id)
+- trialMaxSeats: number  — 10 if subscriptionStatus === "trialing" or 
+  "trial", null otherwise
+
+Single endpoint, single query if possible. Use Drizzle's join syntax:
+
+  SELECT a.seat_count, a.billing_cycle, a.subscription_status,
+         u.first_name, u.last_name
+  FROM accounts a
+  LEFT JOIN users u ON u.id = a.owner_id
+  WHERE a.id = req.user.accountId
+
+Then count users separately as today.
+
+If accounts.owner_id is null (some accounts in dev/edge cases), 
+ownerName comes back null. Don't fail.
+
+## 2. Enforce trial seat cap in POST /api/account/seats
+
+After existing validation but before the Stripe call, add:
+
+  if ((account.subscription_status === "trialing" || 
+       account.subscription_status === "trial") && desiredCount > 10) {
+    return res.status(400).json({
+      message: "Trial accounts are limited to 10 seats. Upgrade to add more.",
+    });
+  }
+
+Use the account row already loaded earlier in the handler — don't 
+re-query.
+
+## 3. No frontend changes
+
+Per spec — frontend modal flow is the next prompt.
+
+## 4. What NOT to change
+
+- The existing seat-update logic in POST /api/account/seats (Stripe 
+  call, optimistic lock, conditional UPDATE)
+- The webhook handler
+- The user-loading endpoints (/api/auth/user etc — already migrated)
+- The schema
+- Any frontend code
+
+# Output
+
+1. Diff for server/routes.ts (both endpoints)
+2. TS error count (target: 33)
+3. Confirm: no schema changes, no frontend changes, no git operations
+
+Wait for me to review.

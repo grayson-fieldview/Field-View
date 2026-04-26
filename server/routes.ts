@@ -987,14 +987,22 @@ export async function registerRoutes(
     try {
       const accountId = req.user.accountId;
       const accountRows = await db
-        .select({ seatCount: accounts.seatCount })
+        .select({
+          seatCount: accounts.seatCount,
+          billingCycle: accounts.billingCycle,
+          subscriptionStatus: accounts.subscriptionStatus,
+          ownerFirstName: users.firstName,
+          ownerLastName: users.lastName,
+        })
         .from(accounts)
+        .leftJoin(users, eq(users.id, accounts.ownerId))
         .where(eq(accounts.id, accountId))
         .limit(1);
       if (accountRows.length === 0) {
         return res.status(404).json({ message: "Account not found" });
       }
-      const total = accountRows[0].seatCount ?? 3;
+      const row = accountRows[0];
+      const total = row.seatCount ?? 3;
       const usedRows = await db
         .select({ value: count() })
         .from(users)
@@ -1002,7 +1010,24 @@ export async function registerRoutes(
       const used = Number(usedRows[0]?.value ?? 0);
       const available = Math.max(0, total - used);
       const overCapacity = used > total;
-      return res.json({ used, total, available, overCapacity });
+
+      const ownerName = [row.ownerFirstName, row.ownerLastName]
+        .filter(Boolean)
+        .join(" ") || null;
+      const isTrial =
+        row.subscriptionStatus === "trialing" || row.subscriptionStatus === "trial";
+      const trialMaxSeats = isTrial ? 10 : null;
+
+      return res.json({
+        used,
+        total,
+        available,
+        overCapacity,
+        billingCycle: row.billingCycle ?? null,
+        subscriptionStatus: row.subscriptionStatus ?? null,
+        ownerName,
+        trialMaxSeats,
+      });
     } catch (error) {
       console.error("Error fetching seat usage:", error);
       res.status(500).json({ message: "Failed to fetch seat usage" });
@@ -1029,6 +1054,7 @@ export async function registerRoutes(
           seatCount: accounts.seatCount,
           stripeCustomerId: accounts.stripeCustomerId,
           stripeSubscriptionId: accounts.stripeSubscriptionId,
+          subscriptionStatus: accounts.subscriptionStatus,
         })
         .from(accounts)
         .where(eq(accounts.id, accountId))
@@ -1054,6 +1080,16 @@ export async function registerRoutes(
       if (desiredCount < activeUserCount) {
         return res.status(400).json({
           message: `Cannot reduce to ${desiredCount} seats — account has ${activeUserCount} active users.`,
+        });
+      }
+
+      if (
+        (acc.subscriptionStatus === "trialing" ||
+          acc.subscriptionStatus === "trial") &&
+        desiredCount > 10
+      ) {
+        return res.status(400).json({
+          message: "Trial accounts are limited to 10 seats. Upgrade to add more.",
         });
       }
 
