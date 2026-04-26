@@ -11,6 +11,7 @@ import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useTheme } from "@/components/theme-provider";
 import { useToast } from "@/hooks/use-toast";
 import { SiGoogle, SiGooglecalendar, SiApple } from "react-icons/si";
@@ -513,6 +514,194 @@ function TagManagerCard({ type, title, icon: Icon }: { type: "photo" | "project"
   );
 }
 
+type AccountUser = {
+  id: string;
+  firstName: string | null;
+  lastName: string | null;
+  email: string;
+  accountId: string | null;
+  role: string;
+};
+
+function TransferOwnershipDialog({
+  open,
+  onOpenChange,
+  currentUserId,
+}: {
+  open: boolean;
+  onOpenChange: (next: boolean) => void;
+  currentUserId: string;
+}) {
+  const [selectedUserId, setSelectedUserId] = useState<string>("");
+  const { toast } = useToast();
+
+  const { data: usersList, isLoading: usersLoading } = useQuery<AccountUser[]>({
+    queryKey: ["/api/users"],
+    enabled: open,
+  });
+
+  const transferable = (usersList || []).filter(
+    (u) => u.id !== currentUserId && !!u.accountId,
+  );
+  const selectedUser = transferable.find((u) => u.id === selectedUserId);
+  const displayName = (u: AccountUser) =>
+    [u.firstName, u.lastName].filter(Boolean).join(" ") || u.email;
+
+  const transfer = useMutation({
+    mutationFn: async (newOwnerId: string) => {
+      const res = await apiRequest("POST", "/api/account/transfer-ownership", { newOwnerId });
+      return res.json() as Promise<{ success: true; newOwnerId: string; newOwnerName: string | null }>;
+    },
+    onSuccess: (data) => {
+      toast({
+        title: "Ownership transferred",
+        description: data.newOwnerName
+          ? `${data.newOwnerName} is now the account owner.`
+          : "The new owner has been set.",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/account/seats"] });
+      setSelectedUserId("");
+      onOpenChange(false);
+    },
+    onError: (err: any) => {
+      toast({
+        title: "Transfer failed",
+        description: err?.message || "Could not transfer ownership.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleOpenChange = (next: boolean) => {
+    if (!next) setSelectedUserId("");
+    onOpenChange(next);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent data-testid="dialog-transfer-ownership">
+        <DialogHeader>
+          <DialogTitle>Transfer Account Ownership</DialogTitle>
+          <DialogDescription>
+            Transferring ownership makes another user responsible for billing.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          {usersLoading ? (
+            <Skeleton className="h-10 w-full" />
+          ) : transferable.length === 0 ? (
+            <p
+              className="text-sm text-muted-foreground"
+              data-testid="text-no-other-users"
+            >
+              No other users in this account. Invite someone first.
+            </p>
+          ) : (
+            <>
+              <div className="space-y-2">
+                <p className="text-sm font-medium">New Owner</p>
+                <Select value={selectedUserId} onValueChange={setSelectedUserId}>
+                  <SelectTrigger data-testid="select-new-owner">
+                    <SelectValue placeholder="Choose a user..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {transferable.map((u) => (
+                      <SelectItem
+                        key={u.id}
+                        value={u.id}
+                        data-testid={`option-user-${u.id}`}
+                      >
+                        {displayName(u)}{" "}
+                        <span className="text-muted-foreground">({u.email})</span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {selectedUser && (
+                <div
+                  className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm dark:border-amber-900/40 dark:bg-amber-950/20"
+                  data-testid="text-transfer-confirmation"
+                >
+                  You're about to transfer ownership of this account to{" "}
+                  <strong>{displayName(selectedUser)}</strong>. They'll become
+                  responsible for billing and the primary Admin. You'll remain
+                  an Admin but lose owner status.
+                </div>
+              )}
+            </>
+          )}
+        </div>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => handleOpenChange(false)}
+            data-testid="button-cancel-transfer"
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={() => selectedUserId && transfer.mutate(selectedUserId)}
+            disabled={!selectedUserId || transfer.isPending}
+            data-testid="button-confirm-transfer"
+          >
+            {transfer.isPending && (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            )}
+            Transfer Ownership
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AccountOwnershipCard() {
+  const { user } = useAuth();
+  const [dialogOpen, setDialogOpen] = useState(false);
+
+  const { data: seatStatus } = useQuery<{ ownerId: string | null }>({
+    queryKey: ["/api/account/seats"],
+    enabled: !!user?.id && user?.role === "admin",
+  });
+
+  const isOwner =
+    !!user?.id && !!seatStatus?.ownerId && user.id === seatStatus.ownerId;
+
+  if (!isOwner || !user?.id) return null;
+
+  return (
+    <Card className="p-6" data-testid="card-account-ownership">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <Shield className="h-5 w-5 text-primary" />
+            <h2 className="text-lg font-semibold">Account Ownership</h2>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            You are the owner of this account. Transferring ownership will make
+            another user responsible for billing.
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          onClick={() => setDialogOpen(true)}
+          data-testid="button-open-transfer-ownership"
+        >
+          Transfer Ownership
+        </Button>
+      </div>
+      <TransferOwnershipDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        currentUserId={user.id}
+      />
+    </Card>
+  );
+}
+
 export default function SettingsPage() {
   const { user, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
@@ -621,6 +810,8 @@ export default function SettingsPage() {
       {user?.role === "admin" && <SeatCountWidget />}
 
       <BillingCard />
+
+      <AccountOwnershipCard />
 
       <Card className="p-6" data-testid="card-account">
         <div className="flex items-center gap-2 mb-4">

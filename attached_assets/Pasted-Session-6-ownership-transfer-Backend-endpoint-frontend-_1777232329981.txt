@@ -1,0 +1,147 @@
+Session 6: ownership transfer. Backend endpoint + frontend modal flow.
+Do NOT push to git. Show me the diff and wait for approval.
+
+# Context
+
+accounts.owner_id is the user ID of the current Admin who is 
+responsible for billing. Today, transferring ownership requires 
+manual SQL — no UI exists. Per the spec, the current owner should 
+be able to transfer ownership to another user in the account. The 
+new owner gets promoted to Admin if they aren't already. The old 
+owner stays an Admin (multi-admin accounts are valid) but loses 
+owner status (which means losing access to the "Transfer Ownership" 
+button itself).
+
+# Task
+
+## 1. Backend: POST /api/account/transfer-ownership
+
+In server/routes.ts. Mount with requireAdmin middleware (subscription 
+gate not needed — this is account governance, allow even on lapsed 
+subscriptions so the owner can hand off to someone who can pay).
+
+Request body: { newOwnerId: string }
+
+Logic:
+
+1. Load the current account's owner_id from the accounts table:
+   SELECT owner_id FROM accounts WHERE id = req.user.accountId
+
+2. Validate the requesting user is the current owner:
+   if (req.user.id !== account.ownerId) → 403 with message 
+   "Only the account owner can transfer ownership."
+
+3. Validate newOwnerId:
+   - Must be a non-empty string → 400
+   - Must !== req.user.id → 400 "Cannot transfer ownership to yourself."
+
+4. Validate newOwnerId is a user in the same account:
+   SELECT id, role FROM users WHERE id = newOwnerId AND account_id = req.user.accountId
+   - If no match → 404 "User not found in this account."
+
+5. Transaction (use db.transaction or sequential Drizzle ops, both fine):
+   - UPDATE accounts SET owner_id = newOwnerId WHERE id = req.user.accountId
+   - If new owner's role !== 'admin', UPDATE users SET role = 'admin' WHERE id = newOwnerId
+
+6. Logging:
+   console.log("[ownership-transfer]", JSON.stringify({
+     accountId: req.user.accountId,
+     fromUserId: req.user.id,
+     toUserId: newOwnerId,
+     newOwnerWasAdmin: <boolean>,
+     timestamp: new Date().toISOString(),
+   }));
+
+7. Return { success: true, newOwnerId, newOwnerName: <full name> } 
+   so the frontend can show a confirmation toast.
+
+## 2. Frontend: TransferOwnershipDialog
+
+In client/src/pages/settings.tsx, add a new sub-component 
+TransferOwnershipDialog that:
+
+- Renders a Radix Dialog (NOT AlertDialog — we want full content, 
+  not a confirmation strip)
+- Shows a dropdown/select of all users in the account EXCEPT the 
+  current user
+- Below the dropdown, when a user is selected, shows confirmation copy:
+    "You're about to transfer ownership of this account to [name]. 
+     They'll become responsible for billing and the primary Admin.
+     You'll remain an Admin but lose owner status."
+- Two buttons: "Cancel" and "Transfer Ownership"
+- "Transfer Ownership" disabled until a user is selected
+- On submit: calls POST /api/account/transfer-ownership, on success 
+  shows toast and invalidates relevant queries (/api/auth/user, 
+  /api/users for team list, /api/account/seats which has ownerName)
+
+User list source: GET /api/users (already exists, returns users in 
+the current account). Only show users with confirmed accountId — 
+filter out anything weird.
+
+## 3. Frontend: surface the dialog
+
+Add a new "Account Ownership" sub-card to the Settings page, BELOW 
+BillingCard but ABOVE the existing TagManagerCard / UserCards (or 
+wherever feels natural — you choose).
+
+Sub-card content:
+- Heading: "Account Ownership"
+- Body text: "You are the owner of this account. Transferring 
+  ownership will make another user responsible for billing."
+- Button: "Transfer Ownership" → opens the dialog
+
+Visibility: ONLY show this card when the current user IS the owner. 
+Determine this by comparing user.id to account ownership. Two ways:
+
+(a) Add ownerId to the seat status endpoint response and compare 
+    locally
+(b) Add a separate /api/account endpoint that returns 
+    { id, name, ownerId, ... }
+
+Option (a) is simpler — we already have GET /api/account/seats 
+returning ownerName. Add ownerId to that response and compare 
+in the frontend.
+
+## 4. Update GET /api/account/seats
+
+Add ownerId to the response:
+
+  { used, total, available, overCapacity, billingCycle, 
+    subscriptionStatus, ownerName, ownerId, trialMaxSeats }
+
+This requires no extra query — we already JOIN users on owner_id. 
+Just add a.owner_id to the SELECT and pass it through.
+
+Update the SeatStatus type in team.tsx (already used) to include ownerId.
+
+## 5. What NOT to change
+
+- The seat management endpoints (GET /api/account/seats body remains 
+  the same except for ownerId addition; POST untouched)
+- The webhook handler
+- The schema (owner_id already exists from Saturday's work)
+- Any other backend or frontend logic
+- The role gating for non-Admin users — they should never see the 
+  Account Ownership card
+
+## 6. Edge cases
+
+- User is Admin but not owner → don't show the card
+- User is owner but the only user in the account → dropdown is empty, 
+  show inline message: "No other users in this account. Invite 
+  someone first."
+- Backend: if newOwnerId references a user who has been deleted 
+  between dropdown render and submit, the validation in step 4 of 
+  task 1 catches it (404)
+- Transfer to a user with a pending password reset / unverified email 
+  — allowed; ownership doesn't gate on verification
+
+# Output
+
+1. Diff for server/routes.ts (new endpoint + ownerId addition to seats GET)
+2. Diff for client/src/pages/settings.tsx (new card + dialog)
+3. Diff for any types that needed updating (SeatStatus in team.tsx)
+4. TS error count (target: 33)
+5. Confirm: no schema changes, no other endpoints touched, no git operations
+
+Wait for me to review.

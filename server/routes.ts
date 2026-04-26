@@ -991,6 +991,7 @@ export async function registerRoutes(
           seatCount: accounts.seatCount,
           billingCycle: accounts.billingCycle,
           subscriptionStatus: accounts.subscriptionStatus,
+          ownerId: accounts.ownerId,
           ownerFirstName: users.firstName,
           ownerLastName: users.lastName,
         })
@@ -1026,6 +1027,7 @@ export async function registerRoutes(
         billingCycle: row.billingCycle ?? null,
         subscriptionStatus: row.subscriptionStatus ?? null,
         ownerName,
+        ownerId: row.ownerId ?? null,
         trialMaxSeats,
       });
     } catch (error) {
@@ -1175,6 +1177,82 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Seat update error:", error);
       res.status(500).json({ message: error.message || "Failed to update seat count" });
+    }
+  });
+
+  // Transfer account ownership
+  app.post("/api/account/transfer-ownership", requireAdmin, async (req: any, res) => {
+    try {
+      const accountId = req.user.accountId;
+      const requesterId = req.user.id;
+      const { newOwnerId } = req.body || {};
+
+      if (typeof newOwnerId !== "string" || newOwnerId.trim().length === 0) {
+        return res.status(400).json({ message: "newOwnerId is required." });
+      }
+      if (newOwnerId === requesterId) {
+        return res.status(400).json({ message: "Cannot transfer ownership to yourself." });
+      }
+
+      const accountRows = await db
+        .select({ ownerId: accounts.ownerId })
+        .from(accounts)
+        .where(eq(accounts.id, accountId))
+        .limit(1);
+      if (accountRows.length === 0) {
+        return res.status(404).json({ message: "Account not found." });
+      }
+      if (requesterId !== accountRows[0].ownerId) {
+        return res.status(403).json({ message: "Only the account owner can transfer ownership." });
+      }
+
+      const targetRows = await db
+        .select({
+          id: users.id,
+          role: users.role,
+          firstName: users.firstName,
+          lastName: users.lastName,
+        })
+        .from(users)
+        .where(and(eq(users.id, newOwnerId), eq(users.accountId, accountId)))
+        .limit(1);
+      if (targetRows.length === 0) {
+        return res.status(404).json({ message: "User not found in this account." });
+      }
+      const target = targetRows[0];
+      const newOwnerWasAdmin = target.role === "admin";
+
+      await db
+        .update(accounts)
+        .set({ ownerId: newOwnerId })
+        .where(eq(accounts.id, accountId));
+
+      if (!newOwnerWasAdmin) {
+        await db
+          .update(users)
+          .set({ role: "admin" })
+          .where(eq(users.id, newOwnerId));
+      }
+
+      console.log(
+        "[ownership-transfer]",
+        JSON.stringify({
+          accountId,
+          fromUserId: requesterId,
+          toUserId: newOwnerId,
+          newOwnerWasAdmin,
+          timestamp: new Date().toISOString(),
+        }),
+      );
+
+      const newOwnerName =
+        [target.firstName, target.lastName].filter(Boolean).join(" ") || null;
+      return res.json({ success: true, newOwnerId, newOwnerName });
+    } catch (error: any) {
+      console.error("Ownership transfer error:", error);
+      res
+        .status(500)
+        .json({ message: error?.message || "Failed to transfer ownership" });
     }
   });
 

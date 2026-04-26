@@ -49,6 +49,7 @@ type SeatStatus = {
   billingCycle: "monthly" | "annual" | null;
   subscriptionStatus: string | null;
   ownerName: string | null;
+  ownerId: string | null;
   trialMaxSeats: number | null;
 };
 
