@@ -488,16 +488,41 @@ app.post(
 
       await WebhookHandlers.processWebhook(req.body as Buffer, sig);
 
-      try {
-        const stripe = await getUncachableStripeClient();
-        const event = stripe.webhooks.constructEvent(req.body, sig, "");
-        await handleSubscriptionEvent(event);
-      } catch (eventErr: any) {
+      const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+      let event: any;
+      if (webhookSecret) {
         try {
-          const rawEvent = JSON.parse(req.body.toString());
-          await handleSubscriptionEvent(rawEvent);
-        } catch (parseErr) {}
+          const stripe = await getUncachableStripeClient();
+          event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+        } catch (verifyErr: any) {
+          console.error(
+            "Stripe webhook signature verification failed:",
+            verifyErr.message,
+          );
+          return res
+            .status(400)
+            .json({ error: "Webhook signature verification failed" });
+        }
+      } else {
+        // STRIPE_WEBHOOK_SECRET not set — local defense-in-depth verification
+        // skipped. WebhookHandlers.processWebhook (stripe-replit-sync vendor
+        // lib, called above) verifies signatures upstream using the managed
+        // webhook secret, so events reaching this point have already been
+        // signature-verified.
+        console.warn(
+          "[stripe-webhook] STRIPE_WEBHOOK_SECRET not set — skipping local signature verification (vendor lib verified upstream)",
+        );
+        try {
+          event = JSON.parse(req.body.toString());
+        } catch (parseErr: any) {
+          console.error(
+            "Stripe webhook body parse failed:",
+            parseErr.message,
+          );
+          return res.status(400).json({ error: "Invalid webhook body" });
+        }
       }
+      await handleSubscriptionEvent(event);
 
       res.status(200).json({ received: true });
     } catch (error: any) {

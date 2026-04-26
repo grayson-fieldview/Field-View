@@ -1,0 +1,117 @@
+Fix the dead Stripe webhook signature verification in server/index.ts.
+Do NOT push to git. Show me the diff and wait for approval.
+
+# Context
+
+In server/index.ts, around line 332, there's likely a call like:
+
+  const event = stripe.webhooks.constructEvent(req.body, sig, "");
+
+The empty-string third argument means signature verification doesn't 
+actually happen. There's likely a try/catch with a fallback to 
+JSON.parse(req.body) that swallows the failure, so the code processes 
+the event regardless.
+
+This isn't exploitable today because WebhookHandlers.processWebhook 
+(vendor stripe-replit-sync) verifies signatures upstream BEFORE the 
+event reaches our handleSubscriptionEvent. But the dead code looks 
+like security and isn't, which is worse than no check.
+
+# Task
+
+## 1. Find the constructEvent call
+
+In server/index.ts, find where stripe.webhooks.constructEvent is called. 
+Cite file:line. Show me the surrounding code (the route handler, the 
+try/catch, the fallback path).
+
+## 2. Find the webhook signing secret
+
+Check process.env for STRIPE_WEBHOOK_SECRET (or similar name). Search 
+.env.example for what it's called.
+
+If it's already there: we'll use it.
+If not: we'll need to add it.
+
+## 3. Decide and implement
+
+Three possible fixes, in order of preference:
+
+**Option A: Properly verify with the real signing secret.** 
+If STRIPE_WEBHOOK_SECRET exists in env, use it:
+
+  const event = stripe.webhooks.constructEvent(
+    req.body, 
+    sig, 
+    process.env.STRIPE_WEBHOOK_SECRET
+  );
+
+If verification fails, return 400 to Stripe (Stripe retries with 
+exponential backoff, so a real signature failure should reject, not 
+swallow).
+
+If STRIPE_WEBHOOK_SECRET is not in env, log warning + use Option B.
+
+**Option B: Remove the dead code entirely** with a comment explaining 
+why. The vendor lib at WebhookHandlers.processWebhook (called earlier 
+in the same handler) verifies signatures upstream. Document this 
+clearly so future devs understand why no explicit verification is in 
+this file.
+
+  // Note: Stripe webhook signature verification is handled upstream 
+  // by WebhookHandlers.processWebhook (stripe-replit-sync vendor lib).
+  // Events reaching handleSubscriptionEvent have already been 
+  // signature-verified. We don't re-verify here.
+  const event = JSON.parse(req.body);  // or however the body is parsed today
+
+**Option C: Hybrid — Option A if env var present, Option B if not.**
+This handles fresh deploys without the env var, but logs that a 
+defense-in-depth check is being skipped.
+
+I lean Option C for production safety. Pick whichever fits the actual 
+code structure best — show me the diff and reasoning.
+
+## 4. Update .env.example
+
+If STRIPE_WEBHOOK_SECRET isn't already documented in .env.example, 
+add it:
+
+  # Stripe webhook signing secret. Used to verify incoming webhook 
+  # events. Get from Stripe Dashboard → Developers → Webhooks → 
+  # your endpoint → Signing secret. Optional — vendor lib verifies 
+  # upstream as a fallback, but having this set adds defense-in-depth.
+  STRIPE_WEBHOOK_SECRET=REPLACE_WITH_WEBHOOK_SIGNING_SECRET
+
+Use a sanitized placeholder.
+
+## 5. What NOT to change
+
+- The vendor stripe-replit-sync code (WebhookHandlers.processWebhook 
+  stays untouched)
+- The webhook routing itself (which path the webhook arrives at)
+- The handleSubscriptionEvent function (the actual event processing)
+- The dual-write logic (writeAccountBilling + Step 3 work)
+- Any other code in server/index.ts
+- The schema
+
+## 6. Verify
+
+After the change, run a mental trace:
+- Webhook arrives at our endpoint
+- Vendor lib verifies signature, calls processWebhook (existing)
+- Our handler also runs: with new code, either re-verifies (Option A/C) 
+  or explicitly skips with comment (Option B/C)
+- handleSubscriptionEvent runs as today
+
+Behavior must be IDENTICAL on real Stripe events. If your fix changes 
+how successful events are processed, that's a regression.
+
+# Output
+
+1. Diff for server/index.ts
+2. Diff for .env.example (if needed)
+3. Which option (A, B, or C) you picked and why
+4. TS error count (target: 33)
+5. Confirm: no other code changes, no git operations
+
+Wait for me to review.
