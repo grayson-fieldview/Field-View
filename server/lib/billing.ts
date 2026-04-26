@@ -74,3 +74,18 @@ export async function getAccountBilling(req: any): Promise<BillingState> {
     source: "account",
   };
 }
+
+export async function overlayAccountBillingOnUser<T extends Record<string, any>>(
+  user: T,
+  req: any,
+): Promise<T> {
+  const billing = await getAccountBilling(req);
+  if (billing.source === "user") return user;
+  return {
+    ...user,
+    subscriptionStatus: billing.subscriptionStatus,
+    trialEndsAt: billing.trialEndsAt,
+    stripeCustomerId: billing.stripeCustomerId,
+    stripeSubscriptionId: billing.stripeSubscriptionId,
+  };
+}

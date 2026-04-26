@@ -13,7 +13,7 @@ import { db, pool } from "../../db";
 import { eq, and, isNull, gt } from "drizzle-orm";
 import { passwordResetTokens, emailVerificationTokens, users, accounts, invitations, type User } from "@shared/models/auth";
 import { sendPasswordResetEmail, sendEmailVerificationEmail, sendWelcomeEmail } from "../../services/email";
-import { getAccountBilling } from "../../lib/billing";
+import { getAccountBilling, overlayAccountBillingOnUser } from "../../lib/billing";
 import { verifyRecaptchaToken } from "../../services/recaptcha";
 import { CURRENT_TERMS_VERSION } from "@shared/constants";
 import {
@@ -382,14 +382,15 @@ export async function setupAuth(app: Express) {
       req.login(user, (err) => {
         if (err) return next(err);
         console.log("[login-diag] req.login complete, sessionID:", req.sessionID, "session.passport:", (req.session as any)?.passport);
-        req.session.save((saveErr) => {
+        req.session.save(async (saveErr) => {
           if (saveErr) {
             console.log("[login-diag] session.save ERROR:", saveErr);
             return next(saveErr);
           }
           console.log("[login-diag] session.save complete, sessionID:", req.sessionID);
           const { password: _, ...safeUser } = user;
-          return res.json(safeUser);
+          const safeUserWithBilling = await overlayAccountBillingOnUser(safeUser, req);
+          return res.json(safeUserWithBilling);
         });
       });
     })(req, res, next);

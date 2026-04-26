@@ -1,0 +1,107 @@
+Step 4 of read-path migration: server-side overlay of account-level 
+billing onto the three endpoints that return user objects to the frontend.
+Do NOT push to git. Show me the diff and wait for approval.
+
+# Context
+
+The audit found:
+
+- The frontend gets billing state from the user object loaded by 
+  GET /api/auth/user (and updated by POST /api/login and 
+  POST /api/confirm-checkout responses). The four billing fields 
+  the frontend reads are subscriptionStatus, trialEndsAt, 
+  stripeCustomerId, and stripeSubscriptionId.
+- /api/subscription has zero frontend consumers (Step 2 work was 
+  necessary scaffolding but not currently exercised by client code).
+- 3 places in the frontend read these fields off the user object: 
+  SubscriptionGate, SubscribePage, Settings → BillingCard.
+
+We're going with Path A: overlay account-level billing onto the user 
+object in the three endpoints that return it. Zero frontend changes.
+
+# Task
+
+## 1. Add a helper to server/lib/billing.ts
+
+Add a new exported function:
+
+  export async function overlayAccountBillingOnUser<T extends Record<string, any>>(
+    user: T,
+    req: any,
+  ): Promise<T>
+
+Behavior:
+- Calls getAccountBilling(req) (the existing helper)
+- If billing.source === "user", returns user unchanged (flag is OFF, 
+  or flag is ON but fallback fired — either way, user-level data is 
+  already correct)
+- If billing.source === "account", returns a NEW object with the four 
+  billing fields overlaid from billing.*: 
+    { ...user, 
+      subscriptionStatus: billing.subscriptionStatus,
+      trialEndsAt: billing.trialEndsAt,
+      stripeCustomerId: billing.stripeCustomerId,
+      stripeSubscriptionId: billing.stripeSubscriptionId,
+    }
+- Does NOT mutate the original user object — returns a new object.
+- Generic typing on T so the caller's TS knows the return is the same 
+  shape as the input.
+
+## 2. Wire the helper into three endpoints
+
+For each of the three sites below, AFTER the existing safeUser is 
+constructed (i.e., password stripped) but BEFORE res.json(safeUser), 
+add a single line:
+
+  const safeUserWithBilling = await overlayAccountBillingOnUser(safeUser, req);
+  res.json(safeUserWithBilling);
+
+(Or rename the existing safeUser variable — whatever's cleanest.)
+
+The three sites:
+
+a. server/replit_integrations/auth/routes.ts:6-19 — GET /api/auth/user
+b. server/replit_integrations/auth/replitAuth.ts:373-397 — POST /api/login response
+c. server/routes.ts:1856-1893 — POST /api/confirm-checkout response
+
+## 3. Imports
+
+For each modified file, ensure overlayAccountBillingOnUser is imported 
+from "../lib/billing" or appropriate relative path. If getAccountBilling 
+is already imported in that file, just add overlayAccountBillingOnUser 
+to the same import line.
+
+## 4. Behavior verification (in your output, not by running code)
+
+Confirm the following manually by reading the diff:
+
+- When ACCOUNT_BILLING_ENABLED is OFF (current state): 
+  getAccountBilling returns source: "user", overlay is a no-op, 
+  endpoints return the same data as today. Byte-identical behavior.
+  
+- When ACCOUNT_BILLING_ENABLED is ON: 
+  getAccountBilling returns source: "account" with account-level data, 
+  overlay replaces the four billing fields on the user response. 
+  Frontend sees account-level subscription state without knowing the 
+  difference.
+
+## 5. What NOT to change
+
+- The SubscriptionGate or any frontend code
+- /api/subscription endpoint (already wired in Step 2)
+- The webhook write path (Step 3 work — keep dual-write logic intact)
+- Any non-billing fields on the user response
+- The schema
+- POST /api/register response (returns no user object, out of scope)
+- OAuth callbacks (don't return user body, out of scope per audit)
+
+# Output
+
+1. Diff for server/lib/billing.ts (the new helper)
+2. Diff for server/replit_integrations/auth/routes.ts
+3. Diff for server/replit_integrations/auth/replitAuth.ts
+4. Diff for server/routes.ts (just the /api/confirm-checkout block)
+5. TS error count (target: 33)
+6. Confirm: no schema changes, no frontend changes, no git operations
+
+Wait for me to review.

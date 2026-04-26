@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import { authStorage } from "./storage";
 import { isAuthenticated } from "./replitAuth";
+import { overlayAccountBillingOnUser } from "../../lib/billing";
 
 export function registerAuthRoutes(app: Express): void {
   app.get("/api/auth/user", isAuthenticated, async (req: any, res) => {
@@ -11,7 +12,8 @@ export function registerAuthRoutes(app: Express): void {
         return res.status(404).json({ message: "User not found" });
       }
       const { password: _, ...safeUser } = user;
-      res.json(safeUser);
+      const safeUserWithBilling = await overlayAccountBillingOnUser(safeUser, req);
+      res.json(safeUserWithBilling);
     } catch (error) {
       console.error("Error fetching user:", error);
       res.status(500).json({ message: "Failed to fetch user" });

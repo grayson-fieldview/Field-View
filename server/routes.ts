@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import crypto from "crypto";
 import { storage } from "./storage";
 import { setupAuth, registerAuthRoutes, isAuthenticated, requireActiveSubscription } from "./replit_integrations/auth";
-import { getAccountBilling, isAccountBillingEnabled } from "./lib/billing";
+import { getAccountBilling, isAccountBillingEnabled, overlayAccountBillingOnUser } from "./lib/billing";
 import { requireAdmin, requireAdminOrManager } from "./middleware/auth";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
@@ -1888,7 +1888,8 @@ export async function registerRoutes(
 
         const updatedUser = await authStorage.getUser(user.id);
         const { password: _, ...safeUser } = updatedUser!;
-        return res.json(safeUser);
+        const safeUserWithBilling = await overlayAccountBillingOnUser(safeUser, req);
+        return res.json(safeUserWithBilling);
       }
 
       return res.json({ message: "No subscription found" });
