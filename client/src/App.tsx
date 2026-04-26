@@ -1,4 +1,4 @@
-import { Switch, Route, Redirect } from "wouter";
+import { Switch, Route, Redirect, useSearch } from "wouter";
 import { queryClient, apiRequest } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { GoogleReCaptchaProvider } from "react-google-recaptcha-v3";
@@ -153,6 +153,12 @@ function SubscriptionGate() {
   return <SubscribePage />;
 }
 
+function CatchAllRedirect() {
+  const search = useSearch();
+  const target = search ? `/signup?${search}` : `/signup`;
+  return <Redirect to={target} />;
+}
+
 function AppContent() {
   const { user, isLoading } = useAuth();
 
@@ -173,12 +179,12 @@ function AppContent() {
       <Switch>
         <Route path="/login" component={LoginPage} />
         <Route path="/signup" component={RegisterPage} />
-        <Route path="/register"><Redirect to="/signup" /></Route>
+        <Route path="/register" component={RegisterPage} />
         <Route path="/forgot-password" component={ForgotPasswordPage} />
         <Route path="/reset-password" component={ResetPasswordPage} />
         <Route path="/check-email" component={CheckEmailPage} />
         <Route>
-          <Redirect to="/signup" />
+          <CatchAllRedirect />
         </Route>
       </Switch>
     );

@@ -1,0 +1,98 @@
+Fix three related routing bugs in client/src/App.tsx that drop query 
+strings during redirects. Single file change, three small edits.
+Do NOT push to git. Show me the diff and wait for approval.
+
+# Context
+
+The diagnostic identified that wouter's <Redirect> component doesn't 
+preserve query strings, breaking invite acceptance and any other 
+tokenized URL whose path matches a redirect rule.
+
+# Task
+
+## Edit 1: Render RegisterPage at /register instead of redirecting
+
+Currently at App.tsx:176:
+  <Route path="/register"><Redirect to="/signup" /></Route>
+
+Change to:
+  <Route path="/register" component={RegisterPage} />
+
+This makes /register and /signup render the same component. Token 
+query strings are preserved.
+
+## Edit 2: Authenticated user clicking invite link
+
+Currently at App.tsx:115:
+  <Route path="/register"><Redirect to="/" /></Route>
+
+This is the authenticated switch — when an already-logged-in user 
+hits /register?token=..., they get redirected to / (dashboard) and 
+the token is dropped silently. The user has no way to accept the 
+invitation while logged in.
+
+For now, change this to render the RegisterPage component instead 
+of redirecting:
+
+  <Route path="/register" component={RegisterPage} />
+
+The RegisterPage component already handles the case of a logged-in 
+user — it should detect the token, show the invitation context, 
+and let them either log out + accept, or accept while staying 
+logged in (depending on what register.tsx already does).
+
+If RegisterPage doesn't gracefully handle the logged-in case, 
+flag it — we can defer this edit and just leave it as-is until we 
+build a proper "you're logged in, do you want to log out and accept 
+this invite?" flow.
+
+## Edit 3: Catch-all redirect preserves query strings
+
+Currently at App.tsx:180-182:
+  <Route>
+    <Redirect to="/signup" />
+  </Route>
+
+This catch-all destroys query strings on any unmatched path. Same 
+bug class.
+
+The simplest fix: append the current search string to the redirect 
+target. Wouter's useSearch() returns the current query string. So:
+
+  function CatchAllRedirect() {
+    const search = useSearch();
+    const target = search ? `/signup?${search}` : `/signup`;
+    return <Redirect to={target} />;
+  }
+
+  ...
+
+  <Route>
+    <CatchAllRedirect />
+  </Route>
+
+Use the wouter useSearch import that's already in the file (the 
+register page uses it).
+
+If wouter doesn't expose useSearch in the version installed, an 
+alternative is window.location.search. Use whichever pattern matches 
+existing code in the file.
+
+## What NOT to change
+
+- Any other route definitions
+- Any other component (RegisterPage, LoginPage, etc.)
+- Any backend code
+- The schema
+- The invitation pipeline (just shipped, working correctly)
+- The redirect at App.tsx:114 (/login → /, this one is fine)
+
+# Output
+
+1. Diff for client/src/App.tsx (just these three edits)
+2. Confirmation that RegisterPage handles the authenticated-user case 
+   gracefully (or a flag if it doesn't, in which case we'll skip Edit 2)
+3. TS error count (target: 33)
+4. Confirm: no other files touched, no git operations
+
+Wait for me to review.
