@@ -12,6 +12,7 @@ import { users, invitations, accounts } from "@shared/models/auth";
 import { db } from "./db";
 import { eq, sql, and, or, inArray, count } from "drizzle-orm";
 import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, deleteFromS3 } from "./s3";
+import { sendInvitationEmail } from "./services/email";
 
 async function verifyProjectAccess(projectId: number, accountId: string): Promise<boolean> {
   const project = await storage.getProject(projectId);
@@ -1320,6 +1321,45 @@ export async function registerRoutes(
       const inviteLink = `${baseUrl}/register?token=${token}`;
       if (process.env.NODE_ENV !== "production") {
         console.log(`[Invitation] Link for ${email}: ${inviteLink}`);
+      }
+
+      // Best-effort invitation email — failures are logged but do not fail the request,
+      // since the inviteLink is returned in the response and the Admin can share it manually.
+      let accountName = "Field View";
+      try {
+        const acctRows = await db
+          .select({ name: accounts.name })
+          .from(accounts)
+          .where(eq(accounts.id, currentUser.accountId))
+          .limit(1);
+        if (acctRows.length > 0 && acctRows[0].name) {
+          accountName = acctRows[0].name;
+        }
+      } catch (err) {
+        console.error("[invitation-email] Failed to load account name:", err);
+      }
+
+      const inviterName =
+        [currentUser.firstName, currentUser.lastName].filter(Boolean).join(" ") || null;
+
+      try {
+        const emailResult = await sendInvitationEmail({
+          to: invitation.email,
+          inviterName,
+          inviterEmail: currentUser.email,
+          accountName,
+          role: invitation.role,
+          inviteUrl: inviteLink,
+          expiresAt,
+        });
+        if (!emailResult.success) {
+          console.error(
+            "[invitation-email] Send returned failure:",
+            emailResult.error,
+          );
+        }
+      } catch (err) {
+        console.error("[invitation-email] Send threw:", err);
       }
 
       res.status(201).json({ ...invitation, inviteLink });

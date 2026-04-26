@@ -1,0 +1,138 @@
+Wire the invitation email pipeline. Today, POST /api/invitations 
+creates a DB record but no email is sent — the Admin manually copies 
+and shares the invite URL.
+
+We're adding the email send.
+
+Do NOT push to git. Show me the diff and wait for approval.
+
+# Context
+
+Resend is already integrated. server/services/email.ts has:
+- sendPasswordResetEmail
+- sendEmailVerificationEmail  
+- sendWelcomeEmail
+
+We'll mirror these patterns to add sendInvitationEmail.
+
+POST /api/invitations is in server/routes.ts. It currently creates 
+the DB row and returns the invite URL to the frontend, but doesn't 
+fire an email.
+
+# Task
+
+## 1. Add sendInvitationEmail to server/services/email.ts
+
+Mirror the existing email-sending functions in this file. Look at 
+how sendPasswordResetEmail or sendEmailVerificationEmail are structured 
+and follow the same pattern.
+
+Function signature:
+
+  export async function sendInvitationEmail(params: {
+    to: string;                    // recipient email
+    inviterName: string | null;    // who is inviting (full name, fallback to inviter email)
+    inviterEmail: string;          // fallback for missing name
+    accountName: string;           // "X's Team" usually
+    role: string;                  // admin, manager, standard, restricted
+    inviteUrl: string;             // the URL the recipient clicks
+    expiresAt: Date;               // when the invite link expires
+  }): Promise<{ success: boolean; error?: string }>
+
+Subject line: 
+  `${inviterName || inviterEmail} invited you to join ${accountName} on Field View`
+
+Body content (HTML, mirror the styling of other Field View emails):
+- Greeting: "Hi,"
+- Lead text: "${inviterName || inviterEmail} invited you to join 
+  ${accountName} on Field View as a ${roleLabel}."
+- Brief description of what Field View is (1-2 sentences). Match the 
+  tone of existing emails.
+- Primary CTA button → inviteUrl. Use the existing brand orange 
+  (#F09000) for the button background.
+- "This invitation expires on ${formatted expiresAt}."
+- Plain-text fallback: "Or paste this link into your browser: ${inviteUrl}"
+- Standard footer (whatever the other emails use).
+
+Where roleLabel maps:
+- admin → "Admin"
+- manager → "Manager"
+- standard → "Standard User"
+- restricted → "Restricted User"
+
+Plain-text version: include the same content stripped of HTML for 
+email clients that don't render HTML.
+
+Logging: match the pattern of other email functions. console.log on 
+success, console.error on failure.
+
+## 2. Wire it into POST /api/invitations
+
+In server/routes.ts, find the POST /api/invitations handler. After 
+the DB row is successfully created, before res.json, call 
+sendInvitationEmail with the relevant fields.
+
+Failure handling: if sendInvitationEmail throws or returns 
+{ success: false }, log the error but DO NOT fail the request. The 
+DB row exists, the URL is in the response, the Admin can copy/paste 
+manually as a fallback. The email is best-effort.
+
+You'll need to load the inviter's name (from req.user) and the 
+account's name. The account name requires a quick query to 
+accounts.name — feel free to do this inline in the handler.
+
+## 3. Construct the invite URL correctly
+
+The frontend currently constructs an invite URL when displaying 
+pending invitations. Find that code in client/src/pages/team.tsx 
+and use the SAME URL format in the email.
+
+Likely format: `${process.env.APP_URL}/accept-invitation/${token}` 
+or similar. Match exactly what the frontend produces.
+
+Use process.env.APP_URL on the backend. If APP_URL isn't already 
+set in env, fall back to a sensible default for prod (e.g., 
+https://app.field-view.com) — but flag this if APP_URL doesn't exist.
+
+## 4. Update .env.example
+
+If APP_URL isn't already documented in .env.example, add it:
+
+  # Application URL — used in transactional emails for invite links, 
+  # password resets, etc.
+  APP_URL=https://app.field-view.com
+
+Use a sanitized placeholder so GitHub's secret scanner doesn't choke. 
+The URL itself isn't a secret — it's the same URL users see — but 
+keep it consistent with the file's pattern.
+
+## 5. What NOT to change
+
+- The existing email functions (sendPasswordResetEmail, etc.)
+- The DB schema (invitations table is fine as-is)
+- The frontend invite UI (the new email is purely additive — frontend 
+  still shows the URL post-creation, and that's still a useful fallback)
+- The accept-invitation flow itself (whatever happens when a user 
+  clicks the URL is out of scope)
+- Any other endpoints
+
+## 6. Testing in dev
+
+I'll test the actual email send manually after this ships. RESEND_API_KEY 
+is in Replit Secrets for dev; if the dev env doesn't have it, 
+sendInvitationEmail should log "[email] RESEND_API_KEY not set" 
+(matching the existing pattern in services/email.ts) and return 
+success: false without throwing.
+
+# Output
+
+1. Diff for server/services/email.ts (new function)
+2. Diff for server/routes.ts (POST /api/invitations wire-up + 
+   account name query)
+3. Diff for .env.example (APP_URL if needed)
+4. The exact invite URL format you used (from team.tsx) — confirm 
+   it matches what the frontend already produces
+5. TS error count (target: 33)
+6. Confirm: no schema changes, no other endpoints touched, no git operations
+
+Wait for me to review.

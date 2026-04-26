@@ -116,6 +116,90 @@ export async function sendEmailVerificationEmail(to: string, verificationToken: 
   console.log("[email] Verification email sent:", data?.id);
 }
 
+const INVITATION_ROLE_LABELS: Record<string, string> = {
+  admin: "Admin",
+  manager: "Manager",
+  standard: "Standard User",
+  restricted: "Restricted User",
+};
+
+export async function sendInvitationEmail(params: {
+  to: string;
+  inviterName: string | null;
+  inviterEmail: string;
+  accountName: string;
+  role: string;
+  inviteUrl: string;
+  expiresAt: Date;
+}): Promise<{ success: boolean; error?: string }> {
+  const { to, inviterName, inviterEmail, accountName, role, inviteUrl, expiresAt } = params;
+  const inviterDisplay = inviterName?.trim() || inviterEmail;
+  const roleLabel = INVITATION_ROLE_LABELS[role] || "User";
+  const expiresFormatted = expiresAt.toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+
+  if (!resend) {
+    console.warn("[email] Skipping invitation send — Resend not configured");
+    return { success: false, error: "RESEND_API_KEY not set" };
+  }
+
+  const subject = `${inviterDisplay} invited you to join ${accountName} on Field View`;
+
+  try {
+    const { data, error } = await resend.emails.send({
+      from: FROM,
+      replyTo: REPLY_TO,
+      to,
+      subject,
+      html: `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 560px; margin: 0 auto; padding: 40px 20px; color: #111;">
+        <h1 style="font-size: 24px; margin-bottom: 16px;">You're invited to Field View</h1>
+        <p style="font-size: 16px; line-height: 1.5; margin-bottom: 16px;">Hi,</p>
+        <p style="font-size: 16px; line-height: 1.5; margin-bottom: 16px;">
+          <strong>${inviterDisplay}</strong> invited you to join <strong>${accountName}</strong> on Field View as a ${roleLabel}.
+        </p>
+        <p style="font-size: 16px; line-height: 1.5; margin-bottom: 24px;">
+          Field View is the field intelligence platform for documenting jobsites, tracking project progress, and collaborating with your team.
+        </p>
+        <p style="margin-bottom: 24px;">
+          <a href="${inviteUrl}" style="background: #F09000; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+            Accept invitation
+          </a>
+        </p>
+        <p style="font-size: 14px; color: #666; line-height: 1.5; margin-bottom: 8px;">
+          Or paste this link into your browser:
+        </p>
+        <p style="font-size: 13px; color: #666; word-break: break-all; margin-bottom: 24px;">
+          ${inviteUrl}
+        </p>
+        <p style="font-size: 14px; color: #666; line-height: 1.5;">
+          This invitation expires on ${expiresFormatted}.
+        </p>
+        <hr style="border: none; border-top: 1px solid #eee; margin: 32px 0;">
+        <p style="font-size: 12px; color: #999;">
+          Field View &middot; <a href="https://field-view.com" style="color: #999;">field-view.com</a>
+        </p>
+      </div>
+    `,
+      text: `You're invited to Field View\n\nHi,\n\n${inviterDisplay} invited you to join ${accountName} on Field View as a ${roleLabel}.\n\nField View is the field intelligence platform for documenting jobsites, tracking project progress, and collaborating with your team.\n\nAccept your invitation: ${inviteUrl}\n\nOr paste this link into your browser: ${inviteUrl}\n\nThis invitation expires on ${expiresFormatted}.\n\n— Field View`,
+    });
+
+    if (error) {
+      console.error("[email] Failed to send invitation:", error);
+      return { success: false, error: error.message };
+    }
+
+    console.log("[email] Invitation email sent:", data?.id);
+    return { success: true };
+  } catch (err: any) {
+    console.error("[email] Failed to send invitation:", err);
+    return { success: false, error: err?.message || "unknown error" };
+  }
+}
+
 export async function sendWelcomeEmail(to: string, firstName?: string | null): Promise<void> {
   if (!resend) {
     console.warn("[email] Skipping welcome send — Resend not configured");
