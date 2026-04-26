@@ -383,13 +383,10 @@ export async function setupAuth(app: Express) {
       }
       req.login(user, (err) => {
         if (err) return next(err);
-        console.log("[login-diag] req.login complete, sessionID:", req.sessionID, "session.passport:", (req.session as any)?.passport);
         req.session.save(async (saveErr) => {
           if (saveErr) {
-            console.log("[login-diag] session.save ERROR:", saveErr);
             return next(saveErr);
           }
-          console.log("[login-diag] session.save complete, sessionID:", req.sessionID);
           const { password: _, ...safeUser } = user;
           const safeUserWithBilling = await overlayAccountBillingOnUser(safeUser, req);
           return res.json(safeUserWithBilling);
