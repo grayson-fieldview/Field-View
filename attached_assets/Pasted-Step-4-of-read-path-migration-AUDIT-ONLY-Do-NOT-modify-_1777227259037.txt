@@ -1,0 +1,86 @@
+Step 4 of read-path migration: AUDIT ONLY. Do NOT modify any code.
+
+# Context
+
+We've migrated the backend read path (middleware + endpoint) and 
+write path (webhook) for billing state to be flag-controlled via 
+ACCOUNT_BILLING_ENABLED. Backend reads/writes route through 
+getAccountBilling() / writeAccountBilling() helpers.
+
+Now we need to verify the FRONTEND reads subscription state correctly 
+under both flag states. Step 4 is an investigation — figure out what 
+needs to change before we change anything.
+
+# Audit checklist
+
+For each finding, cite the file path + line numbers.
+
+## 1. SubscriptionGate component
+
+Find where this component lives. Likely in client/src/App.tsx around 
+the route definitions, or in a separate components/SubscriptionGate.tsx 
+file. Show me the actual code that decides "render app" vs 
+"render SubscribePage" / "render paywall".
+
+For each branch in the gate logic, identify which fields it reads 
+(subscriptionStatus, trialEndsAt, etc) and from WHERE (the user object 
+loaded by useAuth, a separate /api/subscription query, etc).
+
+## 2. /api/subscription consumers
+
+Search the frontend for "/api/subscription" or similar. Find every 
+component/hook/page that fetches from this endpoint. List each one 
+and what it does with the response.
+
+## 3. Direct reads from user.subscriptionStatus / user.trialEndsAt / 
+user.stripeCustomerId / user.stripeSubscriptionId in the frontend
+
+Search client/ for any of these field names being read off a user 
+object. Common patterns:
+- user.subscriptionStatus
+- currentUser.subscriptionStatus
+- data?.user?.subscriptionStatus
+- useAuth().user.subscriptionStatus
+
+For each match, cite the file:line and report what the code is doing 
+with the field.
+
+This is the critical question: does the frontend get billing state 
+from the user object (which would be user-level data, populated by 
+whatever endpoint loads the user — probably /api/auth/user or similar), 
+or does it call /api/subscription separately?
+
+If the frontend reads billing state from the user object, then we 
+need to figure out where that user object is loaded and decide whether 
+to:
+(a) Update the loading endpoint to also include account-level billing 
+    when flag is on
+(b) Keep the user-level data on the loading endpoint, and have 
+    components that care about billing call /api/subscription separately
+
+## 4. The user-loading endpoint
+
+Find what endpoint the frontend calls to get the current user. Likely 
+GET /api/auth/user or similar. Find the handler. Report what fields 
+it returns. If it returns subscriptionStatus, trialEndsAt, etc on the 
+user object, that's a place where the read path is NOT yet flag-aware 
+— it's still hardcoded to read from users table.
+
+## 5. SubscribePage / paywall component
+
+Find where this page lives. What does it show? Does it read any 
+subscription state?
+
+## 6. Settings → Billing area
+
+We previously discussed gating this. Find the component and report 
+what subscription/billing fields it displays.
+
+# Output
+
+A structured audit report covering all 6 sections. Cite file:line 
+for everything. At the end, give me a short list of "places that 
+need to change" vs "places already covered by Step 2".
+
+Do NOT modify any code. Audit only. Wait for me to triage based on 
+what you find.
