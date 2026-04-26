@@ -121,16 +121,24 @@ export async function bootstrapAdminAndOrphans() {
     const { users, accounts } = await import("@shared/models/auth");
     const { eq, isNull } = await import("drizzle-orm");
 
-    const adminAccounts = [
+    const adminAccounts: Array<{
+      email: string;
+      password: string | undefined;
+      passwordEnvVar: string;
+      firstName: string;
+      lastName: string;
+    }> = [
       {
         email: "grayson@field-view.com",
-        password: "Georgia#22",
+        password: process.env.SEED_ADMIN_PASSWORD_PRIMARY,
+        passwordEnvVar: "SEED_ADMIN_PASSWORD_PRIMARY",
         firstName: "Grayson",
         lastName: "Gladu",
       },
       {
         email: "grant@field-view.com",
-        password: "Roswell#2018",
+        password: process.env.SEED_ADMIN_PASSWORD_SECONDARY,
+        passwordEnvVar: "SEED_ADMIN_PASSWORD_SECONDARY",
         firstName: "Grant",
         lastName: "",
       },
@@ -172,6 +180,12 @@ export async function bootstrapAdminAndOrphans() {
           );
         }
       } else {
+        if (!admin.password) {
+          console.warn(
+            `[seed-admin] Skipping ${admin.email} — ${admin.passwordEnvVar} not set`,
+          );
+          continue;
+        }
         const hash = await bcryptMod.default.hash(admin.password, 12);
         const [newAccount] = await db
           .insert(accounts)
