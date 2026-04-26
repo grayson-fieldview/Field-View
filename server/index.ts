@@ -10,7 +10,7 @@ import { authStorage } from "./replit_integrations/auth/storage";
 import { db } from "./db";
 import { users, accounts } from "@shared/models/auth";
 import { eq } from "drizzle-orm";
-import { isAccountBillingEnabled } from "./lib/billing";
+import { isAccountBillingEnabled, computeSeatCountFromSub } from "./lib/billing";
 
 const app = express();
 
@@ -254,6 +254,7 @@ async function writeAccountBilling(
     subscriptionStatus?: string;
     stripeSubscriptionId?: string;
     trialEndsAt?: Date | null;
+    seatCount?: number;
   },
 ) {
   if (!isAccountBillingEnabled()) return;
@@ -326,14 +327,17 @@ async function handleSubscriptionEvent(event: any) {
         const user = await authStorage.getUserByStripeCustomerId(customerId);
         if (user) {
           let appStatus = "trialing";
+          let seatCountFromSub: number | undefined;
           try {
             const stripe = await getUncachableStripeClient();
             const sub = await stripe.subscriptions.retrieve(
               subscriptionId as string,
+              { expand: ["items.data.price.product"] },
             );
             if (sub.status === "active") appStatus = "active";
             else if (sub.status === "trialing") appStatus = "trialing";
             else if (sub.status === "past_due") appStatus = "past_due";
+            seatCountFromSub = computeSeatCountFromSub(sub);
           } catch (e) {}
           await authStorage.updateUser(user.id, {
             stripeSubscriptionId: subscriptionId as string,
@@ -345,6 +349,7 @@ async function handleSubscriptionEvent(event: any) {
           await writeAccountBilling(type, customerId as string, {
             stripeSubscriptionId: subscriptionId as string,
             subscriptionStatus: appStatus,
+            seatCount: seatCountFromSub,
           });
         }
       }
@@ -360,6 +365,15 @@ async function handleSubscriptionEvent(event: any) {
         else if (status === "canceled" || status === "unpaid")
           appStatus = "canceled";
 
+        let seatCountFromSub: number | undefined;
+        try {
+          const stripe = await getUncachableStripeClient();
+          const fullSub = await stripe.subscriptions.retrieve(data.id, {
+            expand: ["items.data.price.product"],
+          });
+          seatCountFromSub = computeSeatCountFromSub(fullSub);
+        } catch (e) {}
+
         await authStorage.updateUser(user.id, {
           subscriptionStatus: appStatus,
           stripeSubscriptionId: data.id,
@@ -368,6 +382,7 @@ async function handleSubscriptionEvent(event: any) {
         await writeAccountBilling(type, customerId as string, {
           subscriptionStatus: appStatus,
           stripeSubscriptionId: data.id,
+          seatCount: seatCountFromSub,
         });
       }
     } else if (type === "customer.subscription.deleted") {

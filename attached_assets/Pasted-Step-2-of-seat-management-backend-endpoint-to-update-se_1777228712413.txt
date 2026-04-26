@@ -1,0 +1,157 @@
+Step 2 of seat management: backend endpoint to update seat count via 
+Stripe. This is the first time we're writing to a real customer's 
+Stripe subscription. Be very careful.
+Do NOT push to git. Show me the diff and wait for approval.
+
+# Context
+
+Spec: per-account billing. Each account has a Stripe subscription with 
+quantity = seat_count. The Admin (or Manager when adding via invite) 
+can change seat_count, which updates Stripe quantity and triggers 
+prorated charges.
+
+We need a new endpoint that takes a desired seat_count and applies the 
+change to Stripe + the database.
+
+# Task
+
+## 1. Endpoint signature
+
+POST /api/account/seats
+Auth: requireAdminOrManager 
+  (Manager will use this for invite-driven adds; Admin uses it for 
+  manual seat management)
+
+Request body:
+{
+  desiredCount: number,    // the total seat count after the change
+  expectedCurrent: number, // optimistic lock — current seat_count as 
+                           // the client knows it. Used to detect 
+                           // concurrent modifications.
+}
+
+Response (success):
+{
+  newSeatCount: number,
+  stripeUpdated: boolean,    // whether we called Stripe (false if 
+                             // pre-checkout account, see below)
+  prorationAmount: number | null,  // dollars charged today, null if 
+                             // no Stripe call or trial
+}
+
+## 2. Validation (return 400 with clear messages)
+
+- desiredCount must be integer >= 3 (base plan minimum)
+- desiredCount must be >= current active user count in the account 
+  (otherwise we'd have more users than seats)
+- desiredCount must not equal current seat_count (no-op rejected)
+- expectedCurrent must match the current accounts.seat_count exactly 
+  — if not, return 409 Conflict with message "Seat count changed; 
+  please refresh." This is the optimistic lock.
+
+## 3. Pre-checkout accounts (no Stripe customer yet)
+
+If accounts.stripe_customer_id is NULL (account never subscribed):
+  Return 400 with message: "Set up billing before changing seat count."
+
+We don't want to support seat changes pre-subscription.
+
+## 4. Stripe update logic
+
+Use the existing Stripe client (look at server/stripeClient.ts and 
+server/routes.ts for the existing pattern — POST /api/create-checkout-session 
+already uses Stripe).
+
+Steps:
+a. Load the subscription via stripe.subscriptions.retrieve(subId)
+b. Find the line item for "Additional Seat" — this is the per-seat 
+   add-on. The base plan ($79 monthly OR $588 annual) is 1 quantity 
+   always. Additional Seat quantity = (desiredCount - 3).
+   - If desiredCount = 3, quantity should be 0 — but Stripe may not 
+     allow a zero-quantity line item. If so, skip updating that line 
+     and the customer just has the base plan. (We'll document this 
+     edge case in the response.)
+c. Call stripe.subscriptions.update(subId, {
+     items: [{ id: lineItemId, quantity: newQty }],
+     proration_behavior: "create_prorations",
+   })
+d. Capture the prorated amount from the response (look at 
+   subscription.latest_invoice or upcoming invoice — Agent, you'll 
+   need to inspect Stripe API docs for the right field).
+
+## 5. Local DB update
+
+In a transaction:
+- UPDATE accounts SET seat_count = desiredCount WHERE id = req.user.accountId 
+  AND seat_count = expectedCurrent (so even with the optimistic check 
+  above, the UPDATE is conditional)
+- If 0 rows affected → another request beat us, return 409
+
+## 6. Webhook handler enhancement
+
+Per Step 3 of the read-path migration, we already have writeAccountBilling 
+in server/index.ts that dual-writes billing fields to accounts. Today 
+it handles subscriptionStatus, stripeSubscriptionId, trialEndsAt.
+
+Add seat_count to the dual-write. When customer.subscription.updated 
+fires, the webhook should:
+- Determine the new seat count from the subscription line items (base 
+  plan qty 1 + additional seat qty = total seats)
+- Pass it through writeAccountBilling so it gets synced to accounts.seat_count
+
+This handles the case where the change happens via Stripe Customer 
+Portal (admin clicks "manage subscription" and changes plan/seats from 
+Stripe's UI directly). We need our DB to stay in sync with Stripe.
+
+## 7. Trial behavior
+
+Spec says during trial, seat changes don't charge today but the new 
+quantity applies when trial ends. Stripe's proration_behavior 
+"create_prorations" handles this automatically — during a trial, no 
+proration invoice is created. Just pass the param and let Stripe handle 
+it. The frontend modal will explain "you won't be charged today" via 
+its own copy.
+
+## 8. Logging
+
+console.log("[seat-change]", JSON.stringify({
+  accountId,
+  triggeredByUserId: req.user.id,
+  triggeredByRole: req.user.role,
+  oldSeatCount: expectedCurrent,
+  newSeatCount: desiredCount,
+  stripeUpdated: <bool>,
+  prorationAmount: <number | null>,
+}));
+
+One log line per successful change. Helps audit trail and verifies 
+the flow when we test.
+
+## 9. What NOT to change
+
+- Existing Stripe checkout endpoints (POST /api/create-checkout-session, 
+  POST /api/confirm-checkout)
+- Any frontend code (handled in next prompt)
+- The base plan price IDs (Monthly $79, Annual $588) — those don't change
+- The schema
+- Existing webhook event handlers other than adding seat_count to the 
+  dual-write
+
+## 10. Concurrency safety
+
+The optimistic lock via expectedCurrent + the conditional UPDATE handles 
+concurrent admin clicks. If two admins click "Add Seat" at the same time, 
+exactly one will win; the other gets 409 and refreshes.
+
+# Output
+
+1. Diff for server/routes.ts (new endpoint)
+2. Diff for server/index.ts (webhook handler seat_count addition)
+3. Any new helper functions (e.g., to extract seat count from Stripe 
+   subscription line items)
+4. TS error count (target: 33)
+5. Confirm: no schema changes, no frontend changes, no git operations
+6. Flag any Stripe API behaviors you're uncertain about — better to 
+   flag than guess
+
+Wait for me to review carefully. This touches real customers' billing.

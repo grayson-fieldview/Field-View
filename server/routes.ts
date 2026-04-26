@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import crypto from "crypto";
 import { storage } from "./storage";
 import { setupAuth, registerAuthRoutes, isAuthenticated, requireActiveSubscription } from "./replit_integrations/auth";
-import { getAccountBilling, isAccountBillingEnabled, overlayAccountBillingOnUser } from "./lib/billing";
+import { getAccountBilling, isAccountBillingEnabled, overlayAccountBillingOnUser, isSeatAddonItem, computeSeatCountFromSub } from "./lib/billing";
 import { requireAdmin, requireAdminOrManager } from "./middleware/auth";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
@@ -1006,6 +1006,139 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error fetching seat usage:", error);
       res.status(500).json({ message: "Failed to fetch seat usage" });
+    }
+  });
+
+  app.post("/api/account/seats", requireAdminOrManager, async (req: any, res) => {
+    try {
+      const accountId = req.user.accountId;
+      const { desiredCount, expectedCurrent } = req.body || {};
+
+      if (!Number.isInteger(desiredCount) || desiredCount < 3) {
+        return res.status(400).json({ message: "desiredCount must be an integer >= 3" });
+      }
+      if (!Number.isInteger(expectedCurrent)) {
+        return res.status(400).json({ message: "expectedCurrent must be an integer" });
+      }
+      if (desiredCount === expectedCurrent) {
+        return res.status(400).json({ message: "No change requested" });
+      }
+
+      const accountRows = await db
+        .select({
+          seatCount: accounts.seatCount,
+          stripeCustomerId: accounts.stripeCustomerId,
+          stripeSubscriptionId: accounts.stripeSubscriptionId,
+        })
+        .from(accounts)
+        .where(eq(accounts.id, accountId))
+        .limit(1);
+      if (accountRows.length === 0) {
+        return res.status(404).json({ message: "Account not found" });
+      }
+      const acc = accountRows[0];
+      const currentSeats = acc.seatCount ?? 3;
+
+      if (currentSeats !== expectedCurrent) {
+        return res.status(409).json({ message: "Seat count changed; please refresh." });
+      }
+      if (!acc.stripeCustomerId || !acc.stripeSubscriptionId) {
+        return res.status(400).json({ message: "Set up billing before changing seat count." });
+      }
+
+      const userCountRows = await db
+        .select({ value: count() })
+        .from(users)
+        .where(eq(users.accountId, accountId));
+      const activeUserCount = Number(userCountRows[0]?.value ?? 0);
+      if (desiredCount < activeUserCount) {
+        return res.status(400).json({
+          message: `Cannot reduce to ${desiredCount} seats — account has ${activeUserCount} active users.`,
+        });
+      }
+
+      const stripe = await getUncachableStripeClient();
+      const sub = await stripe.subscriptions.retrieve(acc.stripeSubscriptionId, {
+        expand: ["items.data.price.product"],
+      });
+
+      const seatLineItem = sub.items.data.find((item) => isSeatAddonItem(item));
+      const desiredAddonQty = desiredCount - 3;
+      let itemsUpdate: any[] = [];
+
+      if (seatLineItem) {
+        if (desiredAddonQty > 0) {
+          itemsUpdate = [{ id: seatLineItem.id, quantity: desiredAddonQty }];
+        } else {
+          itemsUpdate = [{ id: seatLineItem.id, deleted: true }];
+        }
+      } else if (desiredAddonQty > 0) {
+        const baseItem = sub.items.data.find((item) => !isSeatAddonItem(item));
+        const interval = (baseItem?.price as any)?.recurring?.interval;
+        if (!interval) {
+          return res.status(500).json({ message: "Could not determine billing interval from subscription" });
+        }
+        const allPrices = await stripe.prices.list({
+          active: true,
+          expand: ["data.product"],
+          limit: 100,
+        });
+        const seatPrice = allPrices.data.find((p) => {
+          const product = p.product as any;
+          const name = (product?.name || "").toLowerCase();
+          return (
+            (name.includes("additional") || name.includes("seat")) &&
+            p.recurring?.interval === interval
+          );
+        });
+        if (!seatPrice) {
+          return res.status(500).json({
+            message: `Additional Seat price not found for ${interval} billing`,
+          });
+        }
+        itemsUpdate = [{ price: seatPrice.id, quantity: desiredAddonQty }];
+      }
+
+      let stripeUpdated = false;
+      let prorationAmount: number | null = null;
+
+      if (itemsUpdate.length > 0) {
+        await stripe.subscriptions.update(acc.stripeSubscriptionId, {
+          items: itemsUpdate,
+          proration_behavior: "create_prorations",
+        });
+        stripeUpdated = true;
+      }
+
+      const updateResult = await db
+        .update(accounts)
+        .set({ seatCount: desiredCount })
+        .where(and(eq(accounts.id, accountId), eq(accounts.seatCount, expectedCurrent)))
+        .returning({ id: accounts.id });
+
+      if (updateResult.length === 0) {
+        return res.status(409).json({
+          message: "Seat count changed during update; Stripe was updated but DB was not. Please refresh.",
+        });
+      }
+
+      console.log(
+        "[seat-change]",
+        JSON.stringify({
+          accountId,
+          triggeredByUserId: req.user.id,
+          triggeredByRole: req.user.role,
+          oldSeatCount: expectedCurrent,
+          newSeatCount: desiredCount,
+          stripeUpdated,
+          prorationAmount,
+        }),
+      );
+
+      return res.json({ newSeatCount: desiredCount, stripeUpdated, prorationAmount });
+    } catch (error: any) {
+      console.error("Seat update error:", error);
+      res.status(500).json({ message: error.message || "Failed to update seat count" });
     }
   });
 

@@ -75,6 +75,23 @@ export async function getAccountBilling(req: any): Promise<BillingState> {
   };
 }
 
+export function isSeatAddonItem(item: any): boolean {
+  const product = item?.price?.product;
+  const productName = typeof product === "string" ? "" : (product?.name || "");
+  const lower = productName.toLowerCase();
+  return lower.includes("additional") || lower.includes("seat");
+}
+
+export function computeSeatCountFromSub(sub: any): number {
+  let extra = 0;
+  for (const item of sub?.items?.data ?? []) {
+    if (isSeatAddonItem(item)) {
+      extra += item.quantity || 0;
+    }
+  }
+  return 3 + extra;
+}
+
 export async function overlayAccountBillingOnUser<T extends Record<string, any>>(
   user: T,
   req: any,
