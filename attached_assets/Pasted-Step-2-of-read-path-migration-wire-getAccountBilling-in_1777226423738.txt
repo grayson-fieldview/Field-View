@@ -1,0 +1,106 @@
+Step 2 of read-path migration: wire getAccountBilling() into 
+requireActiveSubscription middleware and GET /api/subscription endpoint. 
+Server-side only. Do NOT push to git. Show me the diff and wait for approval.
+
+# Context
+
+Step 1 (just shipped) added server/lib/billing.ts with two exports:
+- getAccountBilling(req) — returns BillingState from either users or accounts 
+  table, depending on ACCOUNT_BILLING_ENABLED env flag
+- isAccountBillingEnabled() — returns boolean
+
+Today, requireActiveSubscription middleware and GET /api/subscription 
+both read directly from req.user.subscriptionStatus / req.user.trialEndsAt. 
+We're switching them to read via getAccountBilling().
+
+Behavior must be IDENTICAL when flag is OFF (which it is in all envs today). 
+When flag is ON, reads come from accounts table instead.
+
+# Task
+
+## 1. Find the requireActiveSubscription middleware
+
+Likely in server/routes.ts or server/middleware/. Find the function definition.
+Cite file path and line numbers in your output.
+
+## 2. Update requireActiveSubscription
+
+Replace direct reads from req.user.subscriptionStatus / req.user.trialEndsAt 
+with a call to getAccountBilling(req). Use the returned object's fields 
+instead.
+
+The logic — what counts as "active" — must be IDENTICAL to today. Do NOT 
+change the rules for which subscription_status values pass through 
+(e.g., "active", "trialing", "trial" with future trialEndsAt, etc.). 
+Only change WHERE the data is read from.
+
+If you find any other fields read from req.user that are NOT in 
+BillingState (e.g., something like trialStartedAt or subscriptionTier), 
+flag them in your output and leave them reading from req.user for now. 
+We'll handle additional fields later if needed.
+
+Import getAccountBilling at the top of the file from "./lib/billing" 
+(adjust relative path as needed).
+
+## 3. Find GET /api/subscription
+
+Likely in server/routes.ts. Find the handler.
+
+## 4. Update GET /api/subscription
+
+Same treatment: replace direct req.user reads with getAccountBilling(req).
+
+Add ONE diagnostic log line at the START of the handler (before any 
+expensive operations):
+
+  const billing = await getAccountBilling(req);
+  console.log("[billing-source]", JSON.stringify({
+    userId: req.user.id,
+    accountId: req.user.accountId,
+    source: billing.source,
+    flagEnabled: isAccountBillingEnabled(),
+  }));
+
+This log fires once per /api/subscription call (which is rare, on page 
+load), so it won't be log spam. It tells us in production logs whether 
+the account-level path is being exercised correctly when we flip the 
+flag.
+
+DO NOT add similar logs to requireActiveSubscription — that runs on every 
+authenticated request and would create log spam.
+
+The response shape must stay IDENTICAL — same JSON keys, same value 
+types. Frontend doesn't need to know about the migration.
+
+## 5. Do NOT touch any of these in this prompt:
+
+- The Stripe webhook handler (writes — handled in Step 3)
+- POST /api/create-checkout-session (creates new subs — handled later)
+- POST /api/create-portal-session (Stripe Customer Portal — handled later)
+- Any frontend code (handled in Step 4)
+- Any other middleware
+- Any schema files
+- The bootstrapAdminAndOrphans function (creates admin users on boot)
+
+# Verify
+
+Compile-check after the changes:
+- TS error count should be 33 (the baseline)
+- If new errors appear, they're regressions — STOP and report
+
+Type-safety note: getAccountBilling returns a BillingState with possibly 
+null fields. The current code probably assumes req.user.subscriptionStatus 
+might be null/undefined too, but if you hit any "X is possibly null" 
+TS errors after the change, handle them defensively by treating null 
+as "no subscription" — same as today's behavior when subscriptionStatus 
+is unset.
+
+# Output
+
+1. Diff for the file containing requireActiveSubscription
+2. Diff for the file containing GET /api/subscription (likely same file)
+3. Any other field reads from req.user that you flagged for later (per task #2)
+4. TS error count
+5. Confirm: no other endpoints touched, no schema changes, no git operations
+
+Wait for me to review before doing anything else.

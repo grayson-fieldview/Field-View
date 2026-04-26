@@ -3,6 +3,7 @@ import { createServer, type Server } from "http";
 import crypto from "crypto";
 import { storage } from "./storage";
 import { setupAuth, registerAuthRoutes, isAuthenticated, requireActiveSubscription } from "./replit_integrations/auth";
+import { getAccountBilling, isAccountBillingEnabled } from "./lib/billing";
 import { requireAdmin, requireAdminOrManager } from "./middleware/auth";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
@@ -1783,13 +1784,18 @@ export async function registerRoutes(
 
   app.get("/api/subscription", isAuthenticated, async (req: any, res) => {
     try {
-      const user = await authStorage.getUser(req.user.id);
-      if (!user) return res.status(404).json({ message: "User not found" });
+      const billing = await getAccountBilling(req);
+      console.log("[billing-source]", JSON.stringify({
+        userId: req.user.id,
+        accountId: req.user.accountId,
+        source: billing.source,
+        flagEnabled: isAccountBillingEnabled(),
+      }));
 
       res.json({
-        subscriptionStatus: user.subscriptionStatus || "none",
-        stripeSubscriptionId: user.stripeSubscriptionId,
-        trialEndsAt: user.trialEndsAt,
+        subscriptionStatus: billing.subscriptionStatus || "none",
+        stripeSubscriptionId: billing.stripeSubscriptionId,
+        trialEndsAt: billing.trialEndsAt,
       });
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch subscription" });

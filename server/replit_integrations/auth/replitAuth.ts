@@ -13,6 +13,7 @@ import { db, pool } from "../../db";
 import { eq, and, isNull, gt } from "drizzle-orm";
 import { passwordResetTokens, emailVerificationTokens, users, accounts, invitations, type User } from "@shared/models/auth";
 import { sendPasswordResetEmail, sendEmailVerificationEmail, sendWelcomeEmail } from "../../services/email";
+import { getAccountBilling } from "../../lib/billing";
 import { verifyRecaptchaToken } from "../../services/recaptcha";
 import { CURRENT_TERMS_VERSION } from "@shared/constants";
 import {
@@ -664,13 +665,14 @@ export const requireActiveSubscription: RequestHandler = async (req: any, res, n
     return res.status(401).json({ message: "Unauthorized" });
   }
 
-  const status = user.subscriptionStatus;
+  const billing = await getAccountBilling(req);
+  const status = billing.subscriptionStatus;
   if (status === "active" || status === "trialing") {
     return next();
   }
 
   if (status === "trial") {
-    const trialEndsAt = user.trialEndsAt ? new Date(user.trialEndsAt) : null;
+    const trialEndsAt = billing.trialEndsAt ? new Date(billing.trialEndsAt) : null;
     if (trialEndsAt && trialEndsAt > new Date()) {
       return next();
     }
