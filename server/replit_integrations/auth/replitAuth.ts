@@ -237,13 +237,10 @@ export async function setupAuth(app: Express) {
 
   passport.serializeUser((user: any, cb) => cb(null, user.id));
   passport.deserializeUser(async (id: string, cb) => {
-    console.log("[auth-diag] deserializeUser called with id:", id);
     try {
       const user = await authStorage.getUser(id);
-      console.log("[auth-diag] deserializeUser result:", user ? `found user ${user.email || user.id}` : "USER NOT FOUND");
       cb(null, user || null);
     } catch (error) {
-      console.log("[auth-diag] deserializeUser error:", error);
       cb(error);
     }
   });
