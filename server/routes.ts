@@ -1131,32 +1131,6 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/admin/setup-account", async (req, res) => {
-    try {
-      const { email, password, setupKey } = req.body;
-      if (setupKey !== process.env.SESSION_SECRET) {
-        return res.status(403).json({ message: "Forbidden" });
-      }
-      if (!email) {
-        return res.status(400).json({ message: "Email required" });
-      }
-      const updates: any = { subscriptionStatus: "active", role: "admin" };
-      if (password) {
-        const bcrypt = await import("bcryptjs");
-        updates.password = await bcrypt.default.hash(password, 12);
-      }
-      const updated = await db.update(users)
-        .set(updates)
-        .where(eq(users.email, email))
-        .returning();
-      if (updated.length === 0) return res.status(404).json({ message: "User not found" });
-      const { password: _, ...safeUser } = updated[0];
-      res.json(safeUser);
-    } catch (error) {
-      res.status(500).json({ message: "Setup failed" });
-    }
-  });
-
   app.patch("/api/users/:userId/subscription", isAuthenticated, async (req: any, res) => {
     try {
       const currentUser = req.user;

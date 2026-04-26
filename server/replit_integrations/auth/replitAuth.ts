@@ -141,33 +141,6 @@ export async function setupAuth(app: Express) {
   app.use(passport.initialize());
   app.use(passport.session());
 
-  app.use((req, res, next) => {
-    if (req.path.startsWith("/api/")) {
-      console.log("[auth-diag]", JSON.stringify({
-        path: req.path,
-        method: req.method,
-        sessionID: req.sessionID,
-        hasSessionObj: !!req.session,
-        sessionPassport: (req.session as any)?.passport,
-        reqUser: req.user ? "present" : "missing",
-        isAuthenticated: typeof req.isAuthenticated === "function" ? req.isAuthenticated() : "n/a",
-        userAgent: req.headers["user-agent"]?.slice(0, 60),
-        origin: req.headers.origin || "(none)",
-        referer: req.headers.referer || "(none)",
-        hasCookieHeader: !!req.headers.cookie,
-        cookieFirstChars: req.headers.cookie?.slice(0, 50),
-        rawCookieHeader: req.headers.cookie || "(none)",
-        cookieHeaderLength: req.headers.cookie?.length || 0,
-        hasConnectSid: req.headers.cookie?.includes("connect.sid") || false,
-        sessionStoreLookup: "checking...",
-      }));
-      req.sessionStore.get(req.sessionID, (err, sessionData) => {
-        console.log("[store-diag] direct store lookup for sessionID", req.sessionID, "err:", err, "found:", !!sessionData, "hasPassport:", !!(sessionData as any)?.passport);
-      });
-    }
-    next();
-  });
-
   passport.use(
     new LocalStrategy(
       { usernameField: "email", passwordField: "password" },

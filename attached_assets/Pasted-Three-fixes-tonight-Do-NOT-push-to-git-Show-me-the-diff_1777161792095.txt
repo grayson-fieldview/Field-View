@@ -1,0 +1,58 @@
+Three fixes tonight. Do NOT push to git. 
+Show me the diff and wait for approval.
+
+# Fix 1: Remove cookie/session content from request logging
+
+server/replit_integrations/auth/replitAuth.ts:144-169 has an [auth-diag] 
+console.log block that runs on every /api/* request and logs:
+- rawCookieHeader (full cookie header including signed session cookie)
+- cookieFirstChars (first 50 chars of cookie)
+- sessionID
+- sessionPassport (which includes user.id)
+
+If these logs are forwarded to any third-party log aggregator (Sentry, 
+Vercel log drains, CloudWatch, etc.), session cookies are leaked and 
+session hijacking becomes trivial for anyone with log read access. 
+This defeats httpOnly.
+
+## Task
+
+Remove the [auth-diag] block entirely. We don't need ongoing diagnostic 
+logging on every request — if we ever need to debug a specific request, 
+we'll add targeted logs at that time.
+
+If there's any reason to keep some diagnostic info, the only safe fields 
+are: { path, method, isAuthenticated: !!req.user, hasUser: !!req.user }. 
+Nothing involving the cookie, sessionID, or session passport contents.
+
+# Fix 2: Delete /api/admin/setup-account endpoint
+
+server/routes.ts (around line 1135-1150) defines POST /api/admin/setup-account.
+
+Problems:
+- Uses SESSION_SECRET as a shared "setupKey" — secret reuse, compromise of 
+  one compromises both
+- No rate limiter — brute-forceable
+- Functionally redundant with bootstrapAdminAndOrphans in server/index.ts:113 
+  which auto-provisions admins on every server start
+
+## Task
+
+Delete the entire endpoint. No replacement needed — the bootstrap function 
+covers the use case.
+
+# Fix 3: Remove leftover debug logging
+
+server/index.ts may have a leftover console.log line from a debugging session 
+yesterday that prints the DATABASE_URL host. Search for "[db-debug]" or 
+"DATABASE_URL host" and remove the entire console.log line if found.
+
+# Output
+
+1. Diff for server/replit_integrations/auth/replitAuth.ts (Fix 1)
+2. Diff for server/routes.ts (Fix 2)
+3. Diff for server/index.ts (Fix 3, if found)
+4. TS error count (target: 33)
+5. Confirm: no other files modified, no schema changes, no git operations
+
+Wait for me to review.
