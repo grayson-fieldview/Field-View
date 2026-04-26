@@ -2,7 +2,12 @@ import { db, pool } from "../server/db";
 import { accounts, users } from "@shared/models/auth";
 import { eq, asc } from "drizzle-orm";
 
-const DRY_RUN = process.argv.includes("--dry-run");
+const APPLY = process.argv.includes("--apply");
+const DRY_RUN = !APPLY;
+if (process.argv.includes("--dry-run") && APPLY) {
+  console.error("Refusing to run: both --dry-run and --apply were passed. Pick one.");
+  process.exit(2);
+}
 
 type Stats = {
   total: number;
