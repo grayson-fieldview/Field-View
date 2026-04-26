@@ -1,0 +1,92 @@
+Wire [auth-fail] log lines to Sentry as captured events.
+Do NOT push to git. Show me the diff and wait for approval.
+
+# Context
+
+In server/replit_integrations/auth/replitAuth.ts, the LocalStrategy has 
+a structured log line for failed authentication attempts:
+
+  console.warn("[auth-fail]", JSON.stringify({ email, ip, reason, ts }));
+
+These currently land in stdout only — Vercel logs and console output. 
+No alerting, no aggregation, no signal if someone's brute-forcing.
+
+Sentry is already integrated (we saw sentry-environment=production in 
+request headers earlier). We want auth failures to flow into Sentry as 
+captured events so we can:
+- Alert on credential stuffing (multiple failed logins in short window)
+- See failed-auth patterns in Sentry's dashboard
+- Get notifications for unusual activity
+
+# Task
+
+## 1. Find the [auth-fail] log lines
+
+In server/replit_integrations/auth/replitAuth.ts. Cite file:line.
+
+## 2. Find how Sentry is initialized
+
+Likely server/index.ts or a dedicated sentry init file. Identify the 
+Sentry import and what's already imported (captureException, 
+captureMessage, addBreadcrumb, etc).
+
+## 3. Wire auth failures to Sentry
+
+For each [auth-fail] log line, after the existing console.warn, also:
+
+  Sentry.captureMessage("Auth failure", {
+    level: "warning",
+    tags: {
+      reason: <string>,        // user_not_found / invalid_password / email_not_verified
+      auth_provider: "local",  // (or whatever applies)
+    },
+    extra: {
+      email,
+      ip,
+      ts,
+    },
+  });
+
+Use captureMessage (not captureException) — these are not exceptions, 
+they're security events. The level "warning" maps to a yellow indicator 
+in Sentry's UI, not a red alert.
+
+The tags vs extra distinction matters: tags are searchable/filterable 
+in Sentry's UI; extra is metadata you see when you click into an event. 
+Putting `reason` as a tag means you can filter "all auth failures with 
+reason=invalid_password" in Sentry. Putting `email` as extra means it's 
+visible but not part of the event grouping.
+
+DO NOT put email or IP in tags — that would create unique events per 
+email/IP and pollute the event list. Tags should be low-cardinality 
+classifications.
+
+## 4. Don't break the console.warn
+
+Leave the existing console.warn in place. Sentry capture is additive — 
+console logs are useful for local dev where Sentry might not be running, 
+and for Vercel logs where we already grep them.
+
+## 5. Sentry not initialized? Defensive handling
+
+If Sentry isn't initialized (e.g., SENTRY_DSN not set in dev env), 
+the captureMessage call should silently succeed without throwing. 
+Verify the Sentry SDK behavior — most Sentry SDKs no-op when not 
+configured, but some throw. Wrap in try/catch defensively if needed.
+
+## 6. What NOT to change
+
+- Any other auth logic (login flow, password verification, rate limiting)
+- Existing log lines other than auth-fail
+- The schema
+- Sentry initialization itself
+- Any other endpoints
+
+# Output
+
+1. Diff for server/replit_integrations/auth/replitAuth.ts
+2. Confirm Sentry is already imported in that file (or add the import)
+3. TS error count (target: 33)
+4. Confirm: no other code changes, no git operations
+
+Wait for me to review.
