@@ -143,18 +143,29 @@ export async function setupAuth(app: Express) {
 
   passport.use(
     new LocalStrategy(
-      { usernameField: "email", passwordField: "password" },
-      async (email, password, done) => {
+      { usernameField: "email", passwordField: "password", passReqToCallback: true },
+      async (req: any, email: string, password: string, done: any) => {
+        const logFail = (reason: string) => {
+          console.warn("[auth-fail]", JSON.stringify({
+            email: (email || "").toLowerCase(),
+            ip: req.ip || req.socket?.remoteAddress || "unknown",
+            reason,
+            ts: new Date().toISOString(),
+          }));
+        };
         try {
           const user = await authStorage.getUserByEmail(email);
           if (!user || !user.password) {
+            logFail("user_not_found");
             return done(null, false, { message: "Invalid email or password" });
           }
           const isValid = await bcrypt.compare(password, user.password);
           if (!isValid) {
+            logFail("invalid_password");
             return done(null, false, { message: "Invalid email or password" });
           }
           if (user.authProvider === "local" && !user.emailVerified) {
+            logFail("email_not_verified");
             return done(null, false, { message: "email_not_verified" });
           }
           return done(null, user);
