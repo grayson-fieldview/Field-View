@@ -41,6 +41,95 @@ import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import type { User } from "@shared/models/auth";
 
+type SeatStatus = {
+  used: number;
+  total: number;
+  available: number;
+  overCapacity: boolean;
+  billingCycle: "monthly" | "annual" | null;
+  subscriptionStatus: string | null;
+  ownerName: string | null;
+  trialMaxSeats: number | null;
+};
+
+type SeatAddConfirmationDialogProps = {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  seatStatus: SeatStatus;
+  currentUserRole: "admin" | "manager";
+  onConfirm: () => Promise<void>;
+  isConfirming: boolean;
+};
+
+function SeatAddConfirmationDialog({
+  open,
+  onOpenChange,
+  seatStatus,
+  currentUserRole,
+  onConfirm,
+  isConfirming,
+}: SeatAddConfirmationDialogProps) {
+  const isAnnual = seatStatus.billingCycle === "annual";
+  const seatPrice = isAnnual ? "$243.60/yr" : "$29/mo";
+  const isTrial =
+    seatStatus.subscriptionStatus === "trialing" ||
+    seatStatus.subscriptionStatus === "trial";
+  const isManager = currentUserRole === "manager";
+  const subscriptionOwnerCopy = isManager
+    ? `${seatStatus.ownerName || "the account owner"}'s subscription`
+    : "your subscription";
+  const managerNotice = isManager
+    ? " The account owner will be notified of this change."
+    : "";
+
+  const title = isTrial
+    ? "Add seat — won't charge today"
+    : "Add a seat to your subscription";
+
+  const body = isTrial
+    ? `This will add a seat to ${subscriptionOwnerCopy}. You won't be charged today. When the trial ends, the subscription will include this seat at ${seatPrice}.${managerNotice}`
+    : `This will add a seat for ${seatPrice} to ${subscriptionOwnerCopy}. Prorated charges will appear on the next invoice.${managerNotice}`;
+
+  return (
+    <AlertDialog
+      open={open}
+      onOpenChange={(o) => {
+        if (!isConfirming) onOpenChange(o);
+      }}
+    >
+      <AlertDialogContent data-testid="dialog-seat-confirm">
+        <AlertDialogHeader>
+          <AlertDialogTitle data-testid="text-seat-confirm-title">{title}</AlertDialogTitle>
+          <AlertDialogDescription data-testid="text-seat-confirm-body">
+            {body}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={isConfirming}
+            data-testid="button-seat-confirm-cancel"
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={() => {
+              void onConfirm();
+            }}
+            disabled={isConfirming}
+            className="bg-[#F09000] hover:bg-[#d98000] text-white"
+            data-testid="button-seat-confirm-submit"
+          >
+            {isConfirming ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+            Confirm
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
 const roleLabels: Record<string, { label: string; description: string; color: string }> = {
   admin: { label: "Admin", description: "Has complete control over account.", color: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" },
   manager: { label: "Manager", description: "Access to all projects and can manage users.", color: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" },
@@ -54,6 +143,7 @@ export default function TeamPage() {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState("standard");
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
+  const [seatConfirmOpen, setSeatConfirmOpen] = useState(false);
   const { user: currentUser, isLoading: authLoading } = useAuth();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
@@ -73,6 +163,15 @@ export default function TeamPage() {
 
   const { data: pendingInvitations, isLoading: invitationsLoading } = useQuery<any[]>({
     queryKey: ["/api/invitations"],
+    enabled: canManageUsers,
+  });
+
+  const {
+    data: seatStatus,
+    isLoading: seatStatusLoading,
+    isError: seatStatusError,
+  } = useQuery<SeatStatus>({
+    queryKey: ["/api/account/seats"],
     enabled: canManageUsers,
   });
 
@@ -97,6 +196,7 @@ export default function TeamPage() {
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/invitations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/account/seats"] });
       setInviteEmail("");
       setInviteRole("standard");
       setInviteOpen(false);
@@ -106,6 +206,69 @@ export default function TeamPage() {
       toast({ title: "Failed to send invitation", description: error.message, variant: "destructive" });
     },
   });
+
+  const addSeat = useMutation({
+    mutationFn: async () => {
+      if (!seatStatus) throw new Error("Seat status not loaded");
+      const res = await apiRequest("POST", "/api/account/seats", {
+        desiredCount: seatStatus.total + 1,
+        expectedCurrent: seatStatus.total,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/account/seats"] });
+      setSeatConfirmOpen(false);
+      sendInvite.mutate();
+    },
+    onError: (error: Error) => {
+      if (
+        error.message.includes("changed") ||
+        error.message.includes("refresh")
+      ) {
+        queryClient.invalidateQueries({ queryKey: ["/api/account/seats"] });
+        setSeatConfirmOpen(false);
+        toast({
+          title: "Seat count changed",
+          description: "Please try again.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Failed to add seat",
+          description: error.message,
+          variant: "destructive",
+        });
+      }
+    },
+  });
+
+  const handleSendInvite = () => {
+    if (seatStatusLoading || !seatStatus || seatStatusError) {
+      toast({
+        title: "Cannot check seat availability",
+        description: "Try again in a moment.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (
+      seatStatus.trialMaxSeats != null &&
+      seatStatus.used >= seatStatus.trialMaxSeats
+    ) {
+      toast({
+        title: "Trial seat limit reached",
+        description: "Trial accounts are limited to 10 seats. Upgrade to add more.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (seatStatus.available > 0) {
+      sendInvite.mutate();
+      return;
+    }
+    setSeatConfirmOpen(true);
+  };
 
   const cancelInvite = useMutation({
     mutationFn: async (id: string) => {
@@ -209,15 +372,32 @@ export default function TeamPage() {
                   ))}
                 </div>
               </div>
+              {seatStatus?.trialMaxSeats != null &&
+                seatStatus.used >= seatStatus.trialMaxSeats && (
+                  <p
+                    className="text-xs text-destructive"
+                    data-testid="text-trial-cap-warning"
+                  >
+                    Trial accounts are limited to {seatStatus.trialMaxSeats} seats. Upgrade to add more.
+                  </p>
+                )}
               <DialogFooter>
                 <Button variant="outline" onClick={() => setInviteOpen(false)}>Cancel</Button>
                 <Button
-                  onClick={() => sendInvite.mutate()}
-                  disabled={!inviteEmail || sendInvite.isPending}
+                  onClick={handleSendInvite}
+                  disabled={
+                    !inviteEmail ||
+                    sendInvite.isPending ||
+                    addSeat.isPending ||
+                    seatStatusLoading ||
+                    !seatStatus ||
+                    (seatStatus?.trialMaxSeats != null &&
+                      seatStatus.used >= seatStatus.trialMaxSeats)
+                  }
                   className="bg-[#F09000] hover:bg-[#d98000] text-white"
                   data-testid="button-send-invite"
                 >
-                  {sendInvite.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                  {(sendInvite.isPending || addSeat.isPending) ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
                   Send Invitation
                 </Button>
               </DialogFooter>
@@ -225,6 +405,19 @@ export default function TeamPage() {
           </Dialog>
         )}
       </div>
+
+      {seatStatus && (isAdmin || isManager) && (
+        <SeatAddConfirmationDialog
+          open={seatConfirmOpen}
+          onOpenChange={setSeatConfirmOpen}
+          seatStatus={seatStatus}
+          currentUserRole={isAdmin ? "admin" : "manager"}
+          onConfirm={async () => {
+            await addSeat.mutateAsync();
+          }}
+          isConfirming={addSeat.isPending || sendInvite.isPending}
+        />
+      )}
 
       <div className="relative max-w-sm">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />

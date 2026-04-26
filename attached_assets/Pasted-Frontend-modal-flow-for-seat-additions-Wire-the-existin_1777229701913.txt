@@ -1,0 +1,219 @@
+Frontend modal flow for seat additions. Wire the existing invite UI 
+in client/src/pages/team.tsx to detect over-capacity invites and 
+prompt for confirmation before growing seats.
+Do NOT push to git. Show me the diff and wait for approval.
+
+# Context
+
+We have:
+- GET /api/account/seats — returns { used, total, available, overCapacity, 
+  billingCycle, subscriptionStatus, ownerName, trialMaxSeats }
+- POST /api/account/seats — body { desiredCount, expectedCurrent }, 
+  returns { newSeatCount, stripeUpdated, prorationAmount }
+
+We need to update client/src/pages/team.tsx to:
+1. Fetch seat data when the invite modal is relevant
+2. Detect when an invite would push over capacity
+3. Show a seat-add confirmation modal with role/status/cycle-aware copy
+4. On confirm, grow seats via POST /api/account/seats, then proceed 
+   with the invite
+5. Block invites entirely at the trial seat cap
+
+# Task
+
+## 1. Fetch seat data via React Query
+
+Add a useQuery hook in TeamPage that fetches /api/account/seats. 
+Enable only when canManageUsers (so non-admin/non-manager users 
+don't trigger 403 calls). Match the existing useQuery patterns in 
+the file.
+
+Extract a typed response. Field shape:
+
+  type SeatStatus = {
+    used: number;
+    total: number;
+    available: number;
+    overCapacity: boolean;
+    billingCycle: "monthly" | "annual" | null;
+    subscriptionStatus: string | null;
+    ownerName: string | null;
+    trialMaxSeats: number | null;
+  };
+
+## 2. Build the SeatAddConfirmationDialog component
+
+In the same file, define a new component (NOT exported, just local):
+
+  type SeatAddConfirmationDialogProps = {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+    seatStatus: SeatStatus;
+    currentUserRole: "admin" | "manager";
+    onConfirm: () => Promise<void>;
+    isConfirming: boolean;
+  };
+
+This is a Radix AlertDialog (not Dialog — AlertDialog is the right 
+pattern for "are you sure" confirmations).
+
+Copy logic:
+
+  const isAnnual = seatStatus.billingCycle === "annual";
+  const seatPrice = isAnnual ? "$243.60/yr" : "$29/mo";
+  const isTrial = 
+    seatStatus.subscriptionStatus === "trialing" || 
+    seatStatus.subscriptionStatus === "trial";
+  const isManager = currentUserRole === "manager";
+  
+  const subscriptionOwnerCopy = isManager
+    ? `${seatStatus.ownerName || "the account owner"}'s subscription`
+    : "your subscription";
+
+Title: 
+  - Trial: "Add seat — won't charge today"
+  - Paid: "Add a seat to your subscription"
+
+Body:
+  - Trial:
+    "This will add a seat to ${subscriptionOwnerCopy}. You won't be 
+    charged today. When the trial ends, the subscription will include 
+    this seat at ${seatPrice}.
+    [if Manager: ' The account owner will be notified of this change.']"
+  
+  - Paid:
+    "This will add a seat for ${seatPrice} to ${subscriptionOwnerCopy}. 
+    Prorated charges will appear on the next invoice.
+    [if Manager: ' The account owner will be notified of this change.']"
+
+Buttons:
+- "Cancel" — calls onOpenChange(false)
+- "Confirm" — calls onConfirm(), shows loading spinner when isConfirming
+
+## 3. Wire up the invite flow
+
+The existing invite flow in team.tsx works like this today:
+- User clicks "Invite Team Member" → invite modal opens
+- User fills in email + role → clicks "Send Invitation"
+- sendInvite mutation fires → POST /api/invitations
+- On success, invite modal closes
+
+We're inserting a check between "click Send Invitation" and "fire 
+POST /api/invitations":
+
+  Current behavior:
+    onClick={() => sendInvite.mutate()}
+
+  New behavior:
+    onClick={() => handleSendInvite()}
+
+  Where handleSendInvite is a new function that:
+    1. Reads seatStatus from the useQuery hook above
+    2. If seatStatus is loading or errored → show toast "Cannot 
+       check seat availability, try again" and bail
+    3. If trial AND used >= 10 (seatStatus.trialMaxSeats) → show 
+       toast "Trial accounts are limited to 10 seats. Upgrade to 
+       add more." and bail
+    4. If available > 0 → call sendInvite.mutate() as before. Done.
+    5. If available === 0 AND not at trial cap → close invite modal, 
+       set state to open the seat-add confirmation modal. Stash the 
+       email + role temporarily so we can resume after seat growth.
+
+The invite modal closes BEFORE the confirmation opens (rather than 
+stacking dialogs). Two distinct steps: confirm seat add → then 
+return to invite modal pre-filled and re-submit.
+
+Alternative simpler version if state management gets too tangled: 
+keep both modals open at once (confirmation modal stacks on top). 
+Acceptable but slightly worse UX. Use your judgment.
+
+## 4. Wire up the seat-add mutation
+
+New useMutation:
+
+  const addSeat = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/account/seats", {
+        desiredCount: seatStatus.total + 1,
+        expectedCurrent: seatStatus.total,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/account/seats"] });
+      // After seat growth, proceed with the invite
+      sendInvite.mutate();
+    },
+    onError: (error: Error) => {
+      // 409 = concurrent change. Refresh and ask user to retry.
+      if (error.message.includes("changed") || error.message.includes("refresh")) {
+        queryClient.invalidateQueries({ queryKey: ["/api/account/seats"] });
+        toast({ 
+          title: "Seat count changed", 
+          description: "Please try again.",
+          variant: "destructive" 
+        });
+      } else {
+        toast({ 
+          title: "Failed to add seat", 
+          description: error.message, 
+          variant: "destructive" 
+        });
+      }
+    },
+  });
+
+The seat-add confirmation dialog's onConfirm calls addSeat.mutate(). 
+On success, the existing sendInvite mutation fires automatically.
+
+## 5. Invalidate seat query after invite succeeds
+
+In the existing sendInvite.onSuccess, also invalidate 
+["/api/account/seats"] so the count refreshes. Currently it only 
+invalidates ["/api/invitations"].
+
+## 6. Disable the invite button at trial cap
+
+Add a condition on the disabled prop of the Send Invitation button 
+inside the existing invite modal:
+
+  disabled={
+    !inviteEmail || 
+    sendInvite.isPending || 
+    addSeat.isPending ||
+    (seatStatus?.trialMaxSeats != null && 
+     seatStatus.used >= seatStatus.trialMaxSeats)
+  }
+
+If at trial cap, also show a small message under the button: 
+"Trial accounts are limited to 10 seats. Upgrade to add more."
+
+## 7. What NOT to change
+
+- The existing invite mutation logic (POST /api/invitations) — 
+  no payload change, no behavior change
+- The existing role dropdown in the invite modal
+- Any other user management mutations (cancel invite, remove user, 
+  change role)
+- The Settings → Billing page or its SeatCountWidget
+- Anything outside team.tsx
+
+## 8. Edge cases to handle
+
+- seatStatus is undefined while loading → block the invite button 
+  (disabled), don't crash
+- seatStatus query returns 403 (user is Standard/Restricted) → 
+  shouldn't happen because canManageUsers gates them out, but if 
+  it does, show an error toast and don't try the seat-add path
+- User starts seat-add confirmation, then the modal is closed mid-flight 
+  → cancel pending state, don't fire any further mutations
+
+# Output
+
+1. Diff for client/src/pages/team.tsx
+2. TS error count (target: 33)
+3. Confirm: no schema changes, no backend changes, no git operations
+4. Note any UX choices you made (single modal vs stacked, etc) so I 
+   can review the call
+
+Wait for me to review.
