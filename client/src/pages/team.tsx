@@ -142,6 +142,8 @@ export default function TeamPage() {
   const [search, setSearch] = useState("");
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteFirstName, setInviteFirstName] = useState("");
+  const [inviteLastName, setInviteLastName] = useState("");
   const [inviteRole, setInviteRole] = useState("standard");
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
   const [seatConfirmOpen, setSeatConfirmOpen] = useState(false);
@@ -192,13 +194,20 @@ export default function TeamPage() {
 
   const sendInvite = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/invitations", { email: inviteEmail, role: inviteRole });
+      const res = await apiRequest("POST", "/api/invitations", {
+        email: inviteEmail,
+        role: inviteRole,
+        firstName: inviteFirstName.trim(),
+        lastName: inviteLastName.trim(),
+      });
       return res.json();
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/invitations"] });
       queryClient.invalidateQueries({ queryKey: ["/api/account/seats"] });
       setInviteEmail("");
+      setInviteFirstName("");
+      setInviteLastName("");
       setInviteRole("standard");
       setInviteOpen(false);
       toast({ title: "Invitation sent", description: `Invite link created for ${data.email}` });
@@ -323,7 +332,15 @@ export default function TeamPage() {
           <p className="text-sm text-muted-foreground mt-1">Manage your team members and invitations</p>
         </div>
         {canManageUsers && (
-          <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
+          <Dialog open={inviteOpen} onOpenChange={(open) => {
+            setInviteOpen(open);
+            if (!open) {
+              setInviteEmail("");
+              setInviteFirstName("");
+              setInviteLastName("");
+              setInviteRole("standard");
+            }
+          }}>
             <DialogTrigger asChild>
               <Button className="bg-[#F09000] hover:bg-[#d98000] text-white" data-testid="button-invite-user">
                 <UserPlus className="h-4 w-4 mr-2" />
@@ -348,6 +365,28 @@ export default function TeamPage() {
                     onChange={(e) => setInviteEmail(e.target.value)}
                     data-testid="input-invite-email"
                   />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <Label htmlFor="invite-first-name">First name *</Label>
+                    <Input
+                      id="invite-first-name"
+                      placeholder="Sarah"
+                      value={inviteFirstName}
+                      onChange={(e) => setInviteFirstName(e.target.value)}
+                      data-testid="input-invite-first-name"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="invite-last-name">Last name *</Label>
+                    <Input
+                      id="invite-last-name"
+                      placeholder="Smith"
+                      value={inviteLastName}
+                      onChange={(e) => setInviteLastName(e.target.value)}
+                      data-testid="input-invite-last-name"
+                    />
+                  </div>
                 </div>
                 <div className="space-y-2">
                   <Label>Role</Label>
@@ -388,6 +427,8 @@ export default function TeamPage() {
                   onClick={handleSendInvite}
                   disabled={
                     !inviteEmail ||
+                    !inviteFirstName.trim() ||
+                    !inviteLastName.trim() ||
                     sendInvite.isPending ||
                     addSeat.isPending ||
                     seatStatusLoading ||
@@ -446,7 +487,11 @@ export default function TeamPage() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 mb-1">
                         <Clock className="h-3.5 w-3.5 text-amber-500 shrink-0" />
-                        <p className="text-sm font-medium truncate">{inv.email}</p>
+                        <p className="text-sm font-medium truncate" data-testid={`text-invitation-name-${inv.id}`}>
+                          {inv.firstName && inv.lastName
+                            ? `${inv.firstName} ${inv.lastName} (${inv.email})`
+                            : inv.email}
+                        </p>
                       </div>
                       <div className="flex items-center gap-2 mb-1">
                         <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 ${roleInfo.color}`}>{roleInfo.label}</Badge>

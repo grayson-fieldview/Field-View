@@ -131,9 +131,11 @@ export async function sendInvitationEmail(params: {
   role: string;
   inviteUrl: string;
   expiresAt: Date;
+  recipientFirstName: string | null;
 }): Promise<{ success: boolean; error?: string }> {
-  const { to, inviterName, inviterEmail, accountName, role, inviteUrl, expiresAt } = params;
+  const { to, inviterName, inviterEmail, accountName, role, inviteUrl, expiresAt, recipientFirstName } = params;
   const inviterDisplay = inviterName?.trim() || inviterEmail;
+  const greetingName = recipientFirstName?.trim() || "there";
   const roleLabel = INVITATION_ROLE_LABELS[role] || "User";
   const expiresFormatted = expiresAt.toLocaleDateString("en-US", {
     month: "long",
@@ -157,7 +159,7 @@ export async function sendInvitationEmail(params: {
       html: `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 560px; margin: 0 auto; padding: 40px 20px; color: #111;">
         <h1 style="font-size: 24px; margin-bottom: 16px;">You're invited to Field View</h1>
-        <p style="font-size: 16px; line-height: 1.5; margin-bottom: 16px;">Hi,</p>
+        <p style="font-size: 16px; line-height: 1.5; margin-bottom: 16px;">Hi ${greetingName},</p>
         <p style="font-size: 16px; line-height: 1.5; margin-bottom: 16px;">
           <strong>${inviterDisplay}</strong> invited you to join <strong>${accountName}</strong> on Field View as a ${roleLabel}.
         </p>
@@ -184,7 +186,7 @@ export async function sendInvitationEmail(params: {
         </p>
       </div>
     `,
-      text: `You're invited to Field View\n\nHi,\n\n${inviterDisplay} invited you to join ${accountName} on Field View as a ${roleLabel}.\n\nField View is the field intelligence platform for documenting jobsites, tracking project progress, and collaborating with your team.\n\nAccept your invitation: ${inviteUrl}\n\nOr paste this link into your browser: ${inviteUrl}\n\nThis invitation expires on ${expiresFormatted}.\n\n— Field View`,
+      text: `You're invited to Field View\n\nHi ${greetingName},\n\n${inviterDisplay} invited you to join ${accountName} on Field View as a ${roleLabel}.\n\nField View is the field intelligence platform for documenting jobsites, tracking project progress, and collaborating with your team.\n\nAccept your invitation: ${inviteUrl}\n\nOr paste this link into your browser: ${inviteUrl}\n\nThis invitation expires on ${expiresFormatted}.\n\n— Field View`,
     });
 
     if (error) {

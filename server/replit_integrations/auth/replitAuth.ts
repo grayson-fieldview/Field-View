@@ -269,6 +269,8 @@ export async function setupAuth(app: Express) {
       const [account] = await db.select().from(accounts).where(eq(accounts.id, invitation.accountId));
       res.json({
         email: invitation.email,
+        firstName: invitation.firstName,
+        lastName: invitation.lastName,
         role: invitation.role,
         accountName: account?.name || "Team",
       });

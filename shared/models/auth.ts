@@ -76,6 +76,8 @@ export const invitations = pgTable("invitations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   accountId: varchar("account_id").references(() => accounts.id).notNull(),
   email: varchar("email").notNull(),
+  firstName: text("first_name"),
+  lastName: text("last_name"),
   role: varchar("role").default("standard").notNull(),
   token: varchar("token").notNull().unique(),
   status: varchar("status").default("pending").notNull(),

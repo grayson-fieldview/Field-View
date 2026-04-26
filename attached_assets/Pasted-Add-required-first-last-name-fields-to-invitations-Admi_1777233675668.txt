@@ -1,0 +1,163 @@
+Add required first/last name fields to invitations. Admin must enter 
+both names when sending an invite. The recipient can edit them during 
+registration — final answer wins.
+Do NOT push to git. Show me the diff and wait for approval.
+
+# Context
+
+Today, Admins invite users by entering email + role. We're adding 
+required first/last name fields:
+- Personalize the email greeting ("Hi Sarah,")
+- Pre-fill the registration form
+- Improve Admin record-keeping (named entries in pending invitations)
+
+Names are REQUIRED on the invite form. Existing pending invitations 
+(created before this change) will have NULL names — that's fine, 
+they're grandfathered in. New invitations require names.
+
+# Task
+
+## 1. Schema change
+
+In shared/models/auth.ts (or wherever invitations table is defined), 
+add two new nullable columns:
+
+  firstName: text("first_name"),
+  lastName: text("last_name"),
+
+Nullable at the DB level (not NOT NULL) so existing pending invitations 
+don't break. Required-ness is enforced at the application layer 
+(POST /api/invitations validation + frontend form validation).
+
+After schema edit, run `npm run db:push` to apply against the dev DB. 
+DO NOT touch the prod DB — that's a manual step we'll do later.
+
+## 2. Backend: POST /api/invitations validation
+
+Accept firstName and lastName in the request body. Validate they're 
+non-empty strings:
+
+  const { email, role, firstName, lastName } = req.body || {};
+  // Existing email + role validation stays
+  // Trim and require non-empty:
+  const trimmedFirst = (typeof firstName === "string" ? firstName.trim() : "");
+  const trimmedLast = (typeof lastName === "string" ? lastName.trim() : "");
+  if (!trimmedFirst || !trimmedLast) {
+    return res.status(400).json({ message: "First and last name are required." });
+  }
+
+Store the trimmed values on the new invitation row.
+
+## 3. Backend: GET /api/invitations
+
+The pending invitations list. Include firstName and lastName in the 
+response so team.tsx can display them.
+
+## 4. Backend: sendInvitationEmail update
+
+Add recipientFirstName parameter to sendInvitationEmail in 
+server/services/email.ts:
+
+  export async function sendInvitationEmail(params: {
+    to: string;
+    inviterName: string | null;
+    inviterEmail: string;
+    accountName: string;
+    role: string;
+    inviteUrl: string;
+    expiresAt: Date;
+    recipientFirstName: string | null;  // NEW — null only for legacy invitations
+  }): Promise<{ success: boolean; error?: string }>
+
+In the email body, replace "Hi," with:
+
+  Hi ${recipientFirstName?.trim() || "there"},
+
+For new invitations, recipientFirstName is always populated (validated 
+in step 2). For legacy invitations re-sent somehow (edge case), falls 
+back to "Hi there,". Apply to both HTML and plain-text versions.
+
+Wire the new field through from POST /api/invitations into the call.
+
+## 5. Backend: GET /api/invitations/:token (registration prefill endpoint)
+
+Find this endpoint — it's the one the registration page calls to 
+validate the token and get invite details. The existing endpoint 
+likely returns email, role, expiresAt. Add firstName and lastName 
+to the response so the registration form can pre-fill.
+
+If this endpoint doesn't exist, flag it — the registration page must 
+be loading invite details from somewhere; find that code path.
+
+## 6. Frontend: invite modal in team.tsx
+
+Add two new required input fields above the role selector:
+- "First name *"
+- "Last name *"
+
+Style: match the existing email input. Place them logically — between 
+email and role. Show * to indicate required.
+
+State management: add firstName / lastName state vars. Reset when 
+invite modal closes or invite succeeds.
+
+Disable the Send Invitation button when any of email, firstName, or 
+lastName is empty:
+
+  disabled={
+    !inviteEmail ||
+    !inviteFirstName ||
+    !inviteLastName ||
+    sendInvite.isPending ||
+    addSeat.isPending ||
+    seatStatusLoading ||
+    !seatStatus ||
+    (seatStatus?.trialMaxSeats != null &&
+      seatStatus.used >= seatStatus.trialMaxSeats)
+  }
+
+Pass them in the sendInvite mutation body, trimmed.
+
+## 7. Frontend: pending invitations display in team.tsx
+
+If the page lists pending invitations with their email and role, also 
+show the first/last name when present. Format: "Sarah Smith (sarah@email.com)" 
+when names present, just "sarah@email.com" when names are null 
+(legacy invitations).
+
+## 8. Frontend: registration form
+
+Find the registration page — likely client/src/pages/register.tsx 
+(or wherever registration via invite token lives). When the page 
+loads with a ?token=..., it calls the validation endpoint to get 
+invite details. Pre-fill the firstName / lastName fields from the 
+response.
+
+The user can edit before submitting. Final values win — when they 
+submit, the user record uses what THEY typed, not what was on the 
+invite.
+
+## 9. What NOT to change
+
+- The accept-invitation flow itself (token validation, account 
+  attachment, password creation) — only adding name pre-fill, not 
+  changing logic
+- The schema for users (already has firstName / lastName columns)
+- Any other email functions
+- The webhook handler
+- The seat management endpoints
+- Any subscription / billing code
+
+# Output
+
+1. Diff for shared/models/auth.ts (or wherever invitations table lives)
+2. Diff for server/routes.ts (POST /api/invitations + GET endpoints)
+3. Diff for server/services/email.ts
+4. Diff for client/src/pages/team.tsx (invite modal + pending list)
+5. Diff for client/src/pages/register.tsx (or wherever registration lives)
+6. Output of `npm run db:push` (confirming schema applied to dev DB)
+7. TS error count (target: 33)
+8. Confirm: db:push run on DEV ONLY (Neon), prod RDS untouched
+9. Confirm: no other endpoints touched, no git operations
+
+Wait for me to review.

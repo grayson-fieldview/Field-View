@@ -1267,6 +1267,8 @@ export async function registerRoutes(
       const result = await db.select({
         id: invitations.id,
         email: invitations.email,
+        firstName: invitations.firstName,
+        lastName: invitations.lastName,
         role: invitations.role,
         token: invitations.token,
         status: invitations.status,
@@ -1287,8 +1289,13 @@ export async function registerRoutes(
   app.post("/api/invitations", requireWriteAccess, requireAdminOrManager, async (req: any, res) => {
     try {
       const currentUser = req.user;
-      const { email, role } = req.body;
+      const { email, role, firstName, lastName } = req.body || {};
       if (!email) return res.status(400).json({ message: "Email is required" });
+      const trimmedFirst = typeof firstName === "string" ? firstName.trim() : "";
+      const trimmedLast = typeof lastName === "string" ? lastName.trim() : "";
+      if (!trimmedFirst || !trimmedLast) {
+        return res.status(400).json({ message: "First and last name are required." });
+      }
       const validRoles = ["admin", "manager", "standard", "restricted"];
       if (!validRoles.includes(role || "standard")) {
         return res.status(400).json({ message: "Invalid role" });
@@ -1311,6 +1318,8 @@ export async function registerRoutes(
       const [invitation] = await db.insert(invitations).values({
         accountId: currentUser.accountId,
         email: email.toLowerCase(),
+        firstName: trimmedFirst,
+        lastName: trimmedLast,
         role: role || "standard",
         token,
         invitedById: currentUser.id,
@@ -1351,6 +1360,7 @@ export async function registerRoutes(
           role: invitation.role,
           inviteUrl: inviteLink,
           expiresAt,
+          recipientFirstName: invitation.firstName,
         });
         if (!emailResult.success) {
           console.error(

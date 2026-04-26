@@ -29,7 +29,7 @@ export default function RegisterPage() {
   const params = new URLSearchParams(searchString);
   const inviteToken = params.get("token");
 
-  const { data: inviteInfo } = useQuery<{ email: string; role: string; accountName: string }>({
+  const { data: inviteInfo } = useQuery<{ email: string; role: string; accountName: string; firstName: string | null; lastName: string | null }>({
     queryKey: ["/api/invitations/validate", inviteToken],
     queryFn: async () => {
       const res = await fetch(`/api/invitations/validate/${inviteToken}`);
@@ -43,6 +43,12 @@ export default function RegisterPage() {
   useEffect(() => {
     if (inviteInfo?.email) {
       setEmail(inviteInfo.email);
+    }
+    if (inviteInfo?.firstName) {
+      setFirstName(inviteInfo.firstName);
+    }
+    if (inviteInfo?.lastName) {
+      setLastName(inviteInfo.lastName);
     }
   }, [inviteInfo]);
 
