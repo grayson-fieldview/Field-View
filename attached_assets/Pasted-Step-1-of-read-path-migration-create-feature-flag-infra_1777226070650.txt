@@ -1,0 +1,97 @@
+Step 1 of read-path migration: create feature flag infrastructure 
+and a central billing-read helper. Server-side only.
+Do NOT modify any callers in this prompt.
+Do NOT push to git. Show me the diff and wait for approval.
+
+# Context
+
+We're migrating Field View from per-user billing to per-account billing. 
+Saturday we added 8 columns to the accounts table. Sunday morning we 
+backfilled all 15 prod accounts with their billing data and validated.
+
+Now we need to switch the read path. Today, code reads billing from 
+users.stripeCustomerId / users.subscriptionStatus / etc. After this 
+migration, code will read from accounts.* instead.
+
+To ship safely, we're putting this behind a feature flag so we can 
+toggle without code changes.
+
+# Task
+
+## 1. Feature flag
+
+Add a check for env var ACCOUNT_BILLING_ENABLED. Treat as boolean:
+- "true" / "1" → flag is ON
+- anything else (including unset) → flag is OFF
+
+Default OFF. So if the env var doesn't exist in any environment, the 
+app continues current behavior (read from users).
+
+## 2. Central read helper
+
+Create a new file: server/lib/billing.ts
+
+Export a function getAccountBilling(req) with this signature:
+
+  type BillingState = {
+    stripeCustomerId: string | null;
+    stripeSubscriptionId: string | null;
+    subscriptionStatus: string | null;
+    trialEndsAt: Date | null;
+    source: "user" | "account";  // which path was used (for diag/logs)
+  };
+
+  export async function getAccountBilling(req: any): Promise<BillingState>
+
+Behavior:
+
+- If ACCOUNT_BILLING_ENABLED is OFF (or unset):
+  - Read from req.user (existing user-level columns)
+  - Return { ...billing fields from user, source: "user" }
+
+- If ACCOUNT_BILLING_ENABLED is ON:
+  - Read from the account row using req.user.accountId
+  - Query: SELECT stripeCustomerId, stripeSubscriptionId, subscriptionStatus, trialEndsAt FROM accounts WHERE id = req.user.accountId LIMIT 1
+  - Use the existing db connection and Drizzle accounts table from @shared/models/auth
+  - If account row is found AND has subscriptionStatus populated, return 
+    { ...billing fields from account, source: "account" }
+  - DEFENSIVE FALLBACK: if account row is missing OR subscriptionStatus 
+    is null (shouldn't happen post-backfill, but be safe):
+    - Log: console.warn("[billing-fallback]", JSON.stringify({ 
+        userId: req.user.id, accountId: req.user.accountId, 
+        reason: "account_missing_or_unbackfilled" 
+      }))
+    - Fall back to reading from req.user (same as flag-OFF path)
+    - Return with source: "user" so logs/diag show the fallback happened
+
+- Edge case: req.user.accountId is null/undefined:
+  - Should not happen for authenticated users, but defend
+  - Return { all nulls, source: "user" } — caller will treat as "no subscription"
+
+## 3. No callers in this prompt
+
+Do NOT update requireActiveSubscription, GET /api/subscription, the 
+webhook handler, or any other site that reads billing today. We'll do 
+those in subsequent prompts. This prompt is helper-only so we can 
+review it carefully.
+
+## 4. Update .env.example
+
+Add the new env var to .env.example with a comment explaining what it does:
+
+  # Feature flag: when "true", reads billing state from accounts table
+  # instead of users table. Default OFF (reads from users). Will be 
+  # flipped to "true" in production after Session 3-5 of the per-account 
+  # billing migration.
+  ACCOUNT_BILLING_ENABLED=false
+
+Use a sanitized placeholder so GitHub's secret scanner doesn't choke.
+
+# Output
+
+1. Full contents of server/lib/billing.ts
+2. Diff for .env.example
+3. TS error count (target: 33)
+4. Confirm: no callers updated, no schema changes, no git operations
+
+Wait for me to review.
