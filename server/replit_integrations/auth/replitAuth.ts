@@ -13,7 +13,7 @@ import { db, pool } from "../../db";
 import { eq, and, isNull, gt } from "drizzle-orm";
 import { passwordResetTokens, emailVerificationTokens, users, accounts, invitations, type User } from "@shared/models/auth";
 import { sendPasswordResetEmail, sendEmailVerificationEmail, sendWelcomeEmail } from "../../services/email";
-import { getAccountBilling, overlayAccountBillingOnUser } from "../../lib/billing";
+import { getAccountBilling, overlayAccountBillingOnUser, computeAccessLevel } from "../../lib/billing";
 import { verifyRecaptchaToken } from "../../services/recaptcha";
 import { CURRENT_TERMS_VERSION } from "@shared/constants";
 import {
@@ -681,4 +681,44 @@ export const requireActiveSubscription: RequestHandler = async (req: any, res, n
   }
 
   return res.status(403).json({ message: "Subscription required" });
+};
+
+export const requireReadAccess: RequestHandler = async (req: any, res, next) => {
+  if (!req.isAuthenticated()) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  const user = req.user;
+  if (!user) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  const billing = await getAccountBilling(req);
+  const level = computeAccessLevel(
+    billing.subscriptionStatus,
+    billing.subscriptionLapsedAt,
+    billing.trialEndsAt,
+  );
+  if (level === "full" || level === "read_only") {
+    return next();
+  }
+  return res.status(402).json({ message: "Subscription required", accessLevel: "locked" });
+};
+
+export const requireWriteAccess: RequestHandler = async (req: any, res, next) => {
+  if (!req.isAuthenticated()) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  const user = req.user;
+  if (!user) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  const billing = await getAccountBilling(req);
+  const level = computeAccessLevel(
+    billing.subscriptionStatus,
+    billing.subscriptionLapsedAt,
+    billing.trialEndsAt,
+  );
+  if (level === "full") {
+    return next();
+  }
+  return res.status(402).json({ message: "Subscription required", accessLevel: level });
 };

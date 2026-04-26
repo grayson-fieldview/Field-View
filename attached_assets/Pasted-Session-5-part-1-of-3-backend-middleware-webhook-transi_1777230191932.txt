@@ -1,0 +1,149 @@
+Session 5 part 1 of 3: backend middleware + webhook transitions for 
+subscription lapse handling.
+Do NOT push to git. Show me the diff and wait for approval.
+
+# Context
+
+Per the spec, when a subscription lapses, we want graceful degradation:
+- Days 0-14 after lapse: read-only mode (GET works, POST/PATCH/DELETE 
+  blocked with 402)
+- Day 14+: full lockout (everything blocked with 402, frontend shows 
+  paywall)
+- Subscription recovers (payment succeeds): full access restored
+
+We already have:
+- accounts.subscription_status (text)
+- accounts.subscription_lapsed_at (timestamp, nullable)
+- Webhook handler in server/index.ts dual-writes status to accounts
+- requireActiveSubscription middleware in 
+  server/replit_integrations/auth/replitAuth.ts that allows "active" 
+  and "trialing" + non-expired "trial"
+
+# Task
+
+## 1. Define lapse logic in server/lib/billing.ts
+
+Add a new exported function:
+
+  type AccessLevel = "full" | "read_only" | "locked";
+  
+  export function computeAccessLevel(
+    status: string | null,
+    lapsedAt: Date | null,
+  ): AccessLevel
+
+Rules:
+- "active", "trialing" → "full"
+- "trial" with non-expired trialEndsAt → "full" (preserve existing 
+  legacy behavior)
+- "past_due":
+  - lapsedAt within last 14 days → "read_only"
+  - lapsedAt >= 14 days ago → "locked"
+  - lapsedAt is null (shouldn't happen but defend) → "read_only" 
+    (fail-open — give grace, assume just-transitioned)
+- "canceled", "unpaid", null, anything else → "locked"
+
+The 14-day boundary: compute from `now - lapsedAt > 14 days`, no 
+timezone gymnastics — just standard JS Date arithmetic.
+
+## 2. Add new middleware
+
+In server/replit_integrations/auth/replitAuth.ts, alongside the 
+existing requireActiveSubscription:
+
+  export const requireReadAccess: RequestHandler
+  export const requireWriteAccess: RequestHandler
+
+requireReadAccess:
+- Get billing via getAccountBilling(req)
+- If computeAccessLevel(...) is "full" or "read_only" → next()
+- Else → 402 with body { message: "Subscription required", accessLevel: "locked" }
+
+requireWriteAccess:
+- Same but only "full" passes
+- 402 if "read_only" or "locked", with accessLevel reflecting current state
+
+The existing requireActiveSubscription stays — leave it, it's used 
+in some endpoints we don't want to restructure today. requireWriteAccess 
+will be used going forward for new mutation endpoints.
+
+## 3. Webhook handler transitions
+
+In server/index.ts handleSubscriptionEvent, modify the 
+customer.subscription.updated branch:
+
+When the new appStatus is computed, also determine if subscription_lapsed_at 
+needs to change.
+
+Logic:
+- Load the existing account row (we have customerId; query 
+  accounts.subscription_lapsed_at via the user-by-customer-id chain).
+- If new status is "past_due" AND existing lapsed_at is null:
+  - Set lapsed_at = NOW() (this is the "first transition into lapse")
+- If new status is "active" or "trialing" AND existing lapsed_at is not null:
+  - Set lapsed_at = NULL (recovery — clear the lapse marker)
+- Otherwise: leave lapsed_at unchanged.
+
+Pass the new lapsed_at value (or null, or undefined to skip) through 
+writeAccountBilling. Add subscription_lapsed_at field handling to 
+writeAccountBilling — it already loops Object.entries, so just add the 
+field to the type signature.
+
+CRITICAL: if status is going from active → past_due, we must NOT 
+clear lapsed_at. The lapsed_at field is sticky: once set, only a 
+recovery clears it. Re-setting it on every past_due event would 
+extend the grace period indefinitely.
+
+## 4. Logging
+
+In handleSubscriptionEvent, add a structured log when a lapse 
+transition happens:
+
+  if (lapsedAtChange === "set") {
+    console.log("[lapse-transition]", JSON.stringify({
+      accountId, customerId, status: appStatus, action: "lapse_started"
+    }));
+  } else if (lapsedAtChange === "clear") {
+    console.log("[lapse-transition]", JSON.stringify({
+      accountId, customerId, status: appStatus, action: "lapse_cleared"
+    }));
+  }
+
+Helps audit trail when we test and in production.
+
+## 5. What NOT to change
+
+- The existing requireActiveSubscription middleware (leave it, 
+  preserve current behavior on existing endpoints)
+- Any frontend code (handled in subsequent prompts)
+- The schema (subscription_lapsed_at already exists)
+- The vendor stripe-replit-sync code
+- Any non-lapse webhook events (checkout.session.completed, deleted)
+- Existing endpoints' middleware assignments (don't swap requireActiveSubscription 
+  for requireWriteAccess yet — that's a separate prompt that will sweep 
+  through all mutation endpoints carefully)
+
+## 6. Edge cases
+
+- subscription goes active → past_due → active within 14 days: lapsed_at 
+  should clear on recovery
+- subscription goes active → past_due (sets lapsed_at) → past_due 
+  (status update with no underlying change): lapsed_at must stay sticky 
+  on its original value
+- subscription goes past_due → canceled: lapsed_at stays set (canceled 
+  is "locked" anyway, doesn't matter for access, but we don't clear it)
+- subscription_lapsed_at is somehow set while status is "active": this 
+  is corrupt state. Recovery should still clear it (status active + 
+  lapsed_at not null → clear it on next webhook). Defensive.
+
+# Output
+
+1. Diff for server/lib/billing.ts (computeAccessLevel function)
+2. Diff for server/replit_integrations/auth/replitAuth.ts (two new 
+   middleware functions)
+3. Diff for server/index.ts (webhook transition logic + log lines)
+4. TS error count (target: 33)
+5. Confirm: no schema changes, no frontend changes, no git operations, 
+   no existing endpoints' middleware swapped
+
+Wait for me to review.

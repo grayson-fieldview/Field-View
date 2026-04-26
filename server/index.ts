@@ -255,6 +255,7 @@ async function writeAccountBilling(
     stripeSubscriptionId?: string;
     trialEndsAt?: Date | null;
     seatCount?: number;
+    subscriptionLapsedAt?: Date | null;
   },
 ) {
   if (!isAccountBillingEnabled()) return;
@@ -374,6 +375,33 @@ async function handleSubscriptionEvent(event: any) {
           seatCountFromSub = computeSeatCountFromSub(fullSub);
         } catch (e) {}
 
+        let lapsedAtUpdate: Date | null | undefined = undefined;
+        let lapsedAtChange: "set" | "clear" | null = null;
+        let lapseAccountId: string | null = null;
+        if (user.accountId) {
+          lapseAccountId = user.accountId;
+          try {
+            const [acctRow] = await db
+              .select({ subscriptionLapsedAt: accounts.subscriptionLapsedAt })
+              .from(accounts)
+              .where(eq(accounts.id, user.accountId))
+              .limit(1);
+            const existingLapsedAt = acctRow?.subscriptionLapsedAt ?? null;
+            if (appStatus === "past_due" && existingLapsedAt == null) {
+              lapsedAtUpdate = new Date();
+              lapsedAtChange = "set";
+            } else if (
+              (appStatus === "active" || appStatus === "trialing") &&
+              existingLapsedAt != null
+            ) {
+              lapsedAtUpdate = null;
+              lapsedAtChange = "clear";
+            }
+          } catch (e) {
+            console.error("Error reading existing lapsed_at:", (e as any)?.message);
+          }
+        }
+
         await authStorage.updateUser(user.id, {
           subscriptionStatus: appStatus,
           stripeSubscriptionId: data.id,
@@ -383,7 +411,30 @@ async function handleSubscriptionEvent(event: any) {
           subscriptionStatus: appStatus,
           stripeSubscriptionId: data.id,
           seatCount: seatCountFromSub,
+          subscriptionLapsedAt: lapsedAtUpdate,
         });
+
+        if (lapsedAtChange === "set") {
+          console.log(
+            "[lapse-transition]",
+            JSON.stringify({
+              accountId: lapseAccountId,
+              customerId,
+              status: appStatus,
+              action: "lapse_started",
+            }),
+          );
+        } else if (lapsedAtChange === "clear") {
+          console.log(
+            "[lapse-transition]",
+            JSON.stringify({
+              accountId: lapseAccountId,
+              customerId,
+              status: appStatus,
+              action: "lapse_cleared",
+            }),
+          );
+        }
       }
     } else if (type === "customer.subscription.deleted") {
       const customerId = data.customer;

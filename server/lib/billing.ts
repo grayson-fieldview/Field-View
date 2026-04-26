@@ -7,8 +7,30 @@ export type BillingState = {
   stripeSubscriptionId: string | null;
   subscriptionStatus: string | null;
   trialEndsAt: Date | null;
+  subscriptionLapsedAt: Date | null;
   source: "user" | "account";
 };
+
+export type AccessLevel = "full" | "read_only" | "locked";
+
+export function computeAccessLevel(
+  status: string | null,
+  lapsedAt: Date | null,
+  trialEndsAt: Date | null = null,
+): AccessLevel {
+  if (status === "active" || status === "trialing") return "full";
+  if (status === "trial") {
+    if (trialEndsAt && new Date(trialEndsAt) > new Date()) return "full";
+    return "locked";
+  }
+  if (status === "past_due") {
+    if (lapsedAt == null) return "read_only";
+    const ageMs = Date.now() - new Date(lapsedAt).getTime();
+    const fourteenDaysMs = 14 * 24 * 60 * 60 * 1000;
+    return ageMs > fourteenDaysMs ? "locked" : "read_only";
+  }
+  return "locked";
+}
 
 export function isAccountBillingEnabled(): boolean {
   const v = process.env.ACCOUNT_BILLING_ENABLED;
@@ -21,6 +43,7 @@ function fromUser(user: any): BillingState {
     stripeSubscriptionId: user?.stripeSubscriptionId ?? null,
     subscriptionStatus: user?.subscriptionStatus ?? null,
     trialEndsAt: user?.trialEndsAt ?? null,
+    subscriptionLapsedAt: null,
     source: "user",
   };
 }
@@ -39,6 +62,7 @@ export async function getAccountBilling(req: any): Promise<BillingState> {
       stripeSubscriptionId: null,
       subscriptionStatus: null,
       trialEndsAt: null,
+      subscriptionLapsedAt: null,
       source: "user",
     };
   }
@@ -49,6 +73,7 @@ export async function getAccountBilling(req: any): Promise<BillingState> {
       stripeSubscriptionId: accounts.stripeSubscriptionId,
       subscriptionStatus: accounts.subscriptionStatus,
       trialEndsAt: accounts.trialEndsAt,
+      subscriptionLapsedAt: accounts.subscriptionLapsedAt,
     })
     .from(accounts)
     .where(eq(accounts.id, accountId))
@@ -71,6 +96,7 @@ export async function getAccountBilling(req: any): Promise<BillingState> {
     stripeSubscriptionId: row.stripeSubscriptionId,
     subscriptionStatus: row.subscriptionStatus,
     trialEndsAt: row.trialEndsAt,
+    subscriptionLapsedAt: row.subscriptionLapsedAt,
     source: "account",
   };
 }
