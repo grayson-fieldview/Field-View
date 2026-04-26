@@ -1,0 +1,56 @@
+Diagnostic only — do NOT modify any code.
+
+# The bug
+
+Email contains link: https://app.field-view.com/register?token=<token>
+
+User clicks. Browser navigates to /register?token=... but is then 
+client-side redirected to /signup. The token is dropped during the 
+redirect. User sees new-account signup form instead of invitation 
+acceptance form.
+
+# Investigate
+
+1. Find the route definition for /register in client/src/App.tsx 
+   (or wherever wouter routes are defined). Cite file:line.
+
+2. What component renders at /register? Likely client/src/pages/register.tsx. 
+   Read the entire component.
+
+3. Look for redirect logic in that component:
+   - useEffect hooks that call setLocation, navigate, or window.location
+   - <Redirect> elements
+   - Conditional rendering of <Navigate> from a router lib
+   - Any useEffect that depends on auth state and triggers a navigation
+
+4. Check whether the component reads the ?token= query param. 
+   Wouter exposes useSearch() or useSearchParams() — find where the 
+   token is being parsed.
+
+5. The likely culprit: the redirect fires BEFORE the component reads 
+   the token, or fires unconditionally when not authenticated, with 
+   /signup as the destination but no token preservation.
+
+6. Check for any auth guard / wrapper component that might redirect 
+   unauthenticated users away from /register.
+
+7. Find /signup route definition. What component renders there? 
+   Is it the same component as /register but with different defaults?
+
+8. Confirm: does the route /register?token=<valid-token> ever 
+   successfully render an invitation acceptance form? Or has this 
+   path never worked?
+
+# Output
+
+1. The full code of the component that renders at /register
+2. The route definitions for /register and /signup
+3. Cite the exact line(s) of code that cause the redirect to /signup
+4. Your hypothesis for the simplest fix:
+   - Should /register read the token first, and only redirect to 
+     /signup if no token is present?
+   - Should /register NEVER redirect to /signup, and instead render 
+     the invitation form when a token is present?
+   - Other?
+
+Do NOT modify any code yet. Investigation only.
