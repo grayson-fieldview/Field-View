@@ -1,0 +1,148 @@
+Session 5 part 3: read-only banner. Show a persistent banner at the 
+top of every authenticated page when the user's accessLevel is 
+"read_only".
+Do NOT push to git. Show me the diff and wait for approval.
+
+# Context
+
+Backend: overlayAccountBillingOnUser now attaches accessLevel to user 
+objects ("full" | "read_only" | "locked"). Frontend SubscriptionGate 
+already routes "locked" users to SubscribePage. "full" and "read_only" 
+both render AuthenticatedLayout, but read_only users should see a 
+prominent banner explaining their state.
+
+# Task
+
+## 1. Find AuthenticatedLayout
+
+Likely in client/src/App.tsx. Find the component that renders the 
+authenticated app shell (sidebar + header + main content).
+
+Cite file path and line numbers.
+
+## 2. Build the SubscriptionLapsedBanner component
+
+In the same file (or a new file if AuthenticatedLayout already lives 
+in its own file — your call), create a new component:
+
+  function SubscriptionLapsedBanner() {
+    const { user } = useAuth();
+    const accessLevel = (user as any)?.accessLevel;
+    
+    if (accessLevel !== "read_only") return null;
+    
+    // ... render banner
+  }
+
+Visual:
+- Container: full-width strip at the top, sticky or non-sticky (your 
+  call — non-sticky is simpler and probably fine)
+- Background: amber/yellow tinted (NOT brand orange — brand orange 
+  is for primary actions; warnings get a distinct color)
+  - Use Tailwind: bg-amber-50 dark:bg-amber-950/30 with text-amber-900 
+    dark:text-amber-100
+  - Border-bottom: border-amber-200 dark:border-amber-800
+- Padding: px-4 py-3
+- Layout: flex with icon on left, text in middle, button on right
+- Icon: AlertTriangle or AlertCircle from lucide-react
+- Text: "Payment failed. Your account is in read-only mode. Update 
+  your payment method to restore full access."
+- Button: "Update payment method" — calls handleUpdatePaymentMethod 
+  (see step 3)
+
+Make it accessible:
+- role="alert"
+- aria-live="polite"
+
+## 3. Update payment method action
+
+Implement handleUpdatePaymentMethod that opens the Stripe Customer 
+Portal:
+
+  const handleUpdatePaymentMethod = async () => {
+    try {
+      const res = await apiRequest("POST", "/api/create-portal-session", {});
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        toast({ 
+          title: "Error", 
+          description: "Could not open billing portal", 
+          variant: "destructive" 
+        });
+      }
+    } catch (error: any) {
+      toast({ 
+        title: "Error", 
+        description: error.message || "Could not open billing portal", 
+        variant: "destructive" 
+      });
+    }
+  };
+
+The endpoint POST /api/create-portal-session already exists (used by 
+Settings → BillingCard's "Manage Billing" button). Same pattern, same 
+flow.
+
+If the user is in read_only state but stripeCustomerId is somehow 
+null (corrupt state), POST /api/create-portal-session will fail. 
+Show the toast error gracefully — don't crash.
+
+## 4. Place the banner inside AuthenticatedLayout
+
+Render it AT THE VERY TOP of the layout, ABOVE the sidebar and 
+header. So when present, the banner pushes everything down.
+
+If the existing layout structure is roughly:
+  <div>
+    <Sidebar />
+    <main>{children}</main>
+  </div>
+
+The new structure:
+  <div>
+    <SubscriptionLapsedBanner />
+    <div className="...existing wrapper...">
+      <Sidebar />
+      <main>{children}</main>
+    </div>
+  </div>
+
+Adjust to match the actual structure.
+
+## 5. Persistent (NOT dismissible)
+
+The banner stays visible across navigations. It only disappears when 
+accessLevel changes (subscription recovers, user upgrades). No close 
+button, no localStorage flag, no "remind me later."
+
+## 6. What NOT to change
+
+- The SubscriptionGate component itself (Part 2 work — leave alone)
+- Any backend code (no schema, no middleware, no endpoints)
+- Any other UI components
+- The mutation flows (those still work today, the middleware sweep 
+  is a separate prompt)
+- The user type (still using `as any` cast for accessLevel)
+
+## 7. Edge cases
+
+- user is null (not logged in) → banner returns null (handled by 
+  early return)
+- accessLevel is undefined (legacy session) → banner returns null 
+  (early return)
+- accessLevel is "full" or "locked" → banner returns null (early 
+  return)
+- POST /api/create-portal-session fails → toast error, banner stays 
+  visible (user can retry)
+
+# Output
+
+1. Diff for whatever file(s) get touched
+2. TS error count (target: 33)
+3. Confirm: no schema changes, no backend changes, no git operations
+4. Note any UI choices you made (icon choice, exact banner layout 
+   etc) so I can review
+
+Wait for me to review.
