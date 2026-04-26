@@ -1,0 +1,110 @@
+Session 5 part 4 of 4: middleware sweep. Apply requireReadAccess to 
+read endpoints and requireWriteAccess to mutation endpoints, replacing 
+the legacy requireActiveSubscription middleware where appropriate.
+Do NOT push to git. Show me the diff and wait for approval.
+
+# Context
+
+We have three subscription-gating middlewares:
+
+- requireActiveSubscription (legacy, in 
+  server/replit_integrations/auth/replitAuth.ts) — allows "active" 
+  and "trialing" plus "trial" with non-expired trialEndsAt. Returns 
+  403 otherwise.
+- requireReadAccess (new) — allows "full" + "read_only" access levels. 
+  Returns 402.
+- requireWriteAccess (new) — allows "full" access level only. Returns 402.
+
+Today, every authenticated endpoint uses requireActiveSubscription. 
+We're swapping:
+- GET endpoints → requireReadAccess (expand read access to lapsed-grace users)
+- POST/PATCH/DELETE endpoints → requireWriteAccess (enforce read-only mode)
+
+# Task
+
+## 1. Find all endpoints using requireActiveSubscription
+
+In server/routes.ts, search for every line containing 
+"requireActiveSubscription". List each one with file:line and HTTP 
+method (GET/POST/PATCH/DELETE).
+
+## 2. Apply the swap
+
+For each endpoint:
+- If method is GET → swap requireActiveSubscription for requireReadAccess
+- If method is POST, PATCH, PUT, or DELETE → swap requireActiveSubscription 
+  for requireWriteAccess
+
+Two specific endpoints get extra attention:
+
+a. POST /api/account/seats — currently uses requireAdminOrManager only. 
+   ADD requireWriteAccess to this endpoint (chain with requireAdminOrManager). 
+   A read-only user should not be able to add seats.
+
+b. POST /api/create-portal-session — locked-out users need to access 
+   the Stripe Customer Portal to pay. Do NOT add requireWriteAccess. 
+   Whatever middleware it has today, leave it alone. If it currently 
+   has requireActiveSubscription, REMOVE it (don't replace with 
+   requireWriteAccess) so locked users can still access the portal.
+
+## 3. Endpoints to LEAVE ALONE entirely
+
+Do NOT touch any of these:
+- /api/auth/* — login, register, password reset, email verification, etc.
+- /api/webhooks/* — Stripe webhooks must always reach the handler
+- /api/create-checkout-session — locked users on SubscribePage need this
+- /api/subscription — already migrated in Step 2 of read-path migration; 
+  this is the diagnostic endpoint, not used by frontend, but should 
+  remain readable
+- /api/account/seats GET handler — currently uses requireAdmin which 
+  doesn't include subscription gating. Leave as-is. (We don't gate 
+  seat status reads behind subscription state — admins should see seat 
+  usage even while lapsed.)
+- Any endpoint without a current subscription gate — don't ADD gates 
+  that don't exist (except POST /api/account/seats per step 2a)
+
+## 4. Update imports in server/routes.ts
+
+Currently imports requireActiveSubscription from "./replit_integrations/auth". 
+Add requireReadAccess and requireWriteAccess to that import.
+
+If after the sweep, requireActiveSubscription is no longer used 
+anywhere in server/routes.ts, remove it from the import. (But it's 
+still exported for any other file that may use it, and for backward 
+compatibility — don't delete the function definition itself.)
+
+## 5. Verify nothing was missed
+
+After the sweep, search server/routes.ts again for 
+"requireActiveSubscription". The only matches should be in the import 
+line (if still imported) — zero in route definitions.
+
+If you find any GET endpoint whose middleware you can't determine 
+(e.g., complex middleware chains), flag it for me to triage.
+
+## 6. What NOT to change
+
+- The middleware functions themselves (requireReadAccess, requireWriteAccess, 
+  requireActiveSubscription)
+- The webhook handler
+- The schema
+- Any frontend code
+- Any auth/login/register endpoints
+- Any endpoint without a current subscription gate (except 
+  POST /api/account/seats per step 2a)
+- Any business logic inside the route handlers — only middleware 
+  assignments change
+
+## 7. Output
+
+1. A list of every endpoint touched, in this format:
+   - METHOD /path — old middleware → new middleware (file:line)
+2. A list of endpoints inspected but NOT changed (with reason)
+3. Diff for server/routes.ts
+4. TS error count (target: 33)
+5. Confirm: no schema changes, no frontend changes, no business logic 
+   changes, no git operations
+6. Confirm: zero remaining requireActiveSubscription references in route 
+   definitions (only in import line, if still imported)
+
+Wait for me to review.

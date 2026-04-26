@@ -2,7 +2,7 @@ import express, { type Express } from "express";
 import { createServer, type Server } from "http";
 import crypto from "crypto";
 import { storage } from "./storage";
-import { setupAuth, registerAuthRoutes, isAuthenticated, requireActiveSubscription } from "./replit_integrations/auth";
+import { setupAuth, registerAuthRoutes, isAuthenticated, requireReadAccess, requireWriteAccess } from "./replit_integrations/auth";
 import { getAccountBilling, isAccountBillingEnabled, overlayAccountBillingOnUser, isSeatAddonItem } from "./lib/billing";
 import { requireAdmin, requireAdminOrManager } from "./middleware/auth";
 import { authStorage } from "./replit_integrations/auth/storage";
@@ -82,7 +82,7 @@ export async function registerRoutes(
   await setupAuth(app);
   registerAuthRoutes(app);
 
-  app.get("/api/config/maps", requireActiveSubscription, (_req, res) => {
+  app.get("/api/config/maps", requireReadAccess, (_req, res) => {
     const apiKey = process.env.GOOGLE_MAPS_API_KEY;
     if (!apiKey) {
       return res.status(500).json({ message: "Google Maps API key not configured" });
@@ -90,7 +90,7 @@ export async function registerRoutes(
     res.json({ apiKey });
   });
 
-  app.get("/api/projects", requireActiveSubscription, async (req: any, res) => {
+  app.get("/api/projects", requireReadAccess, async (req: any, res) => {
     try {
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
@@ -111,7 +111,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/projects/:id", requireActiveSubscription, async (req: any, res) => {
+  app.get("/api/projects/:id", requireReadAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
       const project = await storage.getProject(id);
@@ -136,7 +136,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/projects", requireActiveSubscription, async (req: any, res) => {
+  app.post("/api/projects", requireWriteAccess, async (req: any, res) => {
     try {
       console.log("[API] POST /api/projects body", req.body);
       const parsed = insertProjectSchema.safeParse({
@@ -156,7 +156,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/projects/:id", requireActiveSubscription, async (req: any, res) => {
+  app.patch("/api/projects/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
       const project = await storage.getProject(id);
@@ -182,7 +182,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/projects/:id", requireActiveSubscription, async (req: any, res) => {
+  app.delete("/api/projects/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
       const project = await storage.getProject(id);
@@ -202,7 +202,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/uploads/sign", requireActiveSubscription, async (req: any, res) => {
+  app.post("/api/uploads/sign", requireWriteAccess, async (req: any, res) => {
     try {
       const files = req.body?.files;
       if (!Array.isArray(files) || files.length === 0) {
@@ -233,7 +233,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/projects/:id/media", requireActiveSubscription, async (req: any, res) => {
+  app.post("/api/projects/:id/media", requireWriteAccess, async (req: any, res) => {
     try {
       const projectId = parseInt(req.params.id as string);
       const project = await storage.getProject(projectId);
@@ -286,7 +286,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/tasks", requireActiveSubscription, async (req: any, res) => {
+  app.get("/api/tasks", requireReadAccess, async (req: any, res) => {
     try {
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
@@ -306,7 +306,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/calendar-connections", requireActiveSubscription, async (req: any, res) => {
+  app.get("/api/calendar-connections", requireReadAccess, async (req: any, res) => {
     try {
       const userId = req.user.id;
       const connections = await storage.getCalendarConnections(userId);
@@ -316,7 +316,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/calendar-connections", requireActiveSubscription, async (req: any, res) => {
+  app.post("/api/calendar-connections", requireWriteAccess, async (req: any, res) => {
     try {
       const userId = req.user.id;
       const accountId = req.user.accountId;
@@ -344,7 +344,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/calendar-connections/:id", requireActiveSubscription, async (req: any, res) => {
+  app.patch("/api/calendar-connections/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
       const userId = req.user.id;
@@ -363,7 +363,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/calendar-connections/:id", requireActiveSubscription, async (req: any, res) => {
+  app.delete("/api/calendar-connections/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
       const userId = req.user.id;
@@ -395,7 +395,7 @@ export async function registerRoutes(
     };
   }
 
-  app.get("/api/calendar-events", requireActiveSubscription, async (req: any, res) => {
+  app.get("/api/calendar-events", requireReadAccess, async (req: any, res) => {
     try {
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
@@ -406,7 +406,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/calendar-events", requireActiveSubscription, async (req: any, res) => {
+  app.post("/api/calendar-events", requireWriteAccess, async (req: any, res) => {
     try {
       const accountId = req.user.accountId;
       const userId = req.user.id;
@@ -435,7 +435,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/calendar-events/:id", requireActiveSubscription, async (req: any, res) => {
+  app.patch("/api/calendar-events/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
       const accountId = req.user.accountId;
@@ -454,7 +454,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/calendar-events/:id", requireActiveSubscription, async (req: any, res) => {
+  app.delete("/api/calendar-events/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
       const accountId = req.user.accountId;
@@ -467,7 +467,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/calendar/events", requireActiveSubscription, async (req: any, res) => {
+  app.get("/api/calendar/events", requireReadAccess, async (req: any, res) => {
     try {
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
@@ -529,7 +529,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/media/:id", requireActiveSubscription, async (req: any, res) => {
+  app.delete("/api/media/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const mediaId = parseInt(req.params.id as string);
       if (Number.isNaN(mediaId)) return res.status(400).json({ message: "Invalid media id" });
@@ -552,7 +552,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/media/:id", requireActiveSubscription, async (req: any, res) => {
+  app.patch("/api/media/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const mediaId = parseInt(req.params.id as string);
       if (!(await verifyMediaAccess(mediaId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
@@ -568,7 +568,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/tags", requireActiveSubscription, async (req: any, res) => {
+  app.get("/api/tags", requireReadAccess, async (req: any, res) => {
     try {
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
@@ -583,7 +583,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/tags", requireActiveSubscription, async (req: any, res) => {
+  app.post("/api/tags", requireWriteAccess, async (req: any, res) => {
     try {
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
@@ -598,7 +598,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/tags/:id", requireActiveSubscription, async (req: any, res) => {
+  app.delete("/api/tags/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
       const accountId = req.user.accountId;
@@ -613,7 +613,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/media", requireActiveSubscription, async (req: any, res) => {
+  app.get("/api/media", requireReadAccess, async (req: any, res) => {
     try {
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
@@ -624,7 +624,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/media/:id/comments", requireActiveSubscription, async (req: any, res) => {
+  app.get("/api/media/:id/comments", requireReadAccess, async (req: any, res) => {
     try {
       const mediaId = parseInt(req.params.id as string);
       if (!(await verifyMediaAccess(mediaId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
@@ -635,7 +635,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/media/:id/comments", requireActiveSubscription, async (req: any, res) => {
+  app.post("/api/media/:id/comments", requireWriteAccess, async (req: any, res) => {
     try {
       const mediaId = parseInt(req.params.id as string);
       if (!(await verifyMediaAccess(mediaId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
@@ -654,7 +654,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/projects/:projectId/annotations", requireActiveSubscription, async (req: any, res) => {
+  app.get("/api/projects/:projectId/annotations", requireReadAccess, async (req: any, res) => {
     try {
       const projectId = parseInt(req.params.projectId as string);
       if (Number.isNaN(projectId)) return res.status(400).json({ message: "Invalid project id" });
@@ -666,7 +666,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/media/:mediaId/annotations", requireActiveSubscription, async (req: any, res) => {
+  app.get("/api/media/:mediaId/annotations", requireReadAccess, async (req: any, res) => {
     try {
       const mediaId = parseInt(req.params.mediaId as string);
       if (Number.isNaN(mediaId)) return res.status(400).json({ message: "Invalid media id" });
@@ -678,7 +678,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/media/:mediaId/annotations", requireActiveSubscription, async (req: any, res) => {
+  app.post("/api/media/:mediaId/annotations", requireWriteAccess, async (req: any, res) => {
     try {
       const mediaId = parseInt(req.params.mediaId as string);
       if (Number.isNaN(mediaId)) return res.status(400).json({ message: "Invalid media id" });
@@ -698,7 +698,7 @@ export async function registerRoutes(
     }
   });
 
-  app.put("/api/annotations/:id", requireActiveSubscription, async (req: any, res) => {
+  app.put("/api/annotations/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = req.params.id as string;
       const existing = await storage.getAnnotation(id);
@@ -716,7 +716,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/annotations/:id", requireActiveSubscription, async (req: any, res) => {
+  app.delete("/api/annotations/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = req.params.id as string;
       const existing = await storage.getAnnotation(id);
@@ -730,7 +730,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/projects/:id/tasks", requireActiveSubscription, async (req: any, res) => {
+  app.post("/api/projects/:id/tasks", requireWriteAccess, async (req: any, res) => {
     try {
       const projectId = parseInt(req.params.id as string);
       const project = await storage.getProject(projectId);
@@ -755,7 +755,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/tasks/:id", requireActiveSubscription, async (req: any, res) => {
+  app.patch("/api/tasks/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
       if (!(await verifyTaskAccess(id, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
@@ -773,7 +773,7 @@ export async function registerRoutes(
   });
 
   // Checklists
-  app.get("/api/checklists", requireActiveSubscription, async (req: any, res) => {
+  app.get("/api/checklists", requireReadAccess, async (req: any, res) => {
     try {
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
@@ -784,7 +784,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/projects/:id/checklists", requireActiveSubscription, async (req: any, res) => {
+  app.post("/api/projects/:id/checklists", requireWriteAccess, async (req: any, res) => {
     try {
       const projectId = parseInt(req.params.id as string);
       if (!(await verifyProjectAccess(projectId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
@@ -817,7 +817,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/checklists/:id", requireActiveSubscription, async (req: any, res) => {
+  app.patch("/api/checklists/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
       if (!(await verifyChecklistAccess(id, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
@@ -834,7 +834,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/checklists/:id", requireActiveSubscription, async (req: any, res) => {
+  app.delete("/api/checklists/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
       if (!(await verifyChecklistAccess(id, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
@@ -845,7 +845,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/checklists/:id/items", requireActiveSubscription, async (req: any, res) => {
+  app.get("/api/checklists/:id/items", requireReadAccess, async (req: any, res) => {
     try {
       const checklistId = parseInt(req.params.id as string);
       if (!(await verifyChecklistAccess(checklistId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
@@ -856,7 +856,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/checklists/:id/items", requireActiveSubscription, async (req: any, res) => {
+  app.post("/api/checklists/:id/items", requireWriteAccess, async (req: any, res) => {
     try {
       const checklistId = parseInt(req.params.id as string);
       if (!(await verifyChecklistAccess(checklistId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
@@ -875,7 +875,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/checklist-items/:id", requireActiveSubscription, async (req: any, res) => {
+  app.patch("/api/checklist-items/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
       const item = await db.select({ checklistId: sql<number>`checklist_items.checklist_id` }).from(sql`checklist_items`).where(sql`checklist_items.id = ${id}`).limit(1);
@@ -894,7 +894,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/checklist-items/:id", requireActiveSubscription, async (req: any, res) => {
+  app.delete("/api/checklist-items/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
       const item = await db.select({ checklistId: sql<number>`checklist_items.checklist_id` }).from(sql`checklist_items`).where(sql`checklist_items.id = ${id}`).limit(1);
@@ -908,7 +908,7 @@ export async function registerRoutes(
   });
 
   // Reports
-  app.get("/api/reports", requireActiveSubscription, async (req: any, res) => {
+  app.get("/api/reports", requireReadAccess, async (req: any, res) => {
     try {
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
@@ -919,7 +919,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/projects/:id/reports", requireActiveSubscription, async (req: any, res) => {
+  app.post("/api/projects/:id/reports", requireWriteAccess, async (req: any, res) => {
     try {
       const projectId = parseInt(req.params.id as string);
       if (!(await verifyProjectAccess(projectId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
@@ -942,7 +942,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/reports/:id", requireActiveSubscription, async (req: any, res) => {
+  app.patch("/api/reports/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
       if (!(await verifyReportAccess(id, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
@@ -959,7 +959,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/reports/:id", requireActiveSubscription, async (req: any, res) => {
+  app.delete("/api/reports/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
       if (!(await verifyReportAccess(id, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
@@ -970,7 +970,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/users", requireActiveSubscription, async (req: any, res) => {
+  app.get("/api/users", requireReadAccess, async (req: any, res) => {
     try {
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
@@ -1034,7 +1034,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/account/seats", requireAdminOrManager, async (req: any, res) => {
+  app.post("/api/account/seats", requireWriteAccess, requireAdminOrManager, async (req: any, res) => {
     try {
       const accountId = req.user.accountId;
       const { desiredCount, expectedCurrent } = req.body || {};
@@ -1179,7 +1179,7 @@ export async function registerRoutes(
   });
 
   // Invitations
-  app.get("/api/invitations", requireActiveSubscription, requireAdminOrManager, async (req: any, res) => {
+  app.get("/api/invitations", requireReadAccess, requireAdminOrManager, async (req: any, res) => {
     try {
       const currentUser = req.user;
       const accountId = currentUser.accountId;
@@ -1203,7 +1203,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/invitations", requireActiveSubscription, requireAdminOrManager, async (req: any, res) => {
+  app.post("/api/invitations", requireWriteAccess, requireAdminOrManager, async (req: any, res) => {
     try {
       const currentUser = req.user;
       const { email, role } = req.body;
@@ -1249,7 +1249,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/invitations/:id", requireActiveSubscription, requireAdminOrManager, async (req: any, res) => {
+  app.delete("/api/invitations/:id", requireWriteAccess, requireAdminOrManager, async (req: any, res) => {
     try {
       const currentUser = req.user;
       const { id } = req.params;
@@ -1264,7 +1264,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/users/:userId", requireActiveSubscription, requireAdminOrManager, async (req: any, res) => {
+  app.delete("/api/users/:userId", requireWriteAccess, requireAdminOrManager, async (req: any, res) => {
     try {
       const currentUser = req.user;
       const { userId } = req.params;
@@ -1285,7 +1285,7 @@ export async function registerRoutes(
   });
 
   // Project assignments (for restricted users)
-  app.get("/api/projects/:id/assignments", requireActiveSubscription, async (req: any, res) => {
+  app.get("/api/projects/:id/assignments", requireReadAccess, async (req: any, res) => {
     try {
       const projectId = parseInt(req.params.id);
       if (!(await verifyProjectAccess(projectId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
@@ -1306,7 +1306,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/projects/:id/assignments", requireActiveSubscription, requireAdminOrManager, async (req: any, res) => {
+  app.post("/api/projects/:id/assignments", requireWriteAccess, requireAdminOrManager, async (req: any, res) => {
     try {
       const currentUser = req.user;
       const projectId = parseInt(req.params.id);
@@ -1330,7 +1330,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/projects/:id/assignments/:userId", requireActiveSubscription, requireAdminOrManager, async (req: any, res) => {
+  app.delete("/api/projects/:id/assignments/:userId", requireWriteAccess, requireAdminOrManager, async (req: any, res) => {
     try {
       const currentUser = req.user;
       const projectId = parseInt(req.params.id);
@@ -1368,7 +1368,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/users/:userId/role", requireActiveSubscription, requireAdminOrManager, async (req: any, res) => {
+  app.patch("/api/users/:userId/role", requireWriteAccess, requireAdminOrManager, async (req: any, res) => {
     try {
       const currentUser = req.user;
       const { userId } = req.params;
@@ -1393,7 +1393,7 @@ export async function registerRoutes(
   });
 
   // Checklist Templates
-  app.get("/api/checklist-templates", requireActiveSubscription, async (req: any, res) => {
+  app.get("/api/checklist-templates", requireReadAccess, async (req: any, res) => {
     try {
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
@@ -1404,7 +1404,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/checklist-templates/:id/items", requireActiveSubscription, async (req: any, res) => {
+  app.get("/api/checklist-templates/:id/items", requireReadAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
       const template = await storage.getChecklistTemplate(id);
@@ -1416,7 +1416,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/checklist-templates", requireActiveSubscription, async (req: any, res) => {
+  app.post("/api/checklist-templates", requireWriteAccess, async (req: any, res) => {
     try {
       const parsed = insertChecklistTemplateSchema.safeParse({
         title: req.body.title,
@@ -1446,7 +1446,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/checklist-templates/:id", requireActiveSubscription, async (req: any, res) => {
+  app.delete("/api/checklist-templates/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
       const template = await storage.getChecklistTemplate(id);
@@ -1459,7 +1459,7 @@ export async function registerRoutes(
   });
 
   // Report Templates
-  app.get("/api/report-templates", requireActiveSubscription, async (req: any, res) => {
+  app.get("/api/report-templates", requireReadAccess, async (req: any, res) => {
     try {
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
@@ -1470,7 +1470,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/report-templates", requireActiveSubscription, async (req: any, res) => {
+  app.post("/api/report-templates", requireWriteAccess, async (req: any, res) => {
     try {
       const parsed = insertReportTemplateSchema.safeParse({
         title: req.body.title,
@@ -1491,7 +1491,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/report-templates/:id", requireActiveSubscription, async (req: any, res) => {
+  app.delete("/api/report-templates/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
       const template = await storage.getReportTemplate(id);
@@ -1503,7 +1503,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/galleries", requireActiveSubscription, async (req: any, res) => {
+  app.post("/api/galleries", requireWriteAccess, async (req: any, res) => {
     try {
       const { projectId, mediaIds, includeMetadata, includeDescriptions } = req.body;
       if (!projectId || !Array.isArray(mediaIds) || mediaIds.length === 0) {
@@ -1559,7 +1559,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/activity", requireActiveSubscription, async (req: any, res) => {
+  app.get("/api/activity", requireReadAccess, async (req: any, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
       const accountId = req.user.accountId;
@@ -1723,7 +1723,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/projects/:id/daily-log", requireActiveSubscription, async (req: any, res) => {
+  app.get("/api/projects/:id/daily-log", requireReadAccess, async (req: any, res) => {
     try {
       const projectId = parseInt(req.params.id);
       const dateStr = (req.query.date as string) || new Date().toISOString().split("T")[0];
@@ -1833,7 +1833,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/analytics", requireActiveSubscription, async (req: any, res) => {
+  app.get("/api/analytics", requireReadAccess, async (req: any, res) => {
     try {
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
