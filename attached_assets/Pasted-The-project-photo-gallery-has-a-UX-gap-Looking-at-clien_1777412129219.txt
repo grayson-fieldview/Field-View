@@ -1,0 +1,41 @@
+The project photo gallery has a UX gap. Looking at client/src/pages/projects/[id] or wherever the project detail photo grid is rendered:
+Currently when a user enters select mode (clicks the multi-select toggle near the grid view buttons), they get checkboxes per-photo and per-day. They can select photos and click "Share" — but there's no Delete action. Two things to add:
+1. Per-photo selection (verify it works, fix if broken)
+Confirm that clicking the individual checkbox in the upper-left corner of a single photo tile selects only that photo (not all photos from that day). If it's broken or missing, fix it. Per-photo selection should work alongside per-day selection — clicking the date row checkbox selects all photos for that day, clicking individual photo checkboxes toggles each one.
+2. Delete action
+Add a "Delete" button to the selection action bar (the bar at the top that currently shows "X Selected" and the "Share" button). Specifications:
+
+Position: to the LEFT of the Share button (so the order is: [X] cancel, "X Selected" text, "Select All" button, then push the right side: Delete (red), Share (orange))
+Visual: red text on white background, OR red icon (trash icon from lucide-react) with red text label "Delete". Use text-red-600 or destructive variant if there's an existing pattern.
+Behavior on click:
+
+Show a confirmation modal: "Delete X photos? This cannot be undone."
+Two buttons: "Cancel" (neutral) and "Delete" (red destructive)
+On confirm: call the existing delete-media endpoint (DELETE /api/media/:id) for each selected photo. Use Promise.all for parallel deletion.
+Show a success toast: "Deleted X photos"
+On any error: show error toast with details, leave non-failed photos still selected
+Refresh the project gallery after success so deleted photos disappear
+
+
+
+3. Important: Don't break existing functionality
+
+Share button must continue to work
+Selection state and select-all behavior must continue to work
+Per-day checkbox must continue to work alongside per-photo checkboxes
+Cancel (X) button must clear selection
+
+What NOT to do:
+
+Don't add a soft-delete with restore. The existing endpoint hard-deletes — match that.
+Don't add bulk operations beyond delete and share
+Don't change any other UI on the page
+
+Verification after applying:
+
+TypeScript compiles cleanly
+Existing share flow still works
+Per-photo and per-day checkboxes both work, can be combined
+Delete with confirmation works, photos disappear after deletion, gallery refreshes
+
+Show me the relevant existing code first (the selection action bar component + the multi-select state management). Then show the proposed diff. Then apply.

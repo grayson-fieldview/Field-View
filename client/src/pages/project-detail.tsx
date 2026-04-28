@@ -694,6 +694,46 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     setSelectedIds(new Set());
   }, []);
 
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const deleteSelected = useCallback(async () => {
+    setIsDeleting(true);
+    const ids = Array.from(selectedIds);
+    const results = await Promise.allSettled(
+      ids.map((mid) => apiRequest("DELETE", `/api/media/${mid}`))
+    );
+    const failed = results
+      .map((r, i) => ({ r, mid: ids[i] }))
+      .filter(({ r }) => r.status === "rejected");
+    const succeededCount = ids.length - failed.length;
+
+    setIsDeleting(false);
+    setShowDeleteConfirm(false);
+
+    if (succeededCount > 0) {
+      toast({
+        title: "Deleted",
+        description: `Deleted ${succeededCount} photo${succeededCount === 1 ? "" : "s"}`,
+      });
+    }
+    if (failed.length > 0) {
+      const firstErr = (failed[0].r as PromiseRejectedResult).reason as Error | undefined;
+      toast({
+        title: `Failed to delete ${failed.length} photo${failed.length === 1 ? "" : "s"}`,
+        description: firstErr?.message || "Try again or refresh the page",
+        variant: "destructive",
+      });
+      setSelectedIds(new Set(failed.map((f) => f.mid)));
+    } else {
+      setSelectedIds(new Set());
+      setSelectionMode(false);
+    }
+
+    queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
+    queryClient.invalidateQueries({ queryKey: ["/api/media"] });
+  }, [selectedIds, id, toast]);
+
   const openShareDialog = useCallback(() => {
     setShareStep("options");
     setShareIncludeMetadata(false);
@@ -1132,6 +1172,16 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                     </Button>
                   </div>
                   <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={() => setShowDeleteConfirm(true)}
+                      disabled={selectedIds.size === 0}
+                      className="text-destructive border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+                      data-testid="button-delete-selected"
+                    >
+                      <Trash2 className="h-4 w-4 mr-2" />
+                      Delete
+                    </Button>
                     <Button
                       onClick={openShareDialog}
                       disabled={selectedIds.size === 0}
@@ -1851,6 +1901,28 @@ export default function ProjectDetailPage({ id }: { id: string }) {
           onNavigate={(m) => setSelectedMedia(m)}
         />
       )}
+
+      <AlertDialog open={showDeleteConfirm} onOpenChange={(open) => { if (!isDeleting) setShowDeleteConfirm(open); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete {selectedIds.size} photo{selectedIds.size === 1 ? "" : "s"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>This cannot be undone.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting} data-testid="button-cancel-delete">Cancel</AlertDialogCancel>
+            <Button
+              variant="destructive"
+              onClick={deleteSelected}
+              disabled={isDeleting}
+              data-testid="button-confirm-delete"
+            >
+              {isDeleting ? "Deleting..." : "Delete"}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={showShareDialog} onOpenChange={setShowShareDialog}>
         <DialogContent className="sm:max-w-md">
