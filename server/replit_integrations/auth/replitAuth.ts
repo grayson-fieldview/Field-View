@@ -10,9 +10,9 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { authStorage } from "./storage";
 import { db, pool } from "../../db";
-import { eq, and, isNull, gt } from "drizzle-orm";
+import { eq, and, isNull, isNotNull, gt } from "drizzle-orm";
 import { passwordResetTokens, emailVerificationTokens, users, accounts, invitations, type User } from "@shared/models/auth";
-import { sendPasswordResetEmail, sendEmailVerificationEmail, sendWelcomeEmail } from "../../services/email";
+import { sendPasswordResetEmail, sendEmailVerificationEmail, sendWelcomeEmail, sendAccountRestoredEmail } from "../../services/email";
 import { getAccountBilling, overlayAccountBillingOnUser, computeAccessLevel } from "../../lib/billing";
 import { verifyRecaptchaToken } from "../../services/recaptcha";
 import { CURRENT_TERMS_VERSION } from "@shared/constants";
@@ -51,17 +51,27 @@ async function findOrCreateOAuthUser(opts: {
   const byProvider = opts.provider === "google"
     ? await authStorage.getUserByGoogleId(opts.providerId)
     : await authStorage.getUserByMicrosoftId(opts.providerId);
-  if (byProvider) return byProvider;
+  if (byProvider) {
+    const restoreResult = await restoreAccountIfWithinGrace(byProvider);
+    if (restoreResult.expired) {
+      throw new Error("Account no longer exists");
+    }
+    return restoreResult.user;
+  }
 
   // 2. Match by email — link the provider id to the existing account
   if (opts.email) {
     const existing = await authStorage.getUserByEmail(opts.email);
     if (existing) {
-      const updated = await authStorage.updateUser(existing.id, {
+      const restoreResult = await restoreAccountIfWithinGrace(existing);
+      if (restoreResult.expired) {
+        throw new Error("Account no longer exists");
+      }
+      const updated = await authStorage.updateUser(restoreResult.user.id, {
         [providerIdField]: opts.providerId,
-        firstName: existing.firstName || opts.firstName || null,
-        lastName: existing.lastName || opts.lastName || null,
-        profileImageUrl: existing.profileImageUrl || opts.profileImageUrl || null,
+        firstName: restoreResult.user.firstName || opts.firstName || null,
+        lastName: restoreResult.user.lastName || opts.lastName || null,
+        profileImageUrl: restoreResult.user.profileImageUrl || opts.profileImageUrl || null,
       } as any);
       return updated!;
     }
@@ -111,6 +121,74 @@ async function findOrCreateOAuthUser(opts: {
     subscriptionStatus: "none",
     trialEndsAt: null,
   } as any);
+}
+
+// 30-day soft-delete grace period. Set deleted_at via DELETE /api/users/me or DELETE /api/account.
+// Within grace, sign-in restores both user and account (clears deleted_at). Past grace, sign-in is rejected.
+const SOFT_DELETE_GRACE_MS = 30 * 24 * 60 * 60 * 1000;
+
+async function restoreAccountIfWithinGrace(
+  user: User,
+): Promise<{ user: User; restored: boolean; expired: boolean }> {
+  if (!user.accountId) {
+    if (user.deletedAt) {
+      const expired = Date.now() - user.deletedAt.getTime() > SOFT_DELETE_GRACE_MS;
+      return { user, restored: false, expired };
+    }
+    return { user, restored: false, expired: false };
+  }
+
+  const [account] = await db.select().from(accounts).where(eq(accounts.id, user.accountId));
+  const now = Date.now();
+  const userExpired = !!user.deletedAt && now - user.deletedAt.getTime() > SOFT_DELETE_GRACE_MS;
+  const accountExpired = !!account?.deletedAt && now - account.deletedAt.getTime() > SOFT_DELETE_GRACE_MS;
+
+  if (userExpired || accountExpired) {
+    return { user, restored: false, expired: true };
+  }
+  if (!user.deletedAt && !account?.deletedAt) {
+    return { user, restored: false, expired: false };
+  }
+
+  // Conditional updates make this idempotent under concurrent restores: if another request
+  // already cleared deleted_at, the WHERE clause matches zero rows and we do nothing.
+  await db.transaction(async (tx) => {
+    if (user.deletedAt) {
+      await tx
+        .update(users)
+        .set({ deletedAt: null })
+        .where(and(eq(users.id, user.id), isNotNull(users.deletedAt)));
+    }
+    if (account?.deletedAt) {
+      await tx
+        .update(accounts)
+        .set({ deletedAt: null })
+        .where(and(eq(accounts.id, account.id), isNotNull(accounts.deletedAt)));
+    }
+  });
+
+  const fresh = (await authStorage.getUser(user.id)) || user;
+
+  console.log(
+    "[account-deletion] user",
+    user.id,
+    "signed in within grace period, restoring account",
+    user.accountId,
+  );
+  Sentry.captureMessage("Account restored within grace period", {
+    level: "info",
+    tags: { event: "account-restore" },
+    extra: { userId: user.id, accountId: user.accountId },
+  });
+
+  if (fresh.email) {
+    sendAccountRestoredEmail(fresh.email, {
+      firstName: fresh.firstName,
+      accountName: account?.name || "your account",
+    }).catch((err) => console.error("[account-deletion] restore email failed:", err));
+  }
+
+  return { user: fresh, restored: true, expired: false };
 }
 
 export function getSession() {
@@ -175,11 +253,19 @@ export async function setupAuth(app: Express) {
             logFail("invalid_password");
             return done(null, false, { message: "Invalid email or password" });
           }
-          if (user.authProvider === "local" && !user.emailVerified) {
+          // Restore-on-signin: if soft-deleted within 30-day grace, clear deleted_at on user + account.
+          // If grace expired, reject sign-in entirely.
+          const restoreResult = await restoreAccountIfWithinGrace(user);
+          if (restoreResult.expired) {
+            logFail("account_deleted_expired");
+            return done(null, false, { message: "Account no longer exists" });
+          }
+          const activeUser = restoreResult.user;
+          if (activeUser.authProvider === "local" && !activeUser.emailVerified) {
             logFail("email_not_verified");
             return done(null, false, { message: "email_not_verified" });
           }
-          return done(null, user);
+          return done(null, activeUser);
         } catch (error) {
           return done(error);
         }
@@ -261,7 +347,18 @@ export async function setupAuth(app: Express) {
   passport.deserializeUser(async (id: string, cb) => {
     try {
       const user = await authStorage.getUser(id);
-      cb(null, user || null);
+      if (!user) return cb(null, null);
+      // Soft-delete gate: treat soft-deleted users as not authenticated for all API calls.
+      // Defense in depth: also check account.deleted_at in case the two get out of sync.
+      if (user.deletedAt) return cb(null, null);
+      if (user.accountId) {
+        const [account] = await db
+          .select({ deletedAt: accounts.deletedAt })
+          .from(accounts)
+          .where(eq(accounts.id, user.accountId));
+        if (account?.deletedAt) return cb(null, null);
+      }
+      cb(null, user);
     } catch (error) {
       cb(error);
     }

@@ -10,9 +10,11 @@ import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClie
 import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertReportSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertReportTemplateSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, reports, projectAssignments } from "@shared/schema";
 import { users, invitations, accounts } from "@shared/models/auth";
 import { db } from "./db";
-import { eq, sql, and, or, inArray, count } from "drizzle-orm";
+import { eq, sql, and, or, inArray, count, isNull } from "drizzle-orm";
 import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, deleteFromS3 } from "./s3";
-import { sendInvitationEmail } from "./services/email";
+import { sendInvitationEmail, sendAccountDeletionEmail } from "./services/email";
+import bcrypt from "bcryptjs";
+import { Sentry } from "./lib/sentry";
 
 async function verifyProjectAccess(projectId: number, accountId: string): Promise<boolean> {
   const project = await storage.getProject(projectId);
@@ -1259,6 +1261,140 @@ export async function registerRoutes(
     }
   });
 
+  // Soft-delete the entire account (owner only). 30-day grace per Apple App Store 5.1.1(v).
+  // Sign-in within grace restores the account; after grace, data is permanently destroyed by a
+  // separate (future) hard-delete job. This endpoint cancels the Stripe sub and emails all members.
+  // NOTE: gated only by isAuthenticated (NOT requireWriteAccess) so users can still delete their
+  // account when billing is in a locked/read-only state. Apple App Store 5.1.1(v) requires the
+  // delete path to remain reachable independent of subscription status.
+  app.delete("/api/account", isAuthenticated, async (req: any, res) => {
+    try {
+      const currentUser = req.user;
+      const accountId = currentUser.accountId;
+
+      const [account] = await db
+        .select()
+        .from(accounts)
+        .where(eq(accounts.id, accountId))
+        .limit(1);
+      if (!account) {
+        return res.status(404).json({ message: "Account not found" });
+      }
+      if (account.ownerId !== currentUser.id) {
+        return res.status(403).json({ message: "Only account owners can delete the account." });
+      }
+
+      const { confirmText, password } = req.body || {};
+      if (confirmText !== "DELETE") {
+        return res.status(400).json({ message: "Type DELETE exactly to confirm." });
+      }
+
+      // Password is REQUIRED. OAuth-only owners (no password set) get an actionable error pointing
+      // to the password-reset flow, since there is no Settings → Security tab in this app.
+      if (!currentUser.password) {
+        return res.status(400).json({
+          message:
+            "To delete the account, please first set a password using the 'Forgot password' flow at /forgot-password, then sign in with your new password and try again.",
+        });
+      }
+      if (typeof password !== "string" || password.length === 0) {
+        return res.status(400).json({ message: "Password required" });
+      }
+      const isValid = await bcrypt.compare(password, currentUser.password);
+      if (!isValid) {
+        return res.status(401).json({ message: "Incorrect password" });
+      }
+
+      const deletedAt = new Date();
+      const restoreDeadline = new Date(deletedAt.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+      // Capture all active members BEFORE delete, for emailing
+      const allUsers = await db
+        .select({ id: users.id, email: users.email, firstName: users.firstName })
+        .from(users)
+        .where(and(eq(users.accountId, accountId), isNull(users.deletedAt)));
+
+      // Soft-delete account + all its users in one transaction
+      await db.transaction(async (tx) => {
+        await tx
+          .update(accounts)
+          .set({ deletedAt, subscriptionStatus: "canceled" })
+          .where(eq(accounts.id, accountId));
+        await tx
+          .update(users)
+          .set({ deletedAt })
+          .where(and(eq(users.accountId, accountId), isNull(users.deletedAt)));
+      });
+
+      // Cancel Stripe subscription (best-effort, outside the transaction)
+      let stripeCanceled = false;
+      if (account.stripeSubscriptionId) {
+        try {
+          const stripe = await getUncachableStripeClient();
+          await stripe.subscriptions.cancel(account.stripeSubscriptionId);
+          stripeCanceled = true;
+        } catch (err) {
+          console.error("[account-deletion] stripe cancel failed:", err);
+        }
+      }
+
+      console.log(
+        "[account-deletion] account",
+        accountId,
+        "soft-deleted by owner",
+        currentUser.id,
+        "—",
+        allUsers.length,
+        "users affected, stripe canceled:",
+        stripeCanceled,
+      );
+      Sentry.captureMessage("Account soft-deleted", {
+        level: "info",
+        tags: { event: "account-deletion-account" },
+        extra: { accountId, ownerId: currentUser.id, usersAffected: allUsers.length, stripeCanceled },
+      });
+
+      const permanentDate = restoreDeadline.toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      });
+      const ownerName =
+        [currentUser.firstName, currentUser.lastName].filter(Boolean).join(" ") ||
+        currentUser.email ||
+        "the account owner";
+
+      // Best-effort parallel notification to all members
+      await Promise.allSettled(
+        allUsers.map((u) => {
+          if (!u.email) return Promise.resolve();
+          return sendAccountDeletionEmail(u.email, {
+            firstName: u.firstName,
+            accountName: account.name,
+            ownerName,
+            permanentDeletionDate: permanentDate,
+          });
+        }),
+      );
+
+      // End the current session
+      req.logout((err: any) => {
+        if (err) console.error("[account-deletion] logout error:", err);
+        req.session?.destroy(() => {
+          res.json({
+            success: true,
+            deletedAt: deletedAt.toISOString(),
+            restoreDeadline: restoreDeadline.toISOString(),
+            message: `Account scheduled for deletion. Sign in before ${permanentDate} to restore.`,
+          });
+        });
+      });
+    } catch (error: any) {
+      console.error("[account-deletion] account-delete error:", error);
+      res.status(500).json({ message: error?.message || "Failed to delete account" });
+    }
+  });
+
   // Invitations
   app.get("/api/invitations", requireReadAccess, requireAdminOrManager, async (req: any, res) => {
     try {
@@ -1391,6 +1527,105 @@ export async function registerRoutes(
       res.json({ message: "Invitation cancelled" });
     } catch (error) {
       res.status(500).json({ message: "Failed to cancel invitation" });
+    }
+  });
+
+  // Self-removal from an account (any role except owner). 30-day soft-delete grace —
+  // signing back in within grace restores the user. Owners must use DELETE /api/account
+  // or transfer ownership first. Best-effort Stripe seat decrement.
+  // NOTE: gated only by isAuthenticated (NOT requireWriteAccess) — see DELETE /api/account.
+  app.delete("/api/users/me", isAuthenticated, async (req: any, res) => {
+    try {
+      const currentUser = req.user;
+      const accountId = currentUser.accountId;
+
+      if (req.body?.confirm !== true) {
+        return res.status(400).json({ message: "Missing confirm flag" });
+      }
+
+      const [account] = await db
+        .select({
+          ownerId: accounts.ownerId,
+          stripeSubscriptionId: accounts.stripeSubscriptionId,
+          seatCount: accounts.seatCount,
+        })
+        .from(accounts)
+        .where(eq(accounts.id, accountId))
+        .limit(1);
+      if (!account) {
+        return res.status(404).json({ message: "Account not found" });
+      }
+      if (account.ownerId === currentUser.id) {
+        return res.status(400).json({
+          message: "Account owners must delete the entire account or transfer ownership first.",
+        });
+      }
+
+      const deletedAt = new Date();
+      await db.update(users).set({ deletedAt }).where(eq(users.id, currentUser.id));
+
+      // Best-effort Stripe seat decrement. Uses Stripe's current quantity as source of truth
+      // (NOT accounts.seatCount) to defend against lost-update races when multiple users
+      // self-leave concurrently. DB seatCount is then synced to Stripe.
+      let seatDecremented = false;
+      if (account.stripeSubscriptionId) {
+        try {
+          const stripe = await getUncachableStripeClient();
+          const sub = await stripe.subscriptions.retrieve(account.stripeSubscriptionId, {
+            expand: ["items.data.price.product"],
+          });
+          const seatLineItem = sub.items.data.find((item) => isSeatAddonItem(item));
+          const currentQty = seatLineItem?.quantity ?? 0;
+          if (seatLineItem && currentQty > 0) {
+            const newAddonQty = currentQty - 1;
+            const itemsUpdate =
+              newAddonQty > 0
+                ? [{ id: seatLineItem.id, quantity: newAddonQty }]
+                : [{ id: seatLineItem.id, deleted: true }];
+            await stripe.subscriptions.update(account.stripeSubscriptionId, {
+              items: itemsUpdate,
+              proration_behavior: "create_prorations",
+            });
+            // Sync DB to authoritative Stripe quantity (3 included seats + addon)
+            await db
+              .update(accounts)
+              .set({ seatCount: newAddonQty + 3 })
+              .where(eq(accounts.id, accountId));
+            seatDecremented = true;
+          }
+        } catch (err) {
+          console.error("[account-deletion] stripe seat decrement failed:", err);
+        }
+      }
+
+      const restoreDeadline = new Date(deletedAt.getTime() + 30 * 24 * 60 * 60 * 1000);
+      console.log(
+        "[account-deletion] user",
+        currentUser.id,
+        "self-deleted from account",
+        accountId,
+        "seat decremented:",
+        seatDecremented,
+      );
+      Sentry.captureMessage("User self-delete", {
+        level: "info",
+        tags: { event: "account-deletion-self" },
+        extra: { userId: currentUser.id, accountId, seatDecremented },
+      });
+
+      req.logout((err: any) => {
+        if (err) console.error("[account-deletion] logout error:", err);
+        req.session?.destroy(() => {
+          res.json({
+            success: true,
+            deletedAt: deletedAt.toISOString(),
+            restoreDeadline: restoreDeadline.toISOString(),
+          });
+        });
+      });
+    } catch (error: any) {
+      console.error("[account-deletion] self-delete error:", error);
+      res.status(500).json({ message: error?.message || "Failed to delete user" });
     }
   });
 

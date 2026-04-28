@@ -228,3 +228,103 @@ export async function sendWelcomeEmail(to: string, firstName?: string | null): P
 
   console.log("[email] Welcome email sent:", data?.id);
 }
+
+export async function sendAccountDeletionEmail(
+  to: string,
+  opts: {
+    firstName?: string | null;
+    accountName: string;
+    ownerName: string;
+    permanentDeletionDate: string;
+  },
+): Promise<void> {
+  if (!resend) {
+    console.warn("[email] Skipping account-deletion send — Resend not configured");
+    return;
+  }
+
+  const greeting = opts.firstName ? `Hi ${opts.firstName},` : "Hi,";
+  const signInUrl = `${PUBLIC_APP_URL}/login`;
+
+  const { data, error } = await resend.emails.send({
+    from: FROM,
+    replyTo: REPLY_TO,
+    to,
+    subject: "Your Field View account has been scheduled for deletion",
+    html: `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 560px; margin: 0 auto; padding: 40px 20px; color: #111;">
+        <h1 style="font-size: 24px; margin-bottom: 16px;">Account scheduled for deletion</h1>
+        <p style="font-size: 16px; line-height: 1.5; margin-bottom: 16px;">${greeting}</p>
+        <p style="font-size: 16px; line-height: 1.5; margin-bottom: 16px;">
+          The Field View account <strong>${opts.accountName}</strong> has been deleted by <strong>${opts.ownerName}</strong>.
+        </p>
+        <p style="font-size: 16px; line-height: 1.5; margin-bottom: 24px;">
+          All data will be permanently removed on <strong>${opts.permanentDeletionDate}</strong>. To restore the account before then, sign in with your existing credentials.
+        </p>
+        <p style="margin-bottom: 24px;">
+          <a href="${signInUrl}" style="background: #f97316; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+            Sign in to restore
+          </a>
+        </p>
+        <p style="font-size: 14px; color: #666; line-height: 1.5;">
+          After ${opts.permanentDeletionDate}, data will be permanently destroyed and cannot be recovered.
+        </p>
+        <hr style="border: none; border-top: 1px solid #eee; margin: 32px 0;">
+        <p style="font-size: 12px; color: #999;">
+          The Field View Team &middot; <a href="https://field-view.com" style="color: #999;">field-view.com</a>
+        </p>
+      </div>
+    `,
+    text: `Account scheduled for deletion\n\n${greeting}\n\nThe Field View account ${opts.accountName} has been deleted by ${opts.ownerName}. All data will be permanently removed on ${opts.permanentDeletionDate}. To restore the account before then, sign in at ${signInUrl} with your existing credentials.\n\nAfter ${opts.permanentDeletionDate}, data will be permanently destroyed and cannot be recovered.\n\n— The Field View Team`,
+  });
+
+  if (error) {
+    console.error("[email] Failed to send account-deletion email:", error);
+    throw new Error(`Email send failed: ${error.message}`);
+  }
+
+  console.log("[email] Account-deletion email sent:", data?.id);
+}
+
+export async function sendAccountRestoredEmail(
+  to: string,
+  opts: { firstName?: string | null; accountName: string },
+): Promise<void> {
+  if (!resend) {
+    console.warn("[email] Skipping account-restored send — Resend not configured");
+    return;
+  }
+
+  const greeting = opts.firstName ? `Hi ${opts.firstName},` : "Hi,";
+
+  const { data, error } = await resend.emails.send({
+    from: FROM,
+    replyTo: REPLY_TO,
+    to,
+    subject: "Your Field View account has been restored",
+    html: `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 560px; margin: 0 auto; padding: 40px 20px; color: #111;">
+        <h1 style="font-size: 24px; margin-bottom: 16px;">Account restored</h1>
+        <p style="font-size: 16px; line-height: 1.5; margin-bottom: 16px;">${greeting}</p>
+        <p style="font-size: 16px; line-height: 1.5; margin-bottom: 24px;">
+          Welcome back. The Field View account <strong>${opts.accountName}</strong> has been restored and your data is intact.
+        </p>
+        <p style="font-size: 14px; color: #666; line-height: 1.5;">
+          Note: If your subscription was canceled during the deletion grace period, you may need to re-subscribe from Settings &rarr; Billing to regain full access.
+        </p>
+        <hr style="border: none; border-top: 1px solid #eee; margin: 32px 0;">
+        <p style="font-size: 12px; color: #999;">
+          The Field View Team &middot; <a href="https://field-view.com" style="color: #999;">field-view.com</a>
+        </p>
+      </div>
+    `,
+    text: `Account restored\n\n${greeting}\n\nWelcome back. The Field View account ${opts.accountName} has been restored and your data is intact.\n\nNote: If your subscription was canceled during the deletion grace period, you may need to re-subscribe from Settings → Billing to regain full access.\n\n— The Field View Team`,
+  });
+
+  if (error) {
+    console.error("[email] Failed to send account-restored email:", error);
+    throw new Error(`Email send failed: ${error.message}`);
+  }
+
+  console.log("[email] Account-restored email sent:", data?.id);
+}

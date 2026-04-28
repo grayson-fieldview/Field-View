@@ -22,8 +22,11 @@ export const accounts = pgTable("accounts", {
   seatCount: integer("seat_count").default(3),
   billingCycle: varchar("billing_cycle"),
   subscriptionLapsedAt: timestamp("subscription_lapsed_at"),
+  deletedAt: timestamp("deleted_at"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (table) => [
+  index("idx_accounts_deleted_at").on(table.deletedAt),
+]);
 
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -44,10 +47,12 @@ export const users = pgTable("users", {
   trialEndsAt: timestamp("trial_ends_at"),
   termsAcceptedAt: timestamp("terms_accepted_at"),
   termsVersion: text("terms_version"),
+  deletedAt: timestamp("deleted_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [
   index("users_account_id_idx").on(table.accountId),
+  index("idx_users_deleted_at").on(table.deletedAt),
 ]);
 
 export const passwordResetTokens = pgTable("password_reset_tokens", {
