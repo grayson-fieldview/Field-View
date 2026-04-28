@@ -36,6 +36,7 @@ import {
   FolderKanban,
   Trash2,
   Users,
+  Pencil,
 } from "lucide-react";
 
 type CalendarConnection = {
@@ -702,13 +703,148 @@ function AccountOwnershipCard() {
   );
 }
 
-export default function SettingsPage() {
-  const { user, logout } = useAuth();
-  const { theme, toggleTheme } = useTheme();
+function ProfileCard() {
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const [editing, setEditing] = useState(false);
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+
+  const updateName = useMutation({
+    mutationFn: async (data: { firstName: string; lastName: string }) => {
+      const res = await apiRequest("PATCH", "/api/auth/me", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+      toast({ title: "Name updated" });
+      setEditing(false);
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Couldn't update name",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
 
   const initials = user
     ? `${(user.firstName || "")[0] || ""}${(user.lastName || "")[0] || ""}`.toUpperCase() || "U"
     : "U";
+
+  const startEdit = () => {
+    setFirstName(user?.firstName || "");
+    setLastName(user?.lastName || "");
+    setEditing(true);
+  };
+
+  const handleSave = () => {
+    const f = firstName.trim();
+    const l = lastName.trim();
+    if (!f || !l) {
+      toast({
+        title: "Both first and last name are required",
+        variant: "destructive",
+      });
+      return;
+    }
+    updateName.mutate({ firstName: f, lastName: l });
+  };
+
+  return (
+    <Card className="p-6" data-testid="card-profile">
+      <div className="flex items-center justify-between gap-2 mb-4">
+        <div className="flex items-center gap-2">
+          <User className="h-5 w-5 text-primary" />
+          <h2 className="text-lg font-semibold">Profile</h2>
+        </div>
+        {!editing && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={startEdit}
+            data-testid="button-edit-name"
+          >
+            <Pencil className="h-3.5 w-3.5 mr-1.5" />
+            Edit
+          </Button>
+        )}
+      </div>
+      <div className="flex items-start gap-4">
+        <Avatar className="h-16 w-16 shrink-0">
+          <AvatarImage src={user?.profileImageUrl || undefined} alt={user?.firstName || "User"} />
+          <AvatarFallback className="text-lg">{initials}</AvatarFallback>
+        </Avatar>
+        <div className="min-w-0 flex-1">
+          {editing ? (
+            <div className="space-y-2">
+              <div className="flex flex-col sm:flex-row gap-2">
+                <Input
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  placeholder="First name"
+                  maxLength={100}
+                  data-testid="input-first-name"
+                />
+                <Input
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  placeholder="Last name"
+                  maxLength={100}
+                  data-testid="input-last-name"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  onClick={handleSave}
+                  disabled={updateName.isPending}
+                  data-testid="button-save-name"
+                >
+                  {updateName.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    "Save"
+                  )}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEditing(false)}
+                  disabled={updateName.isPending}
+                  data-testid="button-cancel-name-edit"
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <h3 className="text-lg font-semibold" data-testid="text-settings-name">
+              {user?.firstName} {user?.lastName}
+            </h3>
+          )}
+          {user?.email && (
+            <p className="text-sm text-muted-foreground flex items-center gap-1.5 mt-1">
+              <Mail className="h-3.5 w-3.5" />
+              {user.email}
+            </p>
+          )}
+          {user?.createdAt && (
+            <p className="text-xs text-muted-foreground flex items-center gap-1.5 mt-0.5">
+              <Calendar className="h-3 w-3" />
+              Member since {new Date(user.createdAt).toLocaleDateString()}
+            </p>
+          )}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+export default function SettingsPage() {
+  const { user, logout } = useAuth();
+  const { theme, toggleTheme } = useTheme();
 
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-3xl mx-auto">
@@ -717,35 +853,7 @@ export default function SettingsPage() {
         <p className="text-sm text-muted-foreground mt-1">Manage your account and preferences</p>
       </div>
 
-      <Card className="p-6" data-testid="card-profile">
-        <div className="flex items-center gap-2 mb-4">
-          <User className="h-5 w-5 text-primary" />
-          <h2 className="text-lg font-semibold">Profile</h2>
-        </div>
-        <div className="flex items-center gap-4">
-          <Avatar className="h-16 w-16">
-            <AvatarImage src={user?.profileImageUrl || undefined} alt={user?.firstName || "User"} />
-            <AvatarFallback className="text-lg">{initials}</AvatarFallback>
-          </Avatar>
-          <div className="min-w-0">
-            <h3 className="text-lg font-semibold" data-testid="text-settings-name">
-              {user?.firstName} {user?.lastName}
-            </h3>
-            {user?.email && (
-              <p className="text-sm text-muted-foreground flex items-center gap-1.5">
-                <Mail className="h-3.5 w-3.5" />
-                {user.email}
-              </p>
-            )}
-            {user?.createdAt && (
-              <p className="text-xs text-muted-foreground flex items-center gap-1.5 mt-0.5">
-                <Calendar className="h-3 w-3" />
-                Member since {new Date(user.createdAt).toLocaleDateString()}
-              </p>
-            )}
-          </div>
-        </div>
-      </Card>
+      <ProfileCard />
 
       <Card className="p-6" data-testid="card-appearance">
         <div className="flex items-center gap-2 mb-4">
