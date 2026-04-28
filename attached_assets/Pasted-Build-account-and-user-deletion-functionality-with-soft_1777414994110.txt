@@ -1,0 +1,99 @@
+Build account and user deletion functionality with soft-delete + 30-day grace period. This is required for Apple App Store Review Guideline 5.1.1(v) which mandates in-app account deletion.
+Two new endpoints:
+
+DELETE /api/users/me — any authenticated user can soft-delete their own user (leave the account). Frees their seat on the account's billing.
+DELETE /api/account — owner-only. Soft-deletes the whole account, all users on it, and all data. Cancels Stripe subscription. Sends email confirmation to all account users.
+
+Soft-delete model:
+
+Add deleted_at TIMESTAMP NULL column to both users and accounts tables (Drizzle schema in shared/schema.ts)
+"Deleted" = deleted_at IS NOT NULL
+30-day grace period: account/user remains restorable for 30 days
+Restore happens automatically on sign-in: if a user signs in and their account is soft-deleted but within grace, clear deleted_at for both their user and account, and they're back
+Permanent hard-delete after 30 days is OUT OF SCOPE for this prompt (will be a separate scheduled job later)
+
+Endpoint 1: DELETE /api/users/me
+File: add to server/routes.ts near other user routes
+Auth: requireWriteAccess (any signed-in user with active subscription)
+Body: none required, but require POST-style confirmation token to prevent CSRF-via-link. Actually this is a DELETE, but to be safe accept an optional { confirm: true } body and reject if missing.
+Logic:
+
+Reject if req.user.role === "owner". Owners cannot self-delete; they must use DELETE /api/account instead. Return 400 with message: "Account owners must delete the entire account or transfer ownership first."
+Set users.deleted_at = NOW() for the current user
+Update Stripe subscription quantity to decrement seat count by 1 (if account has a Stripe customer ID and is on a paid plan)
+Destroy the user's session
+Return { success: true, deletedAt, restoreDeadline } where restoreDeadline = deletedAt + 30 days
+
+Note: photos/comments/tasks created by this user remain on the account but their uploaded_by_id / assigned_to_id references stay valid (just pointing to a soft-deleted user record). UI on the web/mobile can render these as "Former team member" or just show the original name with a struck-through style — that's a separate UI decision, not part of this backend prompt.
+Endpoint 2: DELETE /api/account
+File: add to server/routes.ts near other account routes
+Auth: requireWriteAccess PLUS owner-only check inside the handler:
+tsif (req.user.role !== "owner") {
+  return res.status(403).json({ message: "Only account owners can delete the account." });
+}
+Body required:
+ts{
+  confirmText: string;  // must equal "DELETE" exactly (case-sensitive)
+  password: string;     // user's current password, re-verified
+}
+Validation:
+
+Reject 400 if confirmText !== "DELETE"
+Reject 401 if password doesn't match (use the same bcrypt comparison the login flow uses)
+
+Logic (in a database transaction):
+
+Re-verify password via bcrypt against users.password_hash. Reject 401 on mismatch.
+Set accounts.deleted_at = NOW() for req.user.account_id
+Set users.deleted_at = NOW() for ALL users on this account (mass update)
+Cancel Stripe subscription if one exists: stripe.subscriptions.cancel(account.stripeSubscriptionId) — use cancel, not delete; cancel is the proper Stripe API for ending a subscription. Set cancel_at_period_end: false because we want immediate cancellation. Wrap in try/catch — if Stripe call fails, log it but don't block the deletion (we don't want to be unable to delete because Stripe is down). Set accounts.subscription_status = "canceled" regardless of Stripe response.
+Destroy all sessions for users on this account. Use connect-pg-simple's session table — DELETE rows where the session data references any of the now-deleted user IDs. Or alternately, just destroy the current user's session and let other users get force-signed-out on their next API call (which will return 401 because their user has deleted_at).
+Send email via Resend to ALL users on the account (use the existing email-sending utility). Email content:
+
+Subject: "Your Field View account has been scheduled for deletion"
+Body: "Hi [first name], the Field View account [account name] has been deleted by [owner name]. All data will be permanently removed on [deletedAt + 30 days, formatted as 'May 28, 2026']. To restore the account before then, sign in at app.field-view.com with your existing credentials. After [date], data will be permanently destroyed and cannot be recovered. — The Field View Team"
+
+
+Return { success: true, deletedAt, restoreDeadline, message }
+
+Restore-on-signin logic:
+Modify the login flow in server/replit_integrations/auth/replitAuth.ts (or wherever the login handler lives — find the passport.use(new LocalStrategy(...)) block).
+When a user successfully authenticates (correct email + password), check:
+
+users.deleted_at IS NOT NULL AND users.deleted_at + INTERVAL '30 days' > NOW() AND accounts.deleted_at IS NOT NULL AND same grace check on account
+If both within grace: clear deleted_at on the user AND the account, restart their Stripe subscription if it was canceled (re-subscribe with the same plan), proceed with login as normal. Send email "Your account has been restored."
+If grace period expired: reject login with 401 "Account no longer exists" (data is technically still there until cron runs, but treat as deleted).
+
+Note: restoring a Stripe subscription after cancellation requires creating a NEW subscription (Stripe doesn't support reactivating a canceled sub). You'll need: stripe.subscriptions.create(...) with the same price ID and customer ID. If this fails, log it but allow login — the user can manually re-subscribe from settings. Set accounts.subscription_status = "active" if the recreate succeeds, or leave as "canceled" and let them see the read-only state and re-subscribe through the existing payment flow.
+Modify any existing middleware that gates access (requireReadAccess, requireWriteAccess, the auth-user fetcher) to ALSO check deleted_at IS NULL. A user with deleted_at set should be treated as not-authenticated for all API calls — even if they somehow have a valid session cookie.
+Migration:
+Add the schema migration. Two new columns:
+sqlALTER TABLE users ADD COLUMN deleted_at TIMESTAMP NULL;
+ALTER TABLE accounts ADD COLUMN deleted_at TIMESTAMP NULL;
+CREATE INDEX idx_users_deleted_at ON users(deleted_at);
+CREATE INDEX idx_accounts_deleted_at ON accounts(deleted_at);
+Update shared/schema.ts to declare these. Run db:push to apply to dev DB. Document the manual prod migration step in the response (since prod schema sync is manual per Grayson's tech debt list — don't auto-run on prod).
+Logging:
+Use [account-deletion] prefix for all logs in these handlers. Log:
+
+User self-delete: [account-deletion] user {id} self-deleted from account {accountId}, seat decremented
+Account delete: [account-deletion] account {id} soft-deleted by owner {ownerId}, {N} users affected, stripe canceled: {true/false}
+Restore: [account-deletion] user {id} signed in within grace period, restoring account {accountId}
+
+Send these to Sentry as well via Sentry.captureMessage with level "info" — these are important audit trail events.
+What NOT to do:
+
+Don't write the cron/scheduled job for hard-delete-after-30-days. Out of scope.
+Don't add account-transfer-ownership functionality (separate feature).
+Don't change the existing /api/login error messages or behavior outside the restore logic.
+Don't delete S3 photos. Soft delete leaves S3 objects untouched. Hard delete (later cron) handles that.
+
+Verification after applying:
+
+TypeScript compiles cleanly (no new errors)
+Schema migration ran successfully on dev DB (SELECT deleted_at FROM users LIMIT 1 should not error)
+Both endpoints respond correctly to test requests via curl or the running dev server
+The two new endpoints appear in the route table
+
+Show me the implementation plan first (which files you'll modify, the migration approach, how restore logic integrates with existing auth). Then show the diffs. Then apply.
+Flag any design decisions you make that aren't explicit in the spec.
