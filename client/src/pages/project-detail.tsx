@@ -328,8 +328,8 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const [newReportType, setNewReportType] = useState("inspection");
   const [expandedChecklist, setExpandedChecklist] = useState<number | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const selectionMode = selectedIds.size > 0;
   const [showShareDialog, setShowShareDialog] = useState(false);
   const [shareStep, setShareStep] = useState<"options" | "link">("options");
   const [shareIncludeMetadata, setShareIncludeMetadata] = useState(false);
@@ -690,7 +690,6 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   }, [selectedIds.size]);
 
   const exitSelectionMode = useCallback(() => {
-    setSelectionMode(false);
     setSelectedIds(new Set());
   }, []);
 
@@ -727,7 +726,6 @@ export default function ProjectDetailPage({ id }: { id: string }) {
       setSelectedIds(new Set(failed.map((f) => f.mid)));
     } else {
       setSelectedIds(new Set());
-      setSelectionMode(false);
     }
 
     queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
@@ -1287,14 +1285,14 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                       Compare
                     </Button>
                   )}
-                  {!selectionMode && projectMedia.length > 0 && (
+                  {selectedIds.size === 0 && !compareMode && projectMedia.length > 0 && (
                     <Button
                       variant="outline"
-                      onClick={() => setSelectionMode(true)}
-                      data-testid="button-enter-selection"
+                      onClick={() => setSelectedIds(new Set(projectMedia.map(m => m.id)))}
+                      data-testid="button-select-all-toolbar"
                     >
                       <Check className="h-4 w-4 mr-2" />
-                      Select
+                      Select All
                     </Button>
                   )}
                   <input
@@ -1422,7 +1420,6 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                               }
                               return next;
                             });
-                            if (!selectionMode) setSelectionMode(true);
                           }}
                           data-testid={`checkbox-date-group-${date}`}
                         />
@@ -1442,15 +1439,13 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                                   } else if (comparePhotos[1] === null && item.id !== comparePhotos[0]) {
                                     setComparePhotos([comparePhotos[0], item.id]);
                                   }
-                                } else if (selectionMode) {
-                                  toggleSelection(item.id);
                                 } else {
                                   setSelectedMedia(item);
                                 }
                               }}
                               data-testid={`card-media-${item.id}`}
                             >
-                              <div className={`aspect-[4/3] rounded-md overflow-hidden bg-muted relative ${selectionMode && isSelected ? "ring-2 ring-primary ring-offset-2" : ""} ${compareMode && (comparePhotos[0] === item.id || comparePhotos[1] === item.id) ? "ring-2 ring-blue-500 ring-offset-2" : ""}`}>
+                              <div className={`aspect-[4/3] rounded-md overflow-hidden bg-muted relative ${isSelected ? "ring-2 ring-primary ring-offset-2" : ""} ${compareMode && (comparePhotos[0] === item.id || comparePhotos[1] === item.id) ? "ring-2 ring-blue-500 ring-offset-2" : ""}`}>
                                 <img
                                   src={item.url}
                                   alt={item.caption || item.originalName}
@@ -1459,12 +1454,20 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                                 {(annotationsByMedia.get(item.id)?.length ?? 0) > 0 && (
                                   <AnnotationOverlay strokes={annotationsByMedia.get(item.id) || []} />
                                 )}
-                                {selectionMode && (
-                                  <div className="absolute top-2 left-2">
-                                    <div className={`h-6 w-6 rounded-md border-2 flex items-center justify-center transition-colors ${isSelected ? "bg-primary border-primary" : "bg-black/30 border-white/70"}`} data-testid={`checkbox-media-${item.id}`}>
-                                      {isSelected && <Check className="h-4 w-4 text-primary-foreground" />}
-                                    </div>
-                                  </div>
+                                {!compareMode && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => { e.stopPropagation(); toggleSelection(item.id); }}
+                                    aria-label={isSelected ? "Deselect photo" : "Select photo"}
+                                    data-testid={`checkbox-media-${item.id}`}
+                                    className={`absolute top-2 left-2 h-6 w-6 rounded-full border flex items-center justify-center transition-opacity ${
+                                      isSelected
+                                        ? "bg-primary border-primary text-primary-foreground opacity-100"
+                                        : "bg-white/60 border-gray-400 hover:bg-white/90 backdrop-blur-sm opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
+                                    }`}
+                                  >
+                                    {isSelected && <Check className="h-3.5 w-3.5" />}
+                                  </button>
                                 )}
                                 {compareMode && comparePhotos[0] === item.id && (
                                   <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-blue-600 text-white text-xs font-semibold">
@@ -1476,7 +1479,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                                     After
                                   </div>
                                 )}
-                                {!selectionMode && !compareMode && (
+                                {!isSelected && !compareMode && (
                                   <button
                                     className={`absolute top-2 right-2 h-7 w-7 rounded-full flex items-center justify-center transition-opacity ${project.coverPhotoId === item.id ? "bg-primary text-primary-foreground opacity-100" : "bg-black/50 text-white opacity-0 group-hover:opacity-100"}`}
                                     onClick={(e) => {
@@ -1489,7 +1492,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                                     <Star className={`h-3.5 w-3.5 ${project.coverPhotoId === item.id ? "fill-current" : ""}`} />
                                   </button>
                                 )}
-                                {item.uploadedBy && !selectionMode && (
+                                {item.uploadedBy && (
                                   <div className="absolute bottom-2 right-2">
                                     <Avatar className="h-7 w-7 border-2 border-white">
                                       <AvatarImage src={item.uploadedBy.profileImageUrl || undefined} />

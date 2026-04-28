@@ -1,0 +1,71 @@
+Improve the photo selection UX on the project detail photo gallery. Currently, users must click the "Select" mode button (the rectangle icon next to the grid view buttons) before per-photo checkboxes appear. This is a discoverability problem — users don't realize they can select photos without entering select mode first.
+What to change:
+Make the per-photo selection checkbox appear on hover in the upper-left corner of every photo tile, regardless of whether the user has explicitly entered select mode. When the user clicks the hover checkbox, that photo becomes selected AND the selection action bar (the "X Selected / Select All / Delete / Share" bar at the top) appears automatically.
+Specifications:
+
+Hover state:
+
+When the user hovers over any photo tile in the gallery, a checkbox icon appears in the upper-left corner of the tile
+The checkbox should be visually subtle: white circle with grey border, semi-transparent background (so the photo behind it is still visible), ~24px square
+It should look "clickable" but not visually heavy — similar to how Apple Photos, Google Photos, and similar apps handle hover-to-select
+
+
+Click behavior:
+
+Clicking the checkbox toggles selection state for that single photo
+On the FIRST selection (going from 0 → 1 selected photos), the selection action bar at the top should slide in / appear automatically — no need to click "Select" mode first
+Subsequent selections add to the count
+Deselecting the last selected photo (going from 1 → 0) should hide the action bar again
+
+
+Selected state (always visible, not just on hover):
+
+When a photo is selected, the checkbox stays visible (filled in, with a checkmark) regardless of hover state
+Add a visual indicator that the photo is selected: an orange or blue border around the tile, and/or a slight overlay tint
+
+
+Date row checkbox behavior — preserve:
+
+Keep the existing "Tuesday, April 28, 2026" date row checkbox that selects all photos for that day
+It should work in conjunction with per-photo selection — clicking the date checkbox selects all photos under that date, individual checkboxes can then deselect specific ones
+
+
+The existing "Select" mode button (the square icon in the toolbar):
+
+Can be kept for backwards compatibility, OR
+Can be removed if it's now redundant
+Recommend: KEEP it but rename or repurpose it as a "Select all" shortcut — clicking it selects every photo in the gallery at once, useful for bulk operations
+
+
+Mobile / touch devices:
+
+On touch devices (no hover), the checkbox should be visible by default in the upper-left corner of every photo, since hover doesn't exist on mobile
+Use CSS @media (hover: hover) to scope the hover-only behavior to desktop
+On touch, the checkbox can be slightly smaller/more subtle so it doesn't visually dominate the photo
+
+
+
+Design references for inspiration:
+
+Apple Photos web — checkbox appears on hover, top-left
+Google Photos — same pattern, also appears on hover
+Dropbox file gallery — same pattern
+
+What NOT to do:
+
+Don't change the Delete or Share button behavior or styling
+Don't modify the photo grid layout itself (3-up vs 6-up etc.)
+Don't change how individual photos open when clicked elsewhere on the tile (only the checkbox should toggle selection; clicking the photo itself should still open the photo detail view, unless the photo is already selected — in which case clicking it could either deselect or open detail, your call but document the choice)
+
+Verification after applying:
+
+TypeScript compiles cleanly
+Hover over any photo on desktop → checkbox appears in upper-left
+Click the checkbox → photo selected, action bar appears
+Click another photo's checkbox → count increments
+Deselect all → action bar disappears
+Date row checkbox still works
+Existing Share and Delete buttons still function on selected photos
+On a touch device or with browser dev tools simulating mobile, checkboxes are visible without hover
+
+Show me the relevant existing code first (the PhotoTile component + the selection state management). Then show the proposed diff. Then apply.
