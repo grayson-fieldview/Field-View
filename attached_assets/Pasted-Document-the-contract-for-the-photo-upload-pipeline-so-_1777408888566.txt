@@ -1,0 +1,42 @@
+Document the contract for the photo upload pipeline so we can implement it on mobile. I need exact request/response shapes for both endpoints so mobile code can match what the backend already accepts.
+For each endpoint below, find the route handler in the server code and document:
+
+POST /api/uploads/sign
+
+File path and line number of the route handler
+Auth middleware applied (which requireX middleware?)
+Exact request body schema — what fields are required, what are optional, what are the types?
+Validation rules (e.g., max file size, allowed MIME types, max files per request)
+What does the handler do — generate S3 presigned URLs how? Using which AWS SDK methods? What's the expiration? Is accountId derived from session?
+Exact response shape — confirm it returns an array of {key, uploadUrl, publicUrl} per input file
+
+
+POST /api/media
+
+File path and line number of the route handler
+Auth middleware applied
+Exact request body schema — list every field expected, especially: does it want key or publicUrl or both? Does it want projectId? originalName? mimeType? fileSize? latitude/longitude? caption? tags?
+Does it derive accountId and uploadedById from the session, or are they expected in the request?
+Validation rules
+What does the handler do — write to which database table? With what columns? Does it verify the S3 object actually exists before recording? Does it handle batch (multiple files in one request) or single?
+Exact response shape
+
+
+Anything else relevant:
+
+Are there any other endpoints involved in photo upload? (e.g., a separate /api/photos route, or any update endpoints?)
+Is there any rate limiting on these routes?
+Are there any side effects on upload (notification fan-out, analytics events, audit log entries)?
+
+
+
+Output format:
+A markdown document with one section per endpoint. Inside each section, include:
+
+Route definition (copied directly from the source)
+Request body TypeScript interface (or Zod schema if used)
+Response body TypeScript interface
+Any validation logic (copied from source)
+Brief description of side effects
+
+Do not modify any code — this is documentation only. The output will be used as the spec for building the mobile equivalent.
