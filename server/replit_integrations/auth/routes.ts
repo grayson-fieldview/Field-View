@@ -2,6 +2,9 @@ import type { Express } from "express";
 import { authStorage } from "./storage";
 import { isAuthenticated } from "./replitAuth";
 import { overlayAccountBillingOnUser } from "../../lib/billing";
+import { db } from "../../db";
+import { accounts } from "@shared/models/auth";
+import { eq } from "drizzle-orm";
 
 export function registerAuthRoutes(app: Express): void {
   app.get("/api/auth/user", isAuthenticated, async (req: any, res) => {
@@ -13,7 +16,18 @@ export function registerAuthRoutes(app: Express): void {
       }
       const { password: _, ...safeUser } = user;
       const safeUserWithBilling = await overlayAccountBillingOnUser(safeUser, req);
-      res.json(safeUserWithBilling);
+      // Account ownership flag for client gating (e.g. "Delete account" UI).
+      // Defensive defaults: missing accountId or missing account row → false.
+      let isOwner = false;
+      if (user.accountId) {
+        const [account] = await db
+          .select({ ownerId: accounts.ownerId })
+          .from(accounts)
+          .where(eq(accounts.id, user.accountId))
+          .limit(1);
+        isOwner = !!account && account.ownerId === user.id;
+      }
+      res.json({ ...safeUserWithBilling, isOwner });
     } catch (error) {
       console.error("Error fetching user:", error);
       res.status(500).json({ message: "Failed to fetch user" });
