@@ -1,0 +1,64 @@
+4 of 5 patterns approved. One change:
+
+DATE PRESETS — option B, with adjusted preset list:
+- This week (Monday-Sunday, current week, in user's local tz)
+- Last week (Monday-Sunday, previous week)
+- This month
+- Last month  
+- Last 7 days
+- Last 30 days
+- Custom (two date inputs)
+
+Default: "Last week" — payroll workflow optimization.
+
+Reason for override: "Last 7 days" works for analytics but is wrong for
+payroll. Contractors run payroll on calendar weeks (Mon-Sun) and calendar
+months. Symmetry with the analytics page is less important than getting
+the workflow right for the page's actual job.
+
+Don't backport these presets to analytics in this session — keep scope tight.
+
+DATE LIBRARY DECISION:
+- Try native first
+- If startOfWeek / endOfWeek / startOfMonth / endOfMonth helpers in
+  user-local timezone, accounting for DST transitions, are clean and
+  obviously-correct in <15 lines each, stick with native
+- If implementation gets gnarly OR you find yourself reasoning about
+  DST edge cases, install date-fns and use its startOfWeek/endOfWeek/
+  startOfMonth/endOfMonth (with { weekStartsOn: 1 })
+- Off-by-one-hour on a payroll period boundary is a serious bug, so err
+  toward date-fns if there's any doubt
+
+Your call to make based on what the implementation actually looks like.
+Show me which path you took and why.
+
+ADDITIONAL SCOPE: Active entry visual treatment
+
+When an expanded user row contains an entry with clockOut === null
+(currently clocked in):
+- The entry's row should have a subtle visual indicator (small green
+  pulse dot, or a "Live" / "Currently clocked in" pill — your call,
+  match the codebase's badge aesthetic)
+- The duration cell shows live elapsed time, e.g. "3h 12m so far"
+- Refresh every 60 seconds via useEffect + setInterval, cleaned up on
+  unmount
+- The Cost cell shows the running cost for that active entry if rate
+  is set, with a "(in progress)" suffix or similar
+
+Keep the rest of spec as written:
+- Section divider approach for nav (no SidebarMenuSub)
+- Nested TableRow with colspan for expand
+- Client-side useMemo aggregation
+- Standard route-level redirect pattern matching team.tsx
+
+Test data: 4 entries already exist on Neon dev across 3 users, including
+one null-rate entry — perfect for testing the ⚠️ path. The active mgr
+clock-in is also a perfect test case for the new active-entry visual.
+
+PROCEED with implementation.
+
+Same deliverables: files touched, screenshots (full page, expanded row,
+active entry, empty state, std user redirect), npm run check, verification
+matrix.
+
+No git push. Review in chat.

@@ -25,13 +25,21 @@ import {
   FileBarChart,
   BarChart3,
   CalendarDays,
+  Clock,
 } from "lucide-react";
 import { useLocation, Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { ThemeToggle } from "@/components/theme-toggle";
 import faviconImg from "@assets/Favicon-01_1772067008525.png";
 
-const navItems = [
+type NavItem = {
+  title: string;
+  url: string;
+  icon: typeof LayoutDashboard;
+  roles: string[] | null;
+};
+
+const workspaceItems: NavItem[] = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard, roles: null },
   { title: "Projects", url: "/projects", icon: FolderKanban, roles: null },
   { title: "Tasks", url: "/tasks", icon: ClipboardList, roles: null },
@@ -41,8 +49,12 @@ const navItems = [
   { title: "Analytics", url: "/analytics", icon: BarChart3, roles: null },
   { title: "Calendar", url: "/calendar", icon: CalendarDays, roles: null },
   { title: "Map", url: "/map", icon: MapPin, roles: null },
-  { title: "Team", url: "/team", icon: Users, roles: ["admin", "manager"] },
   { title: "Settings", url: "/settings", icon: Settings, roles: null },
+];
+
+const managerItems: NavItem[] = [
+  { title: "Team", url: "/team", icon: Users, roles: ["admin", "manager"] },
+  { title: "Timesheets", url: "/manager/timesheets", icon: Clock, roles: ["admin", "manager"] },
 ];
 
 export function AppSidebar() {
@@ -74,7 +86,7 @@ export function AppSidebar() {
           </div>
           <SidebarGroupContent>
             <SidebarMenu>
-              {navItems.filter(item => !item.roles || item.roles.includes(user?.role || "standard")).map((item) => {
+              {workspaceItems.filter(item => !item.roles || item.roles.includes(user?.role || "standard")).map((item) => {
                 const isActive = item.url === "/"
                   ? location === "/"
                   : location.startsWith(item.url);
@@ -96,6 +108,43 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+
+        {(() => {
+          const visibleManagerItems = managerItems.filter(
+            (item) => !item.roles || item.roles.includes(user?.role || "standard"),
+          );
+          if (visibleManagerItems.length === 0) return null;
+          return (
+            <SidebarGroup data-testid="group-manager">
+              <div className="px-3 py-1">
+                <p className="text-[11px] font-semibold uppercase tracking-widest text-sidebar-foreground/40" data-testid="text-manager-label">
+                  Manager Workspace
+                </p>
+              </div>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {visibleManagerItems.map((item) => {
+                    const isActive = location.startsWith(item.url);
+                    return (
+                      <SidebarMenuItem key={item.title}>
+                        <SidebarMenuButton
+                          asChild
+                          isActive={isActive}
+                          data-testid={`nav-${item.title.toLowerCase()}`}
+                        >
+                          <Link href={item.url} onClick={() => { if (isMobile) setOpenMobile(false); }}>
+                            <item.icon className="h-4 w-4" />
+                            <span>{item.title}</span>
+                          </Link>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    );
+                  })}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          );
+        })()}
       </SidebarContent>
 
       <SidebarFooter className="p-3 space-y-2">

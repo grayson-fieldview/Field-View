@@ -12,6 +12,16 @@ export function centsToDisplayPerHour(cents: number | null | undefined): string 
   return `$${dollars.toFixed(2)}/hr`;
 }
 
+export function centsToCurrency(cents: number | null | undefined): string {
+  if (cents == null) return "—";
+  return (cents / 100).toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
 export function dollarsToCents(input: string): number | null {
   const trimmed = input.trim();
   if (!RATE_REGEX.test(trimmed)) return null;
