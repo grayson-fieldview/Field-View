@@ -1,0 +1,52 @@
+PROD MIGRATION — STAGE 1: DIAGNOSE & DRY-RUN ONLY. NO WRITES.
+
+Goal: apply the Session 22 schema additions to prod RDS. Same SQL that's
+already running on Neon dev, applied via the same script.
+
+PRECONDITIONS (the human has already done these, do not redo):
+- Manual RDS snapshot taken: pre-session22-timesheets-2026-05-01 (Available)
+- Replit IP 136.109.112.40/32 added to RDS security group inbound rules
+
+CONNECTION STRATEGY:
+We are NOT changing the workspace DATABASE_URL secret. Instead, the human
+will paste the prod RDS URL into your environment for ONE command, then we
+unset it. This minimizes the window where prod is reachable from this shell.
+
+The prod RDS URL the human will provide is the same value that's set in the
+Vercel project's DATABASE_URL environment variable. Format:
+  postgresql://USER:PASS@fieldview-user-database.cziy604o6se2.us-east-2.rds.amazonaws.com:5432/DBNAME
+
+STAGE 1 — DIAGNOSE (do all of this without me providing the URL yet):
+
+1. Read script/migrations/migrate_session22_timesheets.ts in full and paste
+   the contents. I want to see the exact SQL that will run.
+
+2. Confirm every statement uses IF NOT EXISTS or equivalent idempotency guard.
+   List each statement and its idempotency mechanism.
+
+3. Read server/db.ts. How does it construct the pg pool? Specifically:
+   - Does it use the Neon serverless driver or the standard pg driver?
+   - The Neon driver (@neondatabase/serverless) DOES NOT WORK against RDS.
+     If server/db.ts uses Neon's driver, the script will fail to connect to
+     RDS even with the right URL. Verify which driver the script uses.
+
+4. If server/db.ts uses Neon's driver, propose how to run the migration
+   against RDS. Options:
+   (a) Write a one-shot variant of the script that uses node-postgres `pg`
+       directly with the standard Pool, bypassing the Neon serverless layer
+   (b) Use psql from the shell (is psql installed? `which psql`)
+   (c) Some other approach you propose
+
+5. Check `which psql` and `psql --version`. If installed, that may be the
+   simplest path — feed the SQL via psql directly.
+
+6. Propose your recommended execution path and STOP. I will approve before
+   you proceed.
+
+DO NOT:
+- Connect to any database
+- Modify the migration script
+- Run anything destructive
+- Echo or log the full prod URL once provided (mask the password in any output)
+
+REPORT BACK with all 6 items above. Then wait for my approval.
