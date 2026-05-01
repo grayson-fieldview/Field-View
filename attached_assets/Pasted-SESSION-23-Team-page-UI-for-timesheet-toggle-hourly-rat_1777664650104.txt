@@ -1,0 +1,105 @@
+SESSION 23 — Team page UI for timesheet toggle + hourly rate
+Web only. Manager-only visibility. Backend already shipped to prod (Session 22).
+
+DIAGNOSE FIRST — DO NOT WRITE CODE YET
+
+Read the existing Team page and report:
+1. File path of the Team page component
+2. How is the user list rendered? (table, cards, list — paste a small excerpt)
+3. How are existing per-user manager actions handled (e.g., role change,
+   remove from account, resend invitation)? Modal? Inline? Dropdown menu?
+4. Where does the Team page get its data (which API endpoint, which React
+   Query key)?
+5. How is the manager check done in the UI — is there a useCurrentUser hook
+   or similar, and what role values are considered "manager"?
+6. What's the existing form library / pattern (react-hook-form + zod? plain
+   useState?)
+7. What's the existing toast/notification pattern for success/error?
+
+REPORT BACK before writing code.
+
+IMPLEMENTATION (after I approve patterns)
+
+Visibility:
+- Entire Timesheets column/section is hidden for non-managers (role !==
+  admin && role !== manager)
+- Backend already strips hourlyRateCents for non-managers (sanitizer at
+  server/lib/userVisibility.ts), but the UI gate is defense-in-depth
+
+Add to Team page user row (manager view only), two pieces of info per user:
+
+A. Timesheet tracking toggle
+   - Label: "Timesheet tracking"
+   - Switch component (use whatever the codebase already uses — likely
+     shadcn/ui Switch)
+   - On change: PATCH /api/users/:userId with { timesheetEnabled: bool }
+   - Optimistic update with React Query, rollback on error
+   - Toast on success/error
+
+B. Hourly rate
+   - Label: "Hourly rate"
+   - Display:
+     - If hourlyRateCents is null → "Not set" (muted text) with a "Set rate"
+       link/button
+     - If set → "$25.00/hr" (format from cents: cents / 100, two decimals)
+       with an "Edit" link/button
+   - Click opens a small modal (or inline editor — match whatever pattern
+     the existing role-change uses)
+   - Modal contents:
+     - Numeric input, accepts decimals (e.g., "25.50")
+     - Convert to cents on submit: Math.round(parseFloat(input) * 100)
+     - Validation:
+       - Must parse to a finite number >= 0
+       - After conversion, must be a non-negative integer
+       - Reject if input has more than 2 decimal places
+       - Show "Enter a valid hourly rate, e.g. 25.50"
+     - "Clear rate" button (sets to null)
+     - "Save" button — PATCH /api/users/:userId with
+       { hourlyRateCents: number | null }
+   - On success: close modal, refresh user list, toast
+
+Edge cases:
+- A user can't edit their own rate or toggle — only OTHER users they have
+  permission over (mirror the existing role-edit logic — managers usually
+  can't edit themselves on these admin fields)
+- If existing role-edit logic allows self-edit, follow that pattern (don't
+  invent a new rule)
+- If user's role is "owner" / "admin" and current user is "manager" (not
+  admin): defer to existing permission patterns. Don't invent new rules —
+  match how role-change is gated today.
+
+Format helpers (put in client/src/lib/money.ts or wherever existing money
+utils live — check first):
+- centsToDisplay(cents: number | null): string  → "$25.00" or "—"
+- centsToDisplayPerHour(cents): string  → "$25.00/hr" or "Not set"
+- dollarsToCents(input: string): number | null  → null on invalid, else
+  integer cents
+
+VERIFICATION
+- Run dev server, log in as test-adm-s22 (admin)
+- Toggle timesheet for test-std-s22 → verify in DB column flipped + UI
+  reflects
+- Set hourly rate to 27.50 for test-std-s22 → verify hourly_rate_cents =
+  2750 in DB
+- Edit to 30 → verify 3000
+- Edit to 25.999 → expect validation error
+- Edit to -5 → expect validation error
+- Clear rate → verify null in DB
+- Log in as test-std-s22 (standard) → confirm no Timesheets column visible
+  at all
+- Log in as test-mgr-s22 (manager) → confirm Timesheets column visible and
+  editable
+- Confirm React Query invalidates the user list query key so the table
+  updates after each change
+- Confirm no console errors, no TS errors (npm run check baseline = 33)
+
+DELIVERABLE
+1. Files touched
+2. Screenshots of: manager view with rates, standard user view (no column),
+   edit modal, validation error states
+3. npm run check output
+4. Confirm verification matrix above
+5. Any pattern decisions where you deviated from existing conventions
+   (and why)
+
+Do not push to git. Review in chat first.
