@@ -1,0 +1,162 @@
+SESSION 26 — CSV export + chart toggle on /manager/timesheets
+Web only. Manager-only. Builds on Session 24's existing page.
+
+DIAGNOSE FIRST — DO NOT WRITE CODE YET
+
+1. Recharts usage on the analytics page
+   - File path of the analytics page
+   - Show the imports (BarChart, Bar, XAxis, YAxis, etc.)
+   - Show how the chart is sized/styled (responsive container? fixed
+     height? Tailwind classes used)
+   - What color tokens does it use for bars? CSS variables, hex, theme
+     colors?
+
+2. Existing CSV export anywhere in the codebase
+   - grep for "Content-Type: text/csv" or "csv" file generation
+   - Is there an existing pattern for streaming downloads from an Express
+     route? If yes, paste the relevant snippet
+   - Is there a CSV-formatting library already installed (papaparse,
+     csv-stringify, etc.) or does the codebase format manually?
+
+3. Existing stat-card / button-group patterns on the page
+   - Read client/src/pages/manager-timesheets.tsx (Session 24 work)
+   - Identify where the table view lives and where I'd insert the
+     chart-vs-table toggle
+   - Identify where to insert the export button(s) — near the date range
+     picker or as a separate action button area?
+
+4. Authentication for download endpoints
+   - The browser will hit GET /api/timesheets/export.csv as a top-level
+     navigation (window.location = ... or <a download>) — does the auth
+     cookie get sent on those? Confirm by checking session config in
+     server/replit_integrations/auth/replitAuth.ts.
+   - If for some reason cookies aren't sent on file downloads, propose
+     an alternative (POST with download trigger, signed URL, etc.)
+
+REPORT BACK before writing any code.
+
+IMPLEMENTATION (after I approve patterns)
+
+PART A — CSV EXPORT
+
+New endpoint: GET /api/timesheets/export.csv
+  Query params (same as GET /api/timesheets):
+    - startDate (required, ISO)
+    - endDate (required, ISO)
+    - projectId (optional)
+    - userId (optional, but ignored if not manager)
+    - format: "generic" | "gusto" | "quickbooks" (default "generic")
+  
+  Auth: requireReadAccess + requireAdminOrManager (manager-only)
+  Account-scoped same as GET /api/timesheets
+  
+  Response:
+    - Content-Type: text/csv; charset=utf-8
+    - Content-Disposition: attachment; filename="timesheets-{startDate}-to-{endDate}.csv"
+    - Body: CSV string
+  
+  CSV escaping: any field containing comma, quote, or newline gets
+  wrapped in double quotes; double quotes inside fields get doubled.
+  Use a small inline helper or install csv-stringify (npm) — agent's
+  call based on what's already in package.json.
+
+  Generic format columns:
+    User Name, Email, Project, Clock In (ISO), Clock Out (ISO),
+    Duration (hours, decimal 2dp), Source, Hourly Rate (USD),
+    Cost (USD), Notes, Edited By, Edited At
+  
+  Gusto format columns (per Gusto's CSV import for hours):
+    Employee Email, First Name, Last Name, Work Date, Regular Hours,
+    Hourly Rate, Notes
+    - Aggregate per (user, project, work_date) — Gusto wants daily
+      summary rows, not individual clock-ins
+    - Work Date = YYYY-MM-DD in user's local tz (default US Eastern;
+      flag this — see open question below)
+  
+  QuickBooks format columns (per QB Time/QuickBooks Online time entry):
+    Date, Employee, Customer:Job, Service Item, Duration (HH:MM),
+    Hourly Rate, Notes
+    - Per-entry, not aggregated (QB accepts individual entries)
+    - Customer:Job uses the project name as the customer identifier
+    - Service Item: leave blank for v1 (user can map manually in QB)
+
+  Active entries (clock_out IS NULL): EXCLUDE from export. Currently-
+  clocked-in entries don't belong in payroll. Note this in the response
+  somehow — perhaps a comment row at top: "# {N} active entries excluded"
+  Actually scratch that — comment rows break some CSV importers. Just
+  silently exclude. Document the behavior in the UI tooltip.
+  
+  Null-rate entries: include them, show empty Hourly Rate and empty
+  Cost cells. Manager can fill in manually if needed before importing.
+
+UI: Export button (or button group)
+  - Place near the date range picker / project filter row
+  - Either a single "Export CSV" button with a dropdown for format,
+    OR three buttons inline ("Export CSV", "Export Gusto", "Export QB")
+  - Your call — match whatever feels cleaner with the existing layout
+  - Click → triggers download via window.location.assign or hidden <a>
+    with the URL including current filter params
+  - Toast on click: "Generating export..." (since the click feels
+    instant but file download can take a sec)
+  - Tooltip on the button(s) explaining: "Active (clocked-in) entries
+    are excluded from exports."
+
+PART B — CHART TOGGLE
+
+Toggle component:
+  - Two icon buttons or a tabs component above the table — Table /
+    Chart icons (use lucide-react LayoutList and BarChart3 or similar)
+  - Default view: Table (current behavior)
+  - Toggle to Chart: hides the table, shows a bar chart in its place
+  - State: useState<"table" | "chart">("table") — no URL persistence
+    needed for this v1
+
+Bar chart contents:
+  - X axis: user names (firstName + lastName)
+  - Y axis: total hours
+  - Sorted descending by hours
+  - One bar per user, height = totalHours from the existing useMemo
+    aggregation
+  - Tooltip on hover shows: Name, Total hours, Total cost
+  - Color: use whatever primary color token the analytics page uses
+    for its bars (consistency)
+  - ResponsiveContainer height: 400px or matches analytics page
+    convention
+  - Empty state: "No data for the selected range" — same as table
+    empty state
+
+OPEN QUESTIONS to flag in your diagnosis:
+  - Timezone for Gusto's "Work Date": US Eastern hardcoded for v1?
+    Or use the manager's browser timezone? Or read from the user
+    record if there's a tz field? Recommend the simplest correct
+    behavior and explain.
+  - csv-stringify vs hand-roll: if the codebase has zero CSV libs
+    installed, hand-roll a 20-line CSV escape helper. If something's
+    already there, use it. Don't add a new dep just for this.
+
+VERIFICATION
+- npm run check stays at baseline 33
+- Manager logs in, current Neon dev test data → click "Export CSV"
+  - File downloads
+  - Open in spreadsheet app, confirm columns + data render correctly
+  - Confirm a row with comma in notes gets correctly quoted
+  - Confirm null-rate entries show empty rate cells
+- Same for Gusto + QuickBooks formats — check column ordering matches
+  the spec
+- Active entry (test-mgr-s22's open entry) is NOT in any export
+- Toggle to Chart view → bar chart renders, sorted descending
+- Hover tooltip works
+- Toggle back to Table → table reappears, no state lost
+- Standard user hits /api/timesheets/export.csv directly → 403
+- Different account user hits the URL → 403 (account isolation)
+
+DELIVERABLE
+1. Files touched
+2. Decision on csv lib vs hand-roll, with reasoning
+3. Decision on timezone for Gusto Work Date, with reasoning
+4. Screenshots: chart view, export button(s), opened CSV in spreadsheet
+5. npm run check output
+6. Verification matrix results
+7. Any deviations from existing conventions, with reasoning
+
+Do not push to git. Review in chat first.
