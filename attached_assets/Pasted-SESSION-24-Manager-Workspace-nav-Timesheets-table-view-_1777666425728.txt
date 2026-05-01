@@ -1,0 +1,152 @@
+SESSION 24 — Manager Workspace nav + Timesheets table view
+Web only. Manager-only access. Backend already shipped.
+
+DIAGNOSE FIRST — DO NOT WRITE CODE YET
+
+1. Sidebar / nav structure
+   - Where is the main nav defined? (likely client/src/components/layout
+     or similar). Paste the relevant component file path + a short excerpt
+     showing how nav items are added.
+   - Is there an existing pattern for nested nav sections (parent label
+     with child items underneath)? If yes, show it. If no, propose how to
+     add one consistent with the existing aesthetic.
+   - Is there any role-gating on existing nav items? How is it implemented?
+
+2. Analytics page (the date range pattern reference)
+   - File path of the analytics page
+   - What date range picker library/component is used? (react-day-picker,
+     custom, shadcn date-range, etc.)
+   - What preset options exist (Today, This week, Last 7 days, etc.)?
+     Paste the list.
+   - How does it handle the user's timezone for "This week" / "This month"
+     boundaries?
+   - Where is the date range state stored — URL params, useState, query
+     param hook?
+
+3. Existing routes
+   - Show the routes file (client/src/App.tsx or wherever routes are
+     declared). How are manager-only pages gated at the route level (vs.
+     just useEffect redirects inside the page)?
+
+4. Existing list/table patterns
+   - Find an existing data table on the manager side (e.g., billing,
+     invoices, or audit log if any). Is it shadcn <Table>? A custom
+     component? React Table?
+   - Paste a small excerpt showing the rendering pattern.
+
+5. The GET /api/timesheets endpoint shape
+   - From Session 22 work, what does the response look like? Paste the
+     handler signature and the typical response shape.
+   - For this page we'll need aggregation by user. Two options:
+     (a) Client aggregates: fetch all entries in range, group by user_id
+         in JS
+     (b) Server aggregates: new endpoint GET /api/timesheets/summary that
+         returns pre-aggregated rows
+   - Which do you recommend given account sizes (typically 5-50 users,
+     50-500 entries per week)? Why?
+
+REPORT BACK before writing any code.
+
+IMPLEMENTATION (after I approve patterns)
+
+Routing & nav:
+- Add "Manager Workspace" parent nav item (visible only to admin/manager)
+- Under it: "Timesheets" child → /manager/timesheets
+- Add the route to the router with role-gating consistent with existing
+  patterns
+- Standard/restricted users hitting /manager/timesheets directly get
+  redirected to / (mirror existing pattern)
+
+Page: /manager/timesheets
+
+Layout (top to bottom):
+  [Page header: "Timesheets"]
+  [Date range picker (matching analytics presets)] [Project filter dropdown]
+  [Summary stats row: Total hours | Total labor cost | Active entries | Users tracked]
+  [Main table — see below]
+  [Empty state if no entries in range]
+
+Main table — aggregated by user:
+  Columns:
+    - User (avatar + name)
+    - Total hours (decimal, e.g. "37.5")
+    - Total labor cost ("$1,406.25" or "$1,250.00 ⚠️" if some entries had null rate)
+    - # of entries
+    - [chevron — expand]
+  
+  Click row → expand to show individual entries underneath (use shadcn
+  Collapsible or table sub-rows pattern):
+    - Project (linked to project detail page)
+    - Clock in (formatted local time)
+    - Clock out (or "Active" if null)
+    - Duration
+    - Rate at time of work (formatted from rate_cents_snapshot)
+    - Cost for this entry
+    - Source badge (manual / auto_geofence / edited)
+    - Notes (truncated, expandable on hover)
+
+Date range picker:
+  - Match the analytics page's preset list and component (from diagnose)
+  - Default: "This week" (Monday start, in user's local tz)
+  - All filtering happens server-side via startDate/endDate query params
+
+Project filter:
+  - "All projects" default
+  - Single-select dropdown of projects in the account
+  - When set, filters server-side via projectId query param
+
+Aggregation strategy:
+  - Use whichever you recommended in diagnose step 5
+  - If client-side: fetch entries, group by userId in a useMemo
+  - If server-side: build the new GET /api/timesheets/summary endpoint
+    with proper account-scoping and manager-gating, return rows shaped
+    { userId, userName, totalHours, totalCostCents, entryCount, hasMissingRates: boolean }
+  - Whatever path you pick, document in the implementation why
+
+Null-rate handling:
+  - In the per-user summary row: if any entry in range has null
+    rate_cents_snapshot, show the cost with a ⚠️ icon, hover tooltip
+    "X entries missing hourly rate"
+  - Cost calculation: skip null-rate entries (don't treat them as $0)
+  - In the expanded view: each null-rate entry's "Cost" cell shows "—"
+
+Empty state:
+  - "No timesheet entries in this range"
+  - If COUNT of users with timesheet_enabled = true in account is 0:
+    additional hint "Enable timesheet tracking for users on the Team page
+    to start collecting hours." with link to /team
+
+Format helpers (extend client/src/lib/money.ts and create
+client/src/lib/duration.ts as needed):
+  - hoursFromInterval(clockIn: Date, clockOut: Date | null): number
+    (returns decimal hours, 2-decimal precision)
+  - formatHours(hours: number): string  → "37.5h" or "37h 30m" — match
+    whatever feels right per the analytics page conventions
+  - formatLocalDateTime(d: Date): string  — match existing patterns
+
+VERIFICATION
+- Test users on Neon dev (test-adm-s22, etc., password Test1234!) still exist
+- Login as test-adm-s22, navigate to /manager/timesheets
+- With current Neon dev data:
+  - Default range "This week" should show some entries
+  - Switch to "Last 30 days" → more entries
+  - Switch to "Last 7 days" → narrower set
+  - Apply project filter for project id 6 → entries restricted to that project
+  - Confirm the user with null rate shows the ⚠️ icon in summary cost
+  - Expand a user row → see individual entries with proper formatting
+  - Custom date range picker works end to end
+- Login as test-mgr-s22 → same access as admin
+- Login as test-std-s22 → /manager/timesheets redirects them to /
+- Confirm Manager Workspace nav item is hidden for std/restricted users
+- npm run check stays at baseline
+
+DELIVERABLE
+1. Files touched
+2. Aggregation strategy decision + rationale
+3. Screenshots: full page with data, empty state, expanded user row,
+   nav item showing for admin, nav item hidden for std user
+4. npm run check output
+5. Verification matrix results
+6. Any deviations from existing conventions, with reasoning
+
+Do not push to git. Review in chat first.
