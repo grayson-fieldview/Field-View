@@ -22,6 +22,7 @@ Field View utilizes a modern web application architecture with a clear separatio
     - **Collaboration**: User roles (Admin, Manager, Standard, Restricted), user invitations, project assignments.
     - **Analytics**: Dashboard with KPI strip, various charts (photos by user, over time, by project, task status), mini-map, activity feed, time period filtering.
     - **Unique Features**: Before/After Photo Comparison slider, Daily Log auto-generation, shareable photo galleries.
+    - **Manager Workspace → Timesheets**: At `/manager/timesheets` (admin/manager only). Aggregates hours + labor cost per user across a date range with project filter. Two view modes via segmented toggle (Table | Chart, default Table) — chart is a horizontal Recharts bar (`Hours by Team Member`, sorted descending, hours on X, names on Y, tooltip shows hours+cost). CSV export dropdown in filter bar offers three formats: Generic / Gusto / QuickBooks. Active (still-clocked-in) entries are silently excluded from exports; null-rate completed entries are included with empty Rate/Cost cells. Browser timezone (`Intl.DateTimeFormat().resolvedOptions().timeZone`, fallback `UTC`) is sent as `?tz=` and embedded in the CSV filename for context. Endpoint: `GET /api/timesheets/export.csv` (`requireReadAccess` + `requireAdminOrManager`). CSV escaping is hand-rolled in `server/lib/csv.ts` (RFC 4180 + OWASP CSV-injection defense: cells starting with `= + - @ \t \r` are prefixed with a single quote).
 
 **Backend:**
 - Developed with Node.js and Express.

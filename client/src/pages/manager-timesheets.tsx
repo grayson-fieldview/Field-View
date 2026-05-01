@@ -29,6 +29,12 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   Calendar,
   ChevronDown,
   ChevronRight,
@@ -37,7 +43,19 @@ import {
   AlertTriangle,
   Users,
   Activity,
+  Download,
+  BarChart3,
+  TableIcon,
 } from "lucide-react";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip as RechartsTooltip,
+  ResponsiveContainer,
+} from "recharts";
 import type { TimeEntry, User, Project } from "@shared/schema";
 import { centsToCurrency } from "@/lib/money";
 import { formatHours, hoursFromInterval, formatLocalDateTime } from "@/lib/duration";
@@ -47,6 +65,24 @@ import {
   getDateRange,
   type DateRangePreset,
 } from "@/lib/date-range";
+import { useToast } from "@/hooks/use-toast";
+
+type ViewMode = "table" | "chart";
+type ExportFormat = "generic" | "gusto" | "quickbooks";
+
+const EXPORT_FORMAT_LABELS: Record<ExportFormat, string> = {
+  generic: "Generic CSV",
+  gusto: "Gusto CSV",
+  quickbooks: "QuickBooks CSV",
+};
+
+function getBrowserTz(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
 
 interface UserRow {
   userId: string;
@@ -104,6 +140,8 @@ export default function ManagerTimesheetsPage() {
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [now, setNow] = useState(() => new Date());
+  const [viewMode, setViewMode] = useState<ViewMode>("table");
+  const { toast } = useToast();
 
   useEffect(() => {
     const interval = setInterval(() => setNow(new Date()), 60_000);
@@ -210,6 +248,34 @@ export default function ManagerTimesheetsPage() {
     [users],
   );
 
+  // Chart data: one bar per user, sorted hours descending. Mirrors the
+  // analytics page "Photos by Team Member" pattern.
+  const chartData = useMemo(() => {
+    return summary
+      .map((row) => ({
+        name: userDisplayName(row.user, row.userId),
+        hours: Number(row.totalHours.toFixed(2)),
+        cost: row.totalCostCents,
+      }))
+      .sort((a, b) => b.hours - a.hours);
+  }, [summary]);
+
+  const handleExport = (format: ExportFormat) => {
+    const tz = getBrowserTz();
+    const params = new URLSearchParams({
+      startDate: range.from.toISOString(),
+      endDate: range.to.toISOString(),
+      format,
+      tz,
+    });
+    if (projectFilter !== "all") params.set("projectId", projectFilter);
+    toast({
+      title: "Generating export...",
+      description: `${EXPORT_FORMAT_LABELS[format]} • timezone ${tz}`,
+    });
+    window.location.assign(`/api/timesheets/export.csv?${params.toString()}`);
+  };
+
   if (authLoading || !currentUser || !canAccess) return null;
 
   const toggleRow = (userId: string) => {
@@ -281,6 +347,48 @@ export default function ManagerTimesheetsPage() {
         <span className="text-xs text-muted-foreground ml-1" data-testid="text-range-summary">
           {formatLocalDateTime(range.from)} – {formatLocalDateTime(range.to)}
         </span>
+        <div className="ml-auto">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    data-testid="button-export-menu"
+                  >
+                    <Download className="h-4 w-4 mr-2" />
+                    Export
+                    <ChevronDown className="h-4 w-4 ml-1.5 opacity-60" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem
+                    onClick={() => handleExport("generic")}
+                    data-testid="menu-export-generic"
+                  >
+                    Generic CSV
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => handleExport("gusto")}
+                    data-testid="menu-export-gusto"
+                  >
+                    Gusto CSV
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => handleExport("quickbooks")}
+                    data-testid="menu-export-quickbooks"
+                  >
+                    QuickBooks CSV
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </TooltipTrigger>
+            <TooltipContent>
+              Active (clocked-in) entries are excluded from exports.
+            </TooltipContent>
+          </Tooltip>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -310,6 +418,29 @@ export default function ManagerTimesheetsPage() {
         />
       </div>
 
+      <div className="flex items-center justify-end gap-1" role="group" aria-label="View mode">
+        <Button
+          variant={viewMode === "table" ? "default" : "outline"}
+          size="sm"
+          onClick={() => setViewMode("table")}
+          aria-pressed={viewMode === "table"}
+          data-testid="button-view-table"
+        >
+          <TableIcon className="h-4 w-4 mr-1.5" />
+          Table
+        </Button>
+        <Button
+          variant={viewMode === "chart" ? "default" : "outline"}
+          size="sm"
+          onClick={() => setViewMode("chart")}
+          aria-pressed={viewMode === "chart"}
+          data-testid="button-view-chart"
+        >
+          <BarChart3 className="h-4 w-4 mr-1.5" />
+          Chart
+        </Button>
+      </div>
+
       <Card className="overflow-hidden">
         {entriesLoading ? (
           <div className="p-6 space-y-3">
@@ -319,6 +450,8 @@ export default function ManagerTimesheetsPage() {
           </div>
         ) : summary.length === 0 ? (
           <EmptyState enabledUsersCount={enabledUsersCount} />
+        ) : viewMode === "chart" ? (
+          <HoursChart data={chartData} />
         ) : (
           <Table data-testid="table-timesheets">
             <TableHeader>
@@ -348,6 +481,68 @@ export default function ManagerTimesheetsPage() {
           </Table>
         )}
       </Card>
+    </div>
+  );
+}
+
+function HoursChart({
+  data,
+}: {
+  data: { name: string; hours: number; cost: number }[];
+}) {
+  const heightPx = Math.max(280, data.length * 36 + 40);
+  return (
+    <div className="p-5" data-testid="chart-hours-by-user">
+      <div className="flex items-center gap-2 mb-4">
+        <BarChart3 className="h-4 w-4 text-primary" />
+        <h3 className="text-sm font-semibold">Hours by Team Member</h3>
+      </div>
+      <ResponsiveContainer width="100%" height={heightPx}>
+        <BarChart
+          data={data}
+          layout="vertical"
+          margin={{ left: 0, right: 16, top: 0, bottom: 0 }}
+        >
+          <CartesianGrid
+            strokeDasharray="3 3"
+            horizontal={false}
+            stroke="hsl(var(--border))"
+          />
+          <XAxis
+            type="number"
+            tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }}
+          />
+          <YAxis
+            dataKey="name"
+            type="category"
+            width={140}
+            tick={{ fontSize: 12, fill: "hsl(var(--foreground))" }}
+          />
+          <RechartsTooltip
+            cursor={{ fill: "hsl(var(--muted))", opacity: 0.4 }}
+            contentStyle={{
+              backgroundColor: "hsl(var(--card))",
+              border: "1px solid hsl(var(--border))",
+              borderRadius: "6px",
+              fontSize: 12,
+              color: "hsl(var(--foreground))",
+            }}
+            formatter={(value: number, _name: string, item: any) => {
+              const cost = item?.payload?.cost ?? 0;
+              return [
+                `${formatHours(value)} • ${centsToCurrency(cost)}`,
+                "Hours • Cost",
+              ];
+            }}
+          />
+          <Bar
+            dataKey="hours"
+            fill="hsl(36, 100%, 47%)"
+            radius={[0, 4, 4, 0]}
+            name="Hours"
+          />
+        </BarChart>
+      </ResponsiveContainer>
     </div>
   );
 }

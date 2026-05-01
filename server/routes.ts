@@ -15,6 +15,7 @@ import { sanitizeUserForViewer, sanitizeTimeEntryForViewer, isManagerRole } from
 import { z } from "zod";
 import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, deleteFromS3 } from "./s3";
 import { sendInvitationEmail, sendAccountDeletionEmail } from "./services/email";
+import { toCsv } from "./lib/csv";
 import bcrypt from "bcryptjs";
 import { Sentry } from "./lib/sentry";
 
@@ -1980,6 +1981,219 @@ export async function registerRoutes(
       res.status(500).json({ message: "Failed to fetch timesheets" });
     }
   });
+
+  // GET /api/timesheets/export.csv?startDate=&endDate=&projectId=&format=&tz=
+  // Manager/admin-only CSV export. Active (still-clocked-in) entries are excluded.
+  app.get(
+    "/api/timesheets/export.csv",
+    requireReadAccess,
+    requireAdminOrManager,
+    async (req: any, res) => {
+      try {
+        const currentUser = req.user;
+        const accountId = currentUser.accountId;
+        if (!accountId) return res.status(403).json({ message: "No account associated" });
+
+        const q = z
+          .object({
+            startDate: z.string().min(1),
+            endDate: z.string().min(1),
+            projectId: z.coerce.number().int().positive().optional(),
+            format: z.enum(["generic", "gusto", "quickbooks"]).default("generic"),
+            tz: z.string().min(1).default("UTC"),
+          })
+          .safeParse(req.query);
+        if (!q.success) {
+          return res.status(400).json({ message: "Invalid export parameters" });
+        }
+        const startDate = new Date(q.data.startDate);
+        const endDate = new Date(q.data.endDate);
+        if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+          return res.status(400).json({ message: "Invalid startDate or endDate" });
+        }
+        if (endDate < startDate) {
+          return res.status(400).json({ message: "endDate must be >= startDate" });
+        }
+
+        // Validate tz by attempting to construct an Intl.DateTimeFormat with it.
+        let tz = q.data.tz;
+        try {
+          new Intl.DateTimeFormat("en-US", { timeZone: tz });
+        } catch {
+          tz = "UTC";
+        }
+
+        const entries = await storage.listTimeEntries({
+          accountId,
+          startDate,
+          endDate,
+          projectId: q.data.projectId,
+        });
+
+        // Exclude active (still-clocked-in) entries silently.
+        const completed = entries.filter((e) => e.clockOut != null);
+
+        // Lookups for user + project names. We re-query within this account only.
+        const accountUsers = await db
+          .select()
+          .from(users)
+          .where(eq(users.accountId, accountId));
+        const usersById = new Map(accountUsers.map((u) => [u.id, u]));
+
+        const accountProjects = await db
+          .select()
+          .from(projects)
+          .where(eq(projects.accountId, accountId));
+        const projectsById = new Map(accountProjects.map((p) => [p.id, p]));
+
+        const isoDateInTz = (d: Date) =>
+          new Intl.DateTimeFormat("en-CA", {
+            timeZone: tz,
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+          }).format(d);
+        const usDateInTz = (d: Date) =>
+          new Intl.DateTimeFormat("en-US", {
+            timeZone: tz,
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+          }).format(d);
+        const isoDateTimeInTz = (d: Date) => {
+          const parts = new Intl.DateTimeFormat("en-CA", {
+            timeZone: tz,
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: false,
+          }).formatToParts(d);
+          const m: Record<string, string> = {};
+          for (const p of parts) m[p.type] = p.value;
+          // en-CA gives 24h but hour can be "24" instead of "00" in some Node versions
+          const hour = m.hour === "24" ? "00" : m.hour;
+          return `${m.year}-${m.month}-${m.day} ${hour}:${m.minute}:${m.second}`;
+        };
+
+        const fmtHours = (ms: number) => (ms / 3600000).toFixed(2);
+        const cents = (c: number | null | undefined) =>
+          c == null ? "" : (c / 100).toFixed(2);
+        const userName = (u: any) => {
+          if (!u) return "";
+          return `${u.firstName || ""} ${u.lastName || ""}`.trim() || u.email || u.id;
+        };
+
+        let header: string[];
+        let rows: unknown[][];
+        const format = q.data.format;
+
+        if (format === "gusto") {
+          header = [
+            "Employee First Name",
+            "Employee Last Name",
+            "Employee Email",
+            "Work Date",
+            "Hours",
+            "Notes",
+          ];
+          rows = completed.map((e) => {
+            const u = usersById.get(e.userId);
+            const ms = new Date(e.clockOut as Date).getTime() - new Date(e.clockIn).getTime();
+            return [
+              u?.firstName || "",
+              u?.lastName || "",
+              u?.email || "",
+              usDateInTz(new Date(e.clockIn)),
+              fmtHours(ms),
+              e.notes || "",
+            ];
+          });
+        } else if (format === "quickbooks") {
+          header = [
+            "Employee",
+            "Date",
+            "Customer",
+            "Hours",
+            "Billable",
+            "Notes",
+          ];
+          rows = completed.map((e) => {
+            const u = usersById.get(e.userId);
+            const p = projectsById.get(e.projectId);
+            const ms = new Date(e.clockOut as Date).getTime() - new Date(e.clockIn).getTime();
+            return [
+              userName(u),
+              usDateInTz(new Date(e.clockIn)),
+              p?.name || `Project #${e.projectId}`,
+              fmtHours(ms),
+              "No",
+              e.notes || "",
+            ];
+          });
+        } else {
+          // generic
+          header = [
+            "User Name",
+            "User Email",
+            "Project",
+            "Work Date",
+            "Clock In",
+            "Clock Out",
+            "Hours",
+            "Rate (USD)",
+            "Cost (USD)",
+            "Source",
+            "Notes",
+          ];
+          rows = completed.map((e) => {
+            const u = usersById.get(e.userId);
+            const p = projectsById.get(e.projectId);
+            const inDate = new Date(e.clockIn);
+            const outDate = new Date(e.clockOut as Date);
+            const ms = outDate.getTime() - inDate.getTime();
+            const hours = ms / 3600000;
+            const rateCents = e.rateCentsSnapshot;
+            const costCents =
+              rateCents == null ? null : Math.round(hours * rateCents);
+            return [
+              userName(u),
+              u?.email || "",
+              p?.name || `Project #${e.projectId}`,
+              isoDateInTz(inDate),
+              isoDateTimeInTz(inDate),
+              isoDateTimeInTz(outDate),
+              fmtHours(ms),
+              cents(rateCents),
+              cents(costCents),
+              e.source,
+              e.notes || "",
+            ];
+          });
+        }
+
+        const csv = toCsv([header, ...rows]);
+
+        const tzForFilename = tz.replace(/\//g, "-");
+        const startStr = isoDateInTz(startDate);
+        const endStr = isoDateInTz(endDate);
+        const filename = `timesheets_${startStr}_to_${endStr}_${format}_${tzForFilename}.csv`;
+
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${filename}"`,
+        );
+        res.setHeader("Cache-Control", "no-store");
+        res.send(csv);
+      } catch (error) {
+        console.error("export timesheets csv error:", error);
+        res.status(500).json({ message: "Failed to export timesheets" });
+      }
+    },
+  );
 
   // POST /api/timesheets (manager-only manual create)
   app.post("/api/timesheets", requireWriteAccess, requireAdminOrManager, async (req: any, res) => {

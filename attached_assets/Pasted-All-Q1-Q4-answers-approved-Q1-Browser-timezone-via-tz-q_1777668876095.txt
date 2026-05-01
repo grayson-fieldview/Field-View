@@ -1,0 +1,58 @@
+All Q1–Q4 answers approved:
+
+Q1: Browser timezone via ?tz= query param (Intl.DateTimeFormat fallback).
+    Include resolved tz in the CSV filename so manager has context later.
+Q2: Hand-roll CSV escape — no new dep
+Q3: Silently exclude active entries — explanation lives in button tooltip
+Q4: Include null-rate entries with empty Rate/Cost cells
+
+Additional decisions:
+- Chart: horizontal bar (mirror analytics "Photos by Team Member"
+  pattern), names on Y, hours on X, sorted descending. Tooltip shows
+  Name + Hours + Cost. No second bar series.
+- Export button: shadcn DropdownMenu (single button, three menu items
+  for Generic / Gusto / QuickBooks). Add ChevronDown lucide icon next
+  to label so it visually reads as a menu.
+- Toggle: segmented control (Table / Chart buttons, size="sm") in a
+  small flex row above the existing data Card. Default = Table.
+
+EVERYTHING ELSE FROM SPEC STANDS:
+- New endpoint GET /api/timesheets/export.csv with requireReadAccess +
+  requireAdminOrManager
+- Server-generated CSV with proper escaping (toCsvRow helper in
+  server/lib/csv.ts)
+- Filter params (startDate, endDate, projectId, format, tz) match the
+  page's current filter state when triggering download
+- Generic, Gusto, QuickBooks formats per spec
+- Toast on click: "Generating export..."
+- Bar chart uses brand orange + theme-aware grid/axis tokens matching
+  analytics page conventions
+- Toggle uses useState<"table" | "chart">("table"), no URL persistence
+- npm run check stays at baseline 33
+
+VERIFICATION
+Same matrix as spec. Specifically check:
+- A note containing a comma renders correctly (quoted) in all 3 formats
+- A note containing a literal double-quote renders correctly (doubled)
+- Null-rate entries appear in CSV with empty Rate/Cost cells
+- Active entries are NOT in any export
+- 403 for standard user hitting /api/timesheets/export.csv directly
+- Chart renders, sorts descending, tooltip shows hours+cost
+- Toggling between Table/Chart preserves date range filter state
+- Empty range → chart shows "No data..." matching the table's empty state
+- Export buttons appear in the filter bar with ChevronDown icon
+- Tooltip on export button reads "Active (clocked-in) entries are
+  excluded from exports."
+
+DELIVERABLE
+1. Files touched (4 expected: server/lib/csv.ts new, server/routes.ts,
+   client/src/pages/manager-timesheets.tsx, possibly +1 if a util needs
+   updating)
+2. csv lib + tz decisions confirmed implemented
+3. Screenshots: chart view, export dropdown open, opened CSV in
+   spreadsheet (one for each of the 3 formats), button tooltip
+4. npm run check output
+5. Verification matrix results
+6. Any deviations with reasoning
+
+Do not push to git. Review in chat first.
