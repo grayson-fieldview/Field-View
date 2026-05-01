@@ -42,7 +42,8 @@ Field View utilizes a modern web application architecture with a clear separatio
 - **Companion file**: `api/package.json` contains `{"type":"commonjs"}` to override the root `type:module`, so Node loads the bundle as CJS. Without this, `module.exports` is a no-op under ESM and Vercel sees an empty handler → 404 on every request (also documented in commit `aea4a10`).
 
 ## External Dependencies
-- **PostgreSQL**: Primary database for all application data, including user sessions.
+- **PostgreSQL**: Primary database for all application data, including user sessions. **Environments**: dev runs on **Neon** (the Replit-managed Postgres reachable via `DATABASE_URL`); production runs on **AWS RDS** at `fieldview-user-database.cziy604o6se2.us-east-2.rds.amazonaws.com`. Never run schema migrations or destructive queries against prod RDS without explicit confirmation. `npm run db:push` only targets dev Neon.
+  - **`auth_rate_limits` table**: created and managed at runtime by `rate-limiter-flexible`'s `RateLimiterPostgres` (configured in `server/middleware/rate-limit.ts`). It is mirrored in `shared/schema.ts` as `authRateLimits` (varchar(255) `key` PK, integer `points` default 0, bigint `expire` nullable) **only** so drizzle-kit doesn't see it as orphaned and propose to drop/rename it. Do not write to this table from app code — only the rate limiter library should touch it.
 - **Stripe**: For subscription billing, managed via `stripe-replit-sync`. Integrates with Stripe Checkout for payment collection and Stripe Billing Portal for customer management. Webhooks handle subscription status updates.
 - **AWS S3**: Cloud storage for all uploaded photos and media assets.
 - **Google Maps JavaScript API**: Used for displaying project locations on a map and providing address autocomplete functionality via the Places API.

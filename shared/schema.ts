@@ -1,5 +1,5 @@
 import { sql, relations } from "drizzle-orm";
-import { pgTable, text, varchar, integer, timestamp, boolean, real, pgEnum, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, bigint, timestamp, boolean, real, pgEnum, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -16,6 +16,17 @@ export const calendarProviderEnum = pgEnum("calendar_provider", ["google", "outl
 export const eventRepeatEnum = pgEnum("event_repeat", ["none", "daily", "weekly", "monthly", "yearly"]);
 export const eventSyncStatusEnum = pgEnum("event_sync_status", ["pending", "synced", "failed", "disabled"]);
 export const timeEntrySourceEnum = pgEnum("time_entry_source", ["manual", "auto_geofence", "edited"]);
+
+// auth_rate_limits is owned at runtime by `rate-limiter-flexible` (RateLimiterPostgres)
+// configured in server/middleware/rate-limit.ts. The library auto-creates and
+// manages this table; we mirror its schema here ONLY so drizzle-kit recognizes
+// it and does not propose to drop or rename it on `db:push`. Do not write to
+// this table from app code — only the rate limiter library should touch it.
+export const authRateLimits = pgTable("auth_rate_limits", {
+  key: varchar("key", { length: 255 }).primaryKey().notNull(),
+  points: integer("points").default(0).notNull(),
+  expire: bigint("expire", { mode: "number" }),
+});
 
 export const projects = pgTable("projects", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
