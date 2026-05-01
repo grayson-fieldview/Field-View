@@ -47,6 +47,8 @@ export const users = pgTable("users", {
   trialEndsAt: timestamp("trial_ends_at"),
   termsAcceptedAt: timestamp("terms_accepted_at"),
   termsVersion: text("terms_version"),
+  timesheetEnabled: boolean("timesheet_enabled").notNull().default(false),
+  hourlyRateCents: integer("hourly_rate_cents"),
   deletedAt: timestamp("deleted_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),

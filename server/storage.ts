@@ -44,6 +44,9 @@ import {
   type InsertCalendarConnection,
   type CalendarEvent,
   type InsertCalendarEvent,
+  timeEntries,
+  type TimeEntry,
+  type InsertTimeEntry,
 } from "@shared/schema";
 import { users, type User } from "@shared/models/auth";
 import { db } from "./db";
@@ -136,6 +139,20 @@ export interface IStorage {
   createCalendarEvent(event: InsertCalendarEvent): Promise<CalendarEvent>;
   updateCalendarEvent(id: number, data: Partial<InsertCalendarEvent> & { syncStatus?: string; syncMessage?: string | null }): Promise<CalendarEvent | undefined>;
   deleteCalendarEvent(id: number): Promise<void>;
+
+  getTimeEntry(id: string): Promise<TimeEntry | undefined>;
+  getActiveTimeEntryForUser(userId: string): Promise<TimeEntry | undefined>;
+  createTimeEntry(entry: InsertTimeEntry): Promise<TimeEntry>;
+  updateTimeEntry(id: string, data: Partial<InsertTimeEntry> & { updatedAt?: Date }): Promise<TimeEntry | undefined>;
+  deleteTimeEntry(id: string): Promise<void>;
+  listTimeEntries(opts: {
+    accountId: string;
+    startDate: Date;
+    endDate: Date;
+    userId?: string;
+    userIds?: string[];
+    projectId?: number;
+  }): Promise<TimeEntry[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -718,6 +735,53 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteCalendarEvent(id: number): Promise<void> {
     await db.delete(calendarEvents).where(eq(calendarEvents.id, id));
+  }
+
+  async getTimeEntry(id: string): Promise<TimeEntry | undefined> {
+    const [row] = await db.select().from(timeEntries).where(eq(timeEntries.id, id));
+    return row;
+  }
+
+  async getActiveTimeEntryForUser(userId: string): Promise<TimeEntry | undefined> {
+    const [row] = await db.select().from(timeEntries)
+      .where(and(eq(timeEntries.userId, userId), sql`${timeEntries.clockOut} IS NULL`));
+    return row;
+  }
+
+  async createTimeEntry(entry: InsertTimeEntry): Promise<TimeEntry> {
+    const [created] = await db.insert(timeEntries).values(entry as any).returning();
+    return created;
+  }
+
+  async updateTimeEntry(
+    id: string,
+    data: Partial<InsertTimeEntry> & { updatedAt?: Date },
+  ): Promise<TimeEntry | undefined> {
+    const [updated] = await db.update(timeEntries).set(data as any).where(eq(timeEntries.id, id)).returning();
+    return updated;
+  }
+
+  async deleteTimeEntry(id: string): Promise<void> {
+    await db.delete(timeEntries).where(eq(timeEntries.id, id));
+  }
+
+  async listTimeEntries(opts: {
+    accountId: string;
+    startDate: Date;
+    endDate: Date;
+    userId?: string;
+    userIds?: string[];
+    projectId?: number;
+  }): Promise<TimeEntry[]> {
+    const conditions = [
+      eq(timeEntries.accountId, opts.accountId),
+      sql`${timeEntries.clockIn} >= ${opts.startDate}`,
+      sql`${timeEntries.clockIn} <= ${opts.endDate}`,
+    ];
+    if (opts.userId) conditions.push(eq(timeEntries.userId, opts.userId));
+    if (opts.userIds && opts.userIds.length > 0) conditions.push(inArray(timeEntries.userId, opts.userIds));
+    if (typeof opts.projectId === "number") conditions.push(eq(timeEntries.projectId, opts.projectId));
+    return db.select().from(timeEntries).where(and(...conditions)).orderBy(desc(timeEntries.clockIn));
   }
 }
 

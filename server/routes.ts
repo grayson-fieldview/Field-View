@@ -7,10 +7,12 @@ import { getAccountBilling, isAccountBillingEnabled, overlayAccountBillingOnUser
 import { requireAdmin, requireAdminOrManager } from "./middleware/auth";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
-import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertReportSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertReportTemplateSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, reports, projectAssignments } from "@shared/schema";
+import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertReportSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertReportTemplateSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, reports, projectAssignments, timeEntries } from "@shared/schema";
 import { users, invitations, accounts } from "@shared/models/auth";
 import { db } from "./db";
-import { eq, sql, and, or, inArray, count, isNull } from "drizzle-orm";
+import { eq, sql, and, or, inArray, count, isNull, desc } from "drizzle-orm";
+import { sanitizeUserForViewer, sanitizeTimeEntryForViewer, isManagerRole } from "./lib/userVisibility";
+import { z } from "zod";
 import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, deleteFromS3 } from "./s3";
 import { sendInvitationEmail, sendAccountDeletionEmail } from "./services/email";
 import bcrypt from "bcryptjs";
@@ -55,6 +57,21 @@ async function verifyReportAccess(reportId: number, accountId: string): Promise<
     .where(eq(reports.id, reportId))
     .limit(1);
   return result.length > 0 && result[0].accountId === accountId;
+}
+
+async function verifyTimeEntryAccess(timeEntryId: string, accountId: string): Promise<boolean> {
+  const [row] = await db.select({ accountId: timeEntries.accountId })
+    .from(timeEntries)
+    .where(eq(timeEntries.id, timeEntryId))
+    .limit(1);
+  return !!row && row.accountId === accountId;
+}
+
+async function getRestrictedAssignedProjectIds(userId: string): Promise<Set<number>> {
+  const rows = await db.select({ projectId: projectAssignments.projectId })
+    .from(projectAssignments)
+    .where(eq(projectAssignments.userId, userId));
+  return new Set(rows.map(r => r.projectId));
 }
 
 async function presignMediaUrls<T extends { url: string }>(items: T[]): Promise<T[]> {
@@ -978,7 +995,7 @@ export async function registerRoutes(
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
       const usersList = await storage.getUsers(accountId);
-      const safeUsers = usersList.map(({ password, ...rest }) => rest);
+      const safeUsers = usersList.map(({ password, ...rest }) => sanitizeUserForViewer(rest, req.user));
       res.json(safeUsers);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch users" });
@@ -1727,7 +1744,7 @@ export async function registerRoutes(
       const updated = await db.update(users).set({ subscriptionStatus }).where(eq(users.id, userId)).returning();
       if (updated.length === 0) return res.status(404).json({ message: "User not found" });
       const { password: _, ...safeUser } = updated[0];
-      res.json(safeUser);
+      res.json(sanitizeUserForViewer(safeUser, req.user));
     } catch (error) {
       res.status(500).json({ message: "Failed to update subscription" });
     }
@@ -1751,9 +1768,336 @@ export async function registerRoutes(
       const updated = await db.update(users).set({ role }).where(eq(users.id, userId)).returning();
       if (updated.length === 0) return res.status(404).json({ message: "User not found" });
       const { password: _, ...safeUser } = updated[0];
-      res.json(safeUser);
+      res.json(sanitizeUserForViewer(safeUser, req.user));
     } catch (error) {
       res.status(500).json({ message: "Failed to update role" });
+    }
+  });
+
+  // Manager-only PATCH for hourly rate + timesheet enablement.
+  const userPatchSchema = z.object({
+    hourlyRateCents: z.number().int().nonnegative().nullable().optional(),
+    timesheetEnabled: z.boolean().optional(),
+  }).strict();
+
+  app.patch("/api/users/:userId", requireWriteAccess, requireAdminOrManager, async (req: any, res) => {
+    try {
+      const currentUser = req.user;
+      const { userId } = req.params;
+      const targetUser = await authStorage.getUser(userId);
+      if (!targetUser) return res.status(404).json({ message: "User not found" });
+      if (targetUser.accountId !== currentUser.accountId) return res.status(403).json({ message: "Access denied" });
+
+      const parsed = userPatchSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({ message: parsed.error.issues[0]?.message || "Invalid request body" });
+      }
+      const updates: { hourlyRateCents?: number | null; timesheetEnabled?: boolean } = {};
+      if ("hourlyRateCents" in parsed.data) updates.hourlyRateCents = parsed.data.hourlyRateCents ?? null;
+      if ("timesheetEnabled" in parsed.data) updates.timesheetEnabled = parsed.data.timesheetEnabled!;
+      if (Object.keys(updates).length === 0) {
+        const { password: _, ...safe } = targetUser;
+        return res.json(sanitizeUserForViewer(safe, currentUser));
+      }
+      const [updated] = await db.update(users).set(updates).where(eq(users.id, userId)).returning();
+      if (!updated) return res.status(404).json({ message: "User not found" });
+      const { password: _, ...safeUser } = updated;
+      res.json(sanitizeUserForViewer(safeUser, currentUser));
+    } catch (error: any) {
+      console.error("Error patching user:", error);
+      res.status(500).json({ message: "Failed to update user" });
+    }
+  });
+
+  // ============================================================
+  // Timesheets
+  // ============================================================
+
+  // POST /api/timesheets/clock-in
+  app.post("/api/timesheets/clock-in", requireWriteAccess, async (req: any, res) => {
+    try {
+      const currentUser = req.user;
+      const accountId = currentUser.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+
+      const fresh = await authStorage.getUser(currentUser.id);
+      if (!fresh) return res.status(404).json({ message: "User not found" });
+      if (!fresh.timesheetEnabled) {
+        return res.status(403).json({ message: "Timesheet tracking not enabled for this user" });
+      }
+
+      const body = z.object({
+        projectId: z.number().int().positive(),
+        notes: z.string().max(2000).optional().nullable(),
+      }).safeParse(req.body ?? {});
+      if (!body.success) {
+        return res.status(400).json({ message: body.error.issues[0]?.message || "Invalid body" });
+      }
+
+      const project = await storage.getProject(body.data.projectId);
+      if (!project || project.accountId !== accountId) return res.status(403).json({ message: "Access denied" });
+      if (currentUser.role === "restricted") {
+        const assigned = await getRestrictedAssignedProjectIds(currentUser.id);
+        if (!assigned.has(project.id) && project.createdById !== currentUser.id) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+      }
+
+      const existingActive = await storage.getActiveTimeEntryForUser(currentUser.id);
+      if (existingActive) {
+        return res.status(409).json({ message: "An active time entry already exists", entry: sanitizeTimeEntryForViewer(existingActive, currentUser) });
+      }
+
+      try {
+        const entry = await storage.createTimeEntry({
+          accountId,
+          userId: currentUser.id,
+          projectId: project.id,
+          clockIn: new Date(),
+          clockOut: null,
+          source: "manual",
+          notes: body.data.notes ?? null,
+          rateCentsSnapshot: null,
+        } as any);
+        return res.status(201).json(sanitizeTimeEntryForViewer(entry, currentUser));
+      } catch (err: any) {
+        // Race: partial unique index caught a concurrent clock-in
+        if (err?.code === "23505") {
+          return res.status(409).json({ message: "An active time entry already exists" });
+        }
+        throw err;
+      }
+    } catch (error: any) {
+      console.error("clock-in error:", error);
+      res.status(500).json({ message: "Failed to clock in" });
+    }
+  });
+
+  // POST /api/timesheets/clock-out
+  app.post("/api/timesheets/clock-out", requireWriteAccess, async (req: any, res) => {
+    try {
+      const currentUser = req.user;
+      const accountId = currentUser.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+
+      const body = z.object({
+        notes: z.string().max(2000).optional().nullable(),
+      }).safeParse(req.body ?? {});
+      if (!body.success) {
+        return res.status(400).json({ message: body.error.issues[0]?.message || "Invalid body" });
+      }
+
+      const active = await storage.getActiveTimeEntryForUser(currentUser.id);
+      if (!active) return res.status(404).json({ message: "No active time entry" });
+
+      const fresh = await authStorage.getUser(currentUser.id);
+      const rateSnapshot = (fresh?.hourlyRateCents ?? null) as number | null;
+
+      const newNotes = (() => {
+        if (body.data.notes == null) return active.notes;
+        if (!active.notes) return body.data.notes;
+        return `${active.notes}\n${body.data.notes}`;
+      })();
+
+      const updated = await storage.updateTimeEntry(active.id, {
+        clockOut: new Date(),
+        notes: newNotes,
+        rateCentsSnapshot: rateSnapshot,
+        updatedAt: new Date(),
+      } as any);
+      if (!updated) return res.status(404).json({ message: "Entry not found" });
+      res.json(sanitizeTimeEntryForViewer(updated, currentUser));
+    } catch (error: any) {
+      console.error("clock-out error:", error);
+      res.status(500).json({ message: "Failed to clock out" });
+    }
+  });
+
+  // GET /api/timesheets/active
+  app.get("/api/timesheets/active", requireReadAccess, async (req: any, res) => {
+    try {
+      const currentUser = req.user;
+      const active = await storage.getActiveTimeEntryForUser(currentUser.id);
+      if (!active) return res.json(null);
+      res.json(sanitizeTimeEntryForViewer(active, currentUser));
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch active entry" });
+    }
+  });
+
+  // GET /api/timesheets?startDate=&endDate=&userId=&projectId=
+  app.get("/api/timesheets", requireReadAccess, async (req: any, res) => {
+    try {
+      const currentUser = req.user;
+      const accountId = currentUser.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+
+      const q = z.object({
+        startDate: z.string().min(1),
+        endDate: z.string().min(1),
+        userId: z.string().optional(),
+        projectId: z.coerce.number().int().positive().optional(),
+      }).safeParse(req.query);
+      if (!q.success) {
+        return res.status(400).json({ message: "startDate and endDate query params are required" });
+      }
+      const startDate = new Date(q.data.startDate);
+      const endDate = new Date(q.data.endDate);
+      if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+        return res.status(400).json({ message: "Invalid startDate or endDate" });
+      }
+      if (endDate < startDate) {
+        return res.status(400).json({ message: "endDate must be >= startDate" });
+      }
+
+      const isManager = isManagerRole(currentUser.role);
+      // Defense-in-depth: regular users (incl. restricted) forced to self.
+      const effectiveUserId = isManager ? q.data.userId : currentUser.id;
+
+      let entries = await storage.listTimeEntries({
+        accountId,
+        startDate,
+        endDate,
+        userId: effectiveUserId,
+        projectId: q.data.projectId,
+      });
+
+      // Restricted users: additionally filter to their assigned projects (defense-in-depth)
+      if (currentUser.role === "restricted") {
+        const assigned = await getRestrictedAssignedProjectIds(currentUser.id);
+        // Also include projects they created
+        const ownProjectRows = await db.select({ id: projects.id })
+          .from(projects)
+          .where(and(eq(projects.accountId, accountId), eq(projects.createdById, currentUser.id)));
+        for (const r of ownProjectRows) assigned.add(r.id);
+        entries = entries.filter(e => assigned.has(e.projectId));
+      }
+
+      const sanitized = entries.map(e => sanitizeTimeEntryForViewer(e, currentUser));
+      res.json(sanitized);
+    } catch (error) {
+      console.error("list timesheets error:", error);
+      res.status(500).json({ message: "Failed to fetch timesheets" });
+    }
+  });
+
+  // POST /api/timesheets (manager-only manual create)
+  app.post("/api/timesheets", requireWriteAccess, requireAdminOrManager, async (req: any, res) => {
+    try {
+      const currentUser = req.user;
+      const accountId = currentUser.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+
+      const body = z.object({
+        userId: z.string().min(1),
+        projectId: z.number().int().positive(),
+        clockIn: z.coerce.date(),
+        clockOut: z.coerce.date(),
+        notes: z.string().max(2000).optional().nullable(),
+      }).safeParse(req.body ?? {});
+      if (!body.success) {
+        return res.status(400).json({ message: body.error.issues[0]?.message || "Invalid body" });
+      }
+      if (body.data.clockOut <= body.data.clockIn) {
+        return res.status(400).json({ message: "clockOut must be greater than clockIn" });
+      }
+
+      const targetUser = await authStorage.getUser(body.data.userId);
+      if (!targetUser || targetUser.accountId !== accountId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const project = await storage.getProject(body.data.projectId);
+      if (!project || project.accountId !== accountId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const created = await storage.createTimeEntry({
+        accountId,
+        userId: body.data.userId,
+        projectId: body.data.projectId,
+        clockIn: body.data.clockIn,
+        clockOut: body.data.clockOut,
+        source: "manual",
+        notes: body.data.notes ?? null,
+        rateCentsSnapshot: targetUser.hourlyRateCents ?? null,
+      } as any);
+      res.status(201).json(sanitizeTimeEntryForViewer(created, currentUser));
+    } catch (error: any) {
+      console.error("manager create timesheet error:", error);
+      res.status(500).json({ message: "Failed to create time entry" });
+    }
+  });
+
+  // PATCH /api/timesheets/:id (manager-only)
+  app.patch("/api/timesheets/:id", requireWriteAccess, requireAdminOrManager, async (req: any, res) => {
+    try {
+      const currentUser = req.user;
+      const accountId = currentUser.accountId;
+      const id = req.params.id;
+
+      const existing = await storage.getTimeEntry(id);
+      if (!existing) return res.status(404).json({ message: "Entry not found" });
+      if (existing.accountId !== accountId) return res.status(403).json({ message: "Access denied" });
+
+      const body = z.object({
+        clockIn: z.coerce.date().optional(),
+        clockOut: z.coerce.date().nullable().optional(),
+        notes: z.string().max(2000).nullable().optional(),
+        projectId: z.number().int().positive().optional(),
+        rateCentsSnapshot: z.number().int().nonnegative().nullable().optional(),
+      }).safeParse(req.body ?? {});
+      if (!body.success) {
+        return res.status(400).json({ message: body.error.issues[0]?.message || "Invalid body" });
+      }
+
+      const nextClockIn = body.data.clockIn ?? existing.clockIn;
+      const nextClockOut = "clockOut" in body.data ? body.data.clockOut : existing.clockOut;
+      if (nextClockIn && nextClockOut && nextClockOut <= nextClockIn) {
+        return res.status(400).json({ message: "clockOut must be greater than clockIn" });
+      }
+
+      if (body.data.projectId !== undefined) {
+        const project = await storage.getProject(body.data.projectId);
+        if (!project || project.accountId !== accountId) return res.status(403).json({ message: "Access denied" });
+      }
+
+      const updates: any = { updatedAt: new Date() };
+      if (body.data.clockIn !== undefined) updates.clockIn = body.data.clockIn;
+      if ("clockOut" in body.data) updates.clockOut = body.data.clockOut;
+      if ("notes" in body.data) updates.notes = body.data.notes;
+      if (body.data.projectId !== undefined) updates.projectId = body.data.projectId;
+      if ("rateCentsSnapshot" in body.data) updates.rateCentsSnapshot = body.data.rateCentsSnapshot;
+
+      // Audit: snapshot original times on first edit
+      if (existing.editedAt === null) {
+        updates.originalClockIn = existing.clockIn;
+        updates.originalClockOut = existing.clockOut;
+      }
+      updates.editedByUserId = currentUser.id;
+      updates.editedAt = new Date();
+      if (existing.source !== "edited") updates.source = "edited";
+
+      const updated = await storage.updateTimeEntry(id, updates);
+      if (!updated) return res.status(404).json({ message: "Entry not found" });
+      res.json(sanitizeTimeEntryForViewer(updated, currentUser));
+    } catch (error: any) {
+      console.error("patch timesheet error:", error);
+      res.status(500).json({ message: "Failed to update time entry" });
+    }
+  });
+
+  // DELETE /api/timesheets/:id (manager-only, hard delete)
+  app.delete("/api/timesheets/:id", requireWriteAccess, requireAdminOrManager, async (req: any, res) => {
+    try {
+      const currentUser = req.user;
+      const id = req.params.id;
+      if (!(await verifyTimeEntryAccess(id, currentUser.accountId))) {
+        return res.status(404).json({ message: "Entry not found" });
+      }
+      await storage.deleteTimeEntry(id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete time entry" });
     }
   });
 
@@ -2450,7 +2794,7 @@ export async function registerRoutes(
         const updatedUser = await authStorage.getUser(user.id);
         const { password: _, ...safeUser } = updatedUser!;
         const safeUserWithBilling = await overlayAccountBillingOnUser(safeUser, req);
-        return res.json(safeUserWithBilling);
+        return res.json(sanitizeUserForViewer(safeUserWithBilling, req.user));
       }
 
       return res.json({ message: "No subscription found" });

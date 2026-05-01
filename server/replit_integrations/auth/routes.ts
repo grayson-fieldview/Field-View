@@ -2,6 +2,7 @@ import type { Express } from "express";
 import { authStorage } from "./storage";
 import { isAuthenticated } from "./replitAuth";
 import { overlayAccountBillingOnUser } from "../../lib/billing";
+import { sanitizeUserForViewer } from "../../lib/userVisibility";
 import { db } from "../../db";
 import { accounts } from "@shared/models/auth";
 import { eq } from "drizzle-orm";
@@ -27,7 +28,8 @@ export function registerAuthRoutes(app: Express): void {
           .limit(1);
         isOwner = !!account && account.ownerId === user.id;
       }
-      res.json({ ...safeUserWithBilling, isOwner });
+      const sanitized = sanitizeUserForViewer({ ...safeUserWithBilling, isOwner }, user);
+      res.json(sanitized);
     } catch (error) {
       console.error("Error fetching user:", error);
       res.status(500).json({ message: "Failed to fetch user" });
@@ -66,7 +68,7 @@ export function registerAuthRoutes(app: Express): void {
         safeUser,
         req,
       );
-      res.json(safeUserWithBilling);
+      res.json(sanitizeUserForViewer(safeUserWithBilling, req.user));
     } catch (error) {
       console.error("Error updating user profile:", error);
       res.status(500).json({ message: "Failed to update profile" });

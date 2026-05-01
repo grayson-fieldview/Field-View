@@ -1,5 +1,5 @@
 import { sql, relations } from "drizzle-orm";
-import { pgTable, text, varchar, integer, timestamp, boolean, real, pgEnum, jsonb, index } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, timestamp, boolean, real, pgEnum, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -15,6 +15,7 @@ export const reportStatusEnum = pgEnum("report_status", ["draft", "submitted", "
 export const calendarProviderEnum = pgEnum("calendar_provider", ["google", "outlook", "apple", "ical"]);
 export const eventRepeatEnum = pgEnum("event_repeat", ["none", "daily", "weekly", "monthly", "yearly"]);
 export const eventSyncStatusEnum = pgEnum("event_sync_status", ["pending", "synced", "failed", "disabled"]);
+export const timeEntrySourceEnum = pgEnum("time_entry_source", ["manual", "auto_geofence", "edited"]);
 
 export const projects = pgTable("projects", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
@@ -238,6 +239,49 @@ export const calendarEvents = pgTable("calendar_events", {
 }, (table) => [
   index("calendar_events_account_id_idx").on(table.accountId),
 ]);
+
+export const timeEntries = pgTable("time_entries", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  accountId: varchar("account_id").references(() => accounts.id).notNull(),
+  userId: varchar("user_id").references(() => users.id).notNull(),
+  projectId: integer("project_id").references(() => projects.id, { onDelete: "restrict" }).notNull(),
+  clockIn: timestamp("clock_in", { withTimezone: true }).notNull(),
+  clockOut: timestamp("clock_out", { withTimezone: true }),
+  source: timeEntrySourceEnum("source").default("manual").notNull(),
+  notes: text("notes"),
+  rateCentsSnapshot: integer("rate_cents_snapshot"),
+  editedByUserId: varchar("edited_by_user_id").references(() => users.id),
+  editedAt: timestamp("edited_at", { withTimezone: true }),
+  originalClockIn: timestamp("original_clock_in", { withTimezone: true }),
+  originalClockOut: timestamp("original_clock_out", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index("time_entries_account_user_clock_in_idx").on(table.accountId, table.userId, table.clockIn.desc()),
+  index("time_entries_account_project_clock_in_idx").on(table.accountId, table.projectId, table.clockIn.desc()),
+  uniqueIndex("time_entries_one_active_per_user").on(table.userId).where(sql`clock_out IS NULL`),
+]);
+
+export const insertTimeEntrySchema = createInsertSchema(timeEntries, {
+  clockIn: z.coerce.date(),
+  clockOut: z.coerce.date().nullable().optional(),
+  editedAt: z.coerce.date().nullable().optional(),
+  originalClockIn: z.coerce.date().nullable().optional(),
+  originalClockOut: z.coerce.date().nullable().optional(),
+}).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type InsertTimeEntry = z.infer<typeof insertTimeEntrySchema>;
+export type TimeEntry = typeof timeEntries.$inferSelect;
+
+export const timeEntriesRelations = relations(timeEntries, ({ one }) => ({
+  project: one(projects, { fields: [timeEntries.projectId], references: [projects.id] }),
+  user: one(users, { fields: [timeEntries.userId], references: [users.id] }),
+  editedBy: one(users, { fields: [timeEntries.editedByUserId], references: [users.id] }),
+}));
 
 export const insertCalendarEventSchema = createInsertSchema(calendarEvents, {
   startsAt: z.coerce.date(),
