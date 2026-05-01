@@ -1,0 +1,84 @@
+All 6 pattern decisions approved. Proceed with implementation.
+
+Two additions to bake in:
+
+A. Toast UX on timesheet toggle ON
+   When user toggles timesheet tracking ON for someone, check that user's
+   hourlyRateCents in the response/cache:
+   
+   - If hourlyRateCents is null:
+     toast({
+       title: "Timesheet tracking enabled",
+       description: "Tip: set their hourly rate to track labor costs."
+     })
+   
+   - If hourlyRateCents is set:
+     toast({ title: "Timesheet tracking enabled" })
+   
+   On toggle OFF, simple toast: "Timesheet tracking disabled"
+   
+   Errors use the existing destructive-variant toast pattern.
+
+B. Decimal validation — use regex on the raw input string, not float math
+   Float-comparison approaches like Math.round(v*100) === v*100 are fragile
+   (e.g., 0.1 + 0.2 issues). Use:
+   
+   const RATE_REGEX = /^\d+(\.\d{1,2})?$/;
+   
+   In dollarsToCents(input), trim the input first, then if !RATE_REGEX.test(trimmed)
+   return null. Otherwise parseFloat and Math.round(value * 100). This rejects:
+   - "25.999" (3 decimals)
+   - "abc" (non-numeric)
+   - "-5" (negative — leading minus fails the regex)
+   - "" (empty)
+   - " 25 " gets handled by trim
+   
+   Returns integer cents on valid input, null on invalid.
+
+Currency formatting: plain "$25.00/hr" — do NOT use Intl.NumberFormat. US-only
+product for now.
+
+EVERYTHING ELSE FROM THE ORIGINAL SPEC STANDS:
+- Switch component inline next to role select (manager-only)
+- Dialog modal for rate edit using plain useState (matches the invite Dialog
+  pattern already in this file)
+- self-edit gate via member.id !== currentUser?.id (mirrors existing pattern)
+- Mutate + invalidate ["/api/users"] on success — NO optimistic updates
+  (matches existing updateRole pattern)
+- New file client/src/lib/money.ts with centsToDisplay, centsToDisplayPerHour,
+  dollarsToCents helpers
+- Defense-in-depth UI gate: hide Timesheets section entirely for non-managers
+  (backend already strips hourlyRateCents but UI gate is belt-and-suspenders)
+
+VERIFICATION
+The Session 22 test users (test-adm-s22, test-mgr-s22, test-std-s22,
+test-res-s22) still exist on Neon dev — DO NOT recreate them. Use those.
+Same projects (id 6, id 7) too.
+
+Run the full matrix from the spec:
+- Toggle on/off for test-std-s22 as test-adm-s22 → DB column flips
+- Set rate 27.50 → DB shows 2750
+- Edit to 30 → DB shows 3000
+- Edit to 25.999 → validation error, no API call
+- Edit to -5 → validation error
+- Edit to "abc" → validation error
+- Empty input → save button disabled or validation error
+- Clear rate button → DB shows null
+- Toggle ON for user with null rate → toast includes the rate tip
+- Toggle ON for user with rate set → simple toast
+- Login as test-std-s22 → no Timesheets section visible at all
+- Login as test-mgr-s22 → Timesheets section visible and editable
+- Self-edit attempt should not be possible (consistent with role-edit gate)
+- npm run check stays at 33 baseline
+- No console errors
+
+DELIVERABLE
+1. Files touched
+2. Screenshots: manager view with rates set + not-set states, standard user
+   view (no Timesheets section), edit modal open, validation error states,
+   the two different toast variants on toggle-ON
+3. npm run check output
+4. Full verification matrix results
+5. Any deviations from existing conventions, with reasoning
+
+Do not push to git. Review in chat first.

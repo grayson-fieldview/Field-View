@@ -7,6 +7,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { centsToDisplayPerHour, dollarsToCents } from "@/lib/money";
 import {
   Select,
   SelectContent,
@@ -34,7 +36,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Users, Search, Mail, Calendar, Shield, UserPlus, X, Clock, Loader2, Trash2, Copy, Check } from "lucide-react";
+import { Users, Search, Mail, Calendar, Shield, UserPlus, X, Clock, Loader2, Trash2, Copy, Check, DollarSign } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -302,6 +304,79 @@ export default function TeamPage() {
       toast({ title: "Error", description: error.message, variant: "destructive" });
     },
   });
+
+  const [rateEditUser, setRateEditUser] = useState<User | null>(null);
+  const [rateInput, setRateInput] = useState("");
+  const [rateInputError, setRateInputError] = useState<string | null>(null);
+
+  const openRateEditor = (member: User) => {
+    setRateEditUser(member);
+    setRateInput(
+      member.hourlyRateCents != null ? (member.hourlyRateCents / 100).toFixed(2) : ""
+    );
+    setRateInputError(null);
+  };
+
+  const closeRateEditor = () => {
+    setRateEditUser(null);
+    setRateInput("");
+    setRateInputError(null);
+  };
+
+  const updateUser = useMutation({
+    mutationFn: async ({
+      userId,
+      patch,
+    }: {
+      userId: string;
+      patch: { timesheetEnabled?: boolean; hourlyRateCents?: number | null };
+    }) => {
+      const res = await apiRequest("PATCH", `/api/users/${userId}`, patch);
+      return (await res.json()) as User;
+    },
+    onSuccess: (updatedUser, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+
+      if ("timesheetEnabled" in variables.patch) {
+        if (variables.patch.timesheetEnabled) {
+          if (updatedUser.hourlyRateCents == null) {
+            toast({
+              title: "Timesheet tracking enabled",
+              description: "Tip: set their hourly rate to track labor costs.",
+            });
+          } else {
+            toast({ title: "Timesheet tracking enabled" });
+          }
+        } else {
+          toast({ title: "Timesheet tracking disabled" });
+        }
+      } else if ("hourlyRateCents" in variables.patch) {
+        toast({
+          title: variables.patch.hourlyRateCents == null ? "Hourly rate cleared" : "Hourly rate updated",
+        });
+        closeRateEditor();
+      }
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const handleSaveRate = () => {
+    if (!rateEditUser) return;
+    const cents = dollarsToCents(rateInput);
+    if (cents === null) {
+      setRateInputError("Enter a valid hourly rate, e.g. 25.50");
+      return;
+    }
+    setRateInputError(null);
+    updateUser.mutate({ userId: rateEditUser.id, patch: { hourlyRateCents: cents } });
+  };
+
+  const handleClearRate = () => {
+    if (!rateEditUser) return;
+    updateUser.mutate({ userId: rateEditUser.id, patch: { hourlyRateCents: null } });
+  };
 
   const filtered = (users || []).filter((u) => {
     const name = `${u.firstName || ""} ${u.lastName || ""}`.toLowerCase();
@@ -594,6 +669,7 @@ export default function TeamPage() {
                         </p>
                       )}
                       {canManageUsers && member.id !== currentUser?.id && (
+                        <>
                         <div className="mt-2 flex items-center gap-1.5">
                           <Shield className="h-3 w-3 text-muted-foreground shrink-0" />
                           <Select
@@ -634,6 +710,53 @@ export default function TeamPage() {
                             </AlertDialogContent>
                           </AlertDialog>
                         </div>
+                        <div className="mt-2 pt-2 border-t border-border space-y-1.5" data-testid={`section-timesheets-${member.id}`}>
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <Clock className="h-3 w-3 text-muted-foreground shrink-0" />
+                              <Label
+                                htmlFor={`switch-timesheet-${member.id}`}
+                                className="text-xs text-muted-foreground cursor-pointer"
+                              >
+                                Timesheet tracking
+                              </Label>
+                            </div>
+                            <Switch
+                              id={`switch-timesheet-${member.id}`}
+                              checked={!!member.timesheetEnabled}
+                              disabled={updateUser.isPending}
+                              onCheckedChange={(checked) =>
+                                updateUser.mutate({
+                                  userId: member.id,
+                                  patch: { timesheetEnabled: checked },
+                                })
+                              }
+                              data-testid={`switch-timesheet-${member.id}`}
+                            />
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <DollarSign className="h-3 w-3 text-muted-foreground shrink-0" />
+                              <span className="text-xs text-muted-foreground">Hourly rate</span>
+                              <span
+                                className={`text-xs ${member.hourlyRateCents == null ? "text-muted-foreground italic" : "font-medium"}`}
+                                data-testid={`text-hourly-rate-${member.id}`}
+                              >
+                                {centsToDisplayPerHour(member.hourlyRateCents)}
+                              </span>
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 px-2 text-xs"
+                              onClick={() => openRateEditor(member)}
+                              data-testid={`button-edit-rate-${member.id}`}
+                            >
+                              {member.hourlyRateCents == null ? "Set rate" : "Edit"}
+                            </Button>
+                          </div>
+                        </div>
+                        </>
                       )}
                     </div>
                   </div>
@@ -643,6 +766,83 @@ export default function TeamPage() {
           </div>
         )}
       </div>
+
+      <Dialog
+        open={rateEditUser !== null}
+        onOpenChange={(open) => {
+          if (!open && !updateUser.isPending) closeRateEditor();
+        }}
+      >
+        <DialogContent data-testid="dialog-edit-rate">
+          <DialogHeader>
+            <DialogTitle>
+              {rateEditUser?.hourlyRateCents == null ? "Set hourly rate" : "Edit hourly rate"}
+            </DialogTitle>
+            <DialogDescription>
+              {rateEditUser ? `${rateEditUser.firstName || ""} ${rateEditUser.lastName || ""}`.trim() || rateEditUser.email : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="rate-input">Hourly rate (USD)</Label>
+              <div className="relative">
+                <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  id="rate-input"
+                  inputMode="decimal"
+                  placeholder="25.50"
+                  value={rateInput}
+                  onChange={(e) => {
+                    setRateInput(e.target.value);
+                    if (rateInputError) setRateInputError(null);
+                  }}
+                  className="pl-9"
+                  autoFocus
+                  data-testid="input-hourly-rate"
+                />
+              </div>
+              {rateInputError && (
+                <p className="text-xs text-destructive" data-testid="text-rate-error">
+                  {rateInputError}
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Enter a non-negative amount with up to 2 decimal places.
+              </p>
+            </div>
+          </div>
+          <DialogFooter className="flex-col-reverse sm:flex-row sm:justify-between sm:space-x-0 gap-2">
+            <Button
+              variant="ghost"
+              onClick={handleClearRate}
+              disabled={updateUser.isPending || rateEditUser?.hourlyRateCents == null}
+              className="text-destructive hover:text-destructive"
+              data-testid="button-clear-rate"
+            >
+              Clear rate
+            </Button>
+            <div className="flex gap-2 sm:ml-auto">
+              <Button
+                variant="outline"
+                onClick={closeRateEditor}
+                disabled={updateUser.isPending}
+                data-testid="button-cancel-rate"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleSaveRate}
+                disabled={updateUser.isPending || rateInput.trim() === ""}
+                className="bg-[#F09000] hover:bg-[#d98000] text-white"
+                data-testid="button-save-rate"
+              >
+                {updateUser.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                Save
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
