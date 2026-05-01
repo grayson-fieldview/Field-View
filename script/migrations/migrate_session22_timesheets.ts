@@ -1,4 +1,4 @@
-import { db, pool } from "../server/db";
+import { db, pool } from "../../server/db";
 import { sql } from "drizzle-orm";
 
 async function run() {
@@ -110,4 +110,6 @@ async function run() {
   await pool.end();
 }
 
-run().catch((e) => { console.error(e); process.exit(1); });
+if (import.meta.url === `file://${process.argv[1]}`) {
+  run().catch((e) => { console.error(e); process.exit(1); });
+}
