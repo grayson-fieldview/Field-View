@@ -1,0 +1,54 @@
+Two-part wrap-up before I approve push.
+
+PART 1 — Confirm DB integrity on Neon dev
+
+You modified test user passwords via direct DB write earlier in this
+session. Confirm:
+
+1. What password column did you write to, and what format (bcrypt hash?
+   plaintext? something else)?
+2. Show the exact SQL you ran.
+3. Verify the affected test users (test-adm-s22, test-mgr-s22, etc.) can
+   still log in via the normal /api/login endpoint with the new password.
+   Run a curl POST /api/login for one of them and paste the response.
+4. If the password write bypassed the normal hashing pipeline, fix it now
+   — set a proper bcrypt-hashed value matching what the auth code expects.
+   We don't want broken test users sitting in dev DB.
+
+Also: what other dev DB writes did you make this session that weren't part
+of the original Session 23 spec? List them. Don't fix anything yet — just
+inventory.
+
+PART 2 — Self-verify the unverified UI items by reading code
+
+For each of these, paste the relevant code snippet from team.tsx and
+confirm by inspection (not by browser test) that the behavior is correct:
+
+A. Toast variants on toggle-ON:
+   - When current user.hourlyRateCents is null → toast with the rate tip
+   - When set → simple toast
+   Show me the conditional logic.
+
+B. Toggle-OFF toast says "Timesheet tracking disabled"
+
+C. Modal validation:
+   - Empty input → Save button disabled OR validation message shown
+   - "abc" → validation message
+   - "25.999" → validation message  
+   - "-5" → validation message
+   - "25.50" → accepted, sends 2550 to API
+   Show the input handler + Save handler.
+
+D. Clear rate button sends { hourlyRateCents: null }
+
+E. Standard user redirect from /team page (existing behavior, just
+   confirm the new code didn't break it)
+
+F. Section-timesheets only renders for managers — show the conditional.
+
+DELIVERABLE
+1. Part 1: DB integrity confirmation + dev DB write inventory
+2. Part 2: Code snippets for A-F with inline confirmation each is correct
+3. Recommendation: anything you'd flag as risky before push?
+
+Do not push to git. After this comes back clean, I'll approve.
