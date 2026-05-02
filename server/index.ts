@@ -588,6 +588,20 @@ app.use((req, res, next) => {
   next();
 });
 
+// [CSRF-DIAG] Temporary — remove once mobile Origin/Referer is captured (Session 27.6).
+app.use((req, _res, next) => {
+  if (req.path.startsWith("/api/timesheets")) {
+    console.log("[CSRF-DIAG]", {
+      method: req.method,
+      path: req.path,
+      origin: req.headers.origin || "(none)",
+      referer: req.headers.referer || "(none)",
+      userAgent: req.headers["user-agent"]?.slice(0, 60),
+    });
+  }
+  next();
+});
+
 const httpServer = createServer(app);
 let routesRegistered = false;
 let routesRegistering: Promise<void> | null = null;
