@@ -1,0 +1,82 @@
+SESSION 27.5 — Mobile API pre-flight check.
+
+Purpose: confirm the timesheet API endpoints work cleanly when called
+from a non-browser client (the mobile app uses fetch with manually
+attached Cookie headers, not browser credentials: include).
+
+DIAGNOSE ONLY. NO CODE CHANGES.
+
+1. Authentication mechanism for non-browser clients
+   a. Read server/replit_integrations/auth/replitAuth.ts and
+      server/replit_integrations/auth/routes.ts
+   b. Confirm: when POST /api/login succeeds, the response sets a
+      Set-Cookie header with the session cookie (connect.sid or similar).
+      Paste the exact response header pattern.
+   c. Confirm: subsequent authenticated requests work with just that
+      cookie attached as Cookie: connect.sid=...; nothing else needed
+      (no CSRF token, no bearer token, no XSRF header).
+   d. If there's any CSRF or origin-checking middleware, identify it
+      and confirm whether the timesheet endpoints are exempted or
+      have a non-browser-friendly fallback.
+
+2. CORS configuration
+   a. Read server/index.ts (or wherever Express is set up) for the
+      cors() middleware config
+   b. Paste the relevant config
+   c. Confirm: requests from the mobile app's user-agent (no Origin
+      header, or Origin: file://) will not be blocked
+   d. If credentials: true with origin restrictions, identify how
+      mobile clients get past it
+
+3. Test all 7 timesheet endpoints from curl as if we're the mobile app
+   The mobile app:
+   - Logs in via POST /api/login, captures Set-Cookie
+   - Attaches Cookie header on every subsequent request
+   - Sends Content-Type: application/json
+   - Does NOT include any browser-specific headers (Referer, Origin
+     except where unavoidable)
+
+   Run the following curl matrix using test-mgr-s22@field-view.com /
+   Test1234! against the dev environment:
+   
+   a. POST /api/login → capture cookie, paste response status + headers
+   b. GET /api/timesheets/active with cookie → expect 200 or null
+   c. POST /api/timesheets/clock-in (use a real projectId from dev DB)
+      → expect 201 with the entry
+   d. GET /api/timesheets/active → expect the entry just created
+   e. POST /api/timesheets/clock-out → expect 200
+   f. GET /api/timesheets?startDate=...&endDate=... → expect array
+   g. POST /api/timesheets (manager manual-create) → expect 201
+   h. PATCH /api/timesheets/:id → expect 200
+   i. DELETE /api/timesheets/:id → expect 200
+   
+   For each: paste the curl command (with cookie redacted) and the
+   response status + body. I want to see they ALL work without any
+   browser-specific machinery.
+
+4. Session cookie lifetime
+   a. What's the session TTL? (sessionTtlSeconds in replitAuth.ts)
+   b. Is the cookie configured as rolling (extends on each request)?
+   c. Mobile app needs to know: after how long of inactivity will a
+      stored cookie become invalid?
+
+5. Identify any endpoints that have browser-specific assumptions
+   a. Anything that reads window-, navigator-, or origin-related
+      headers?
+   b. Anything that returns Set-Cookie for state changes the mobile
+      client needs to capture? (Beyond login itself.)
+   c. Anything that 302-redirects (mobile fetch handles redirects
+      differently than browsers)?
+
+DELIVERABLE
+1. Auth mechanism summary — what cookie, what headers, any CSRF
+2. CORS config — confirm mobile-friendly
+3. Full curl matrix output — all 7 endpoints
+4. Session TTL + rolling status
+5. List of any endpoints that need backend changes for mobile
+   compatibility, with proposed fixes
+6. Green/yellow/red assessment: are we ready to start Session 27.6
+   (Dev Build setup) and Session 28 (manual clock-in/out UI) without
+   any backend blockers?
+
+No code changes. Pure investigation.
