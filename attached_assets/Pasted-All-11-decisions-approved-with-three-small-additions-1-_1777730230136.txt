@@ -1,0 +1,72 @@
+All 11 decisions approved with three small additions:
+
+1. Race protection (#5): keep "accept the race" as recommended, BUT
+   add server-side console.warn when overlap detected at write time.
+   Format:
+   console.warn('[timesheets] overlap detected', {
+     accountId, userId, attemptedStart, attemptedEnd, conflictingEntryId
+   });
+   This gives us evidence in Sentry/logs if races ever materialize, so
+   we can decide later whether to escalate to a DB constraint.
+
+2. Edit/Delete on active entries (#7): SPLIT the disabling.
+   - DISABLE edit on active entries (semantics of editing an open
+     interval are confusing)
+   - ALLOW delete on active entries (clean semantics: cancels the
+     mistaken clock-in entirely)
+   - When delete is triggered on an active entry, the AlertDialog
+     description must explicitly state: "This entry is currently
+     active. Deleting it will cancel the in-progress clock-in."
+
+3. Self-edit affordance (#10): when populating the user select in
+   the Add Entry modal, do NOT default-select the current user.
+   Either default to no selection (placeholder "Select user...") or
+   to the first OTHER user alphabetically. Manager can still pick
+   themselves intentionally.
+
+DELETE CONFIRMATION COPY:
+The AlertDialog description for delete must include:
+- User full name (not ID)
+- Project name (not ID)
+- Date + time range
+- Total hours
+- Total cost (if rate snapshot is set, omit if null)
+Example: "Delete entry: Bob Smith, Smith Residence, Apr 30 2026
+8:00 AM – 4:00 PM (8h, $200.00). This cannot be undone."
+
+For active entry deletion, the description format is:
+"Delete entry: Bob Smith, Smith Residence, started Apr 30 2026
+8:00 AM (currently active, 2h 15m so far). This entry is currently
+active. Deleting it will cancel the in-progress clock-in."
+
+EVERYTHING ELSE FROM SPEC AS DIAGNOSED:
+- Overlap check via boolean-timestamp logic, no btree_gist
+- 409 response shape { error, message, conflictingEntryId }
+- Boundary touch allowed
+- Add button: filter bar, left of Export, brand orange CTA
+- Edit/Delete: new "Actions" column right-aligned in NestedEntries
+- Edited badge: inline in Source column with tooltip showing editor + date
+- datetime-local input, helper in client/src/lib/duration.ts
+- Self-edit allowed (managers can create entries for themselves)
+- Don't add originalSource column
+- userIdToName map via useMemo from existing team query
+- Plain useState for form state, no react-hook-form
+- Mirror the S24 hourly-rate Dialog pattern + S22 invite Dialog pattern
+- AlertDialog from team.tsx remove-user as the destructive-confirm template
+
+VERIFICATION (additions to spec)
+- Add the console.warn check: deliberately trigger an overlap, confirm
+  the warn fires with all 5 expected fields
+- Active entry deletion: confirm the modified description copy appears
+- Self-edit affordance: confirm current manager is NOT pre-selected
+  in the user dropdown
+- Edit on active entry: confirm pencil button is disabled with tooltip
+  "Cannot edit an active entry — clock the user out first"
+- Delete on active entry: confirm trash button IS enabled and shows
+  the active-entry-specific copy
+
+DELIVERABLE
+Same as spec — files touched, decisions log, screenshots, npm run check,
+verification matrix, deviations.
+
+Do not push to git. Review in chat first.

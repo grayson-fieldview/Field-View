@@ -32,3 +32,15 @@ export function formatLocalDateTime(d: Date | string): string {
     hour12: true,
   });
 }
+
+// Converts a Date to the "YYYY-MM-DDTHH:mm" string format expected by
+// <input type="datetime-local">. Renders the date in the BROWSER's local
+// timezone (not UTC), matching what the user sees throughout the app.
+// On submit, parse back via `new Date(localStr)` — the browser will
+// re-interpret the string in local tz, so the round-trip is correct.
+export function dateToLocalDatetimeInput(d: Date | string): string {
+  const date = typeof d === "string" ? new Date(d) : d;
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}

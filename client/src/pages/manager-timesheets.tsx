@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, Link } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,8 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -35,6 +37,24 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Calendar,
   ChevronDown,
   ChevronRight,
@@ -46,6 +66,10 @@ import {
   Download,
   BarChart3,
   TableIcon,
+  Plus,
+  Pencil,
+  Trash2,
+  Loader2,
 } from "lucide-react";
 import {
   BarChart,
@@ -58,7 +82,12 @@ import {
 } from "recharts";
 import type { TimeEntry, User, Project } from "@shared/schema";
 import { centsToCurrency } from "@/lib/money";
-import { formatHours, hoursFromInterval, formatLocalDateTime } from "@/lib/duration";
+import {
+  formatHours,
+  hoursFromInterval,
+  formatLocalDateTime,
+  dateToLocalDatetimeInput,
+} from "@/lib/duration";
 import {
   DATE_RANGE_LABELS,
   formatDateInput,
@@ -66,6 +95,7 @@ import {
   type DateRangePreset,
 } from "@/lib/date-range";
 import { useToast } from "@/hooks/use-toast";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 
 type ViewMode = "table" | "chart";
 type ExportFormat = "generic" | "gusto" | "quickbooks";
@@ -75,6 +105,28 @@ const EXPORT_FORMAT_LABELS: Record<ExportFormat, string> = {
   gusto: "Gusto CSV",
   quickbooks: "QuickBooks CSV",
 };
+
+interface AddFormState {
+  userId: string;
+  projectId: string;
+  clockIn: string;
+  clockOut: string;
+  notes: string;
+}
+const EMPTY_ADD_FORM: AddFormState = {
+  userId: "",
+  projectId: "",
+  clockIn: "",
+  clockOut: "",
+  notes: "",
+};
+
+interface EditFormState {
+  projectId: string;
+  clockIn: string;
+  clockOut: string;
+  notes: string;
+}
 
 function getBrowserTz(): string {
   try {
@@ -143,6 +195,22 @@ export default function ManagerTimesheetsPage() {
   const [viewMode, setViewMode] = useState<ViewMode>("table");
   const { toast } = useToast();
 
+  // Add/Edit/Delete modal state
+  const [addOpen, setAddOpen] = useState(false);
+  const [addForm, setAddForm] = useState<AddFormState>(EMPTY_ADD_FORM);
+  const [addError, setAddError] = useState<string | null>(null);
+
+  const [editTarget, setEditTarget] = useState<TimeEntry | null>(null);
+  const [editForm, setEditForm] = useState<EditFormState>({
+    projectId: "",
+    clockIn: "",
+    clockOut: "",
+    notes: "",
+  });
+  const [editError, setEditError] = useState<string | null>(null);
+
+  const [deleteTarget, setDeleteTarget] = useState<TimeEntry | null>(null);
+
   useEffect(() => {
     const interval = setInterval(() => setNow(new Date()), 60_000);
     return () => clearInterval(interval);
@@ -193,6 +261,23 @@ export default function ManagerTimesheetsPage() {
     for (const p of projects || []) map.set(p.id, p);
     return map;
   }, [projects]);
+
+  const userIdToName = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const u of users || []) map.set(u.id, userDisplayName(u, u.id));
+    return map;
+  }, [users]);
+
+  // For "Add entry" user-select: only timesheet-enabled users.
+  // Per spec: do NOT default-select the current manager. Sort A→Z; the
+  // current manager appears in the list but is not pre-selected.
+  const enabledUsers = useMemo(() => {
+    return (users || [])
+      .filter((u) => u.timesheetEnabled)
+      .sort((a, b) =>
+        userDisplayName(a, a.id).localeCompare(userDisplayName(b, b.id)),
+      );
+  }, [users]);
 
   const summary = useMemo<UserRow[]>(() => {
     if (!entries) return [];
@@ -259,6 +344,154 @@ export default function ManagerTimesheetsPage() {
       }))
       .sort((a, b) => b.hours - a.hours);
   }, [summary]);
+
+  const createMutation = useMutation({
+    mutationFn: async (payload: {
+      userId: string;
+      projectId: number;
+      clockIn: string;
+      clockOut: string;
+      notes: string | null;
+    }) => {
+      const res = await apiRequest("POST", "/api/timesheets", payload);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/timesheets"] });
+      setAddOpen(false);
+      setAddForm(EMPTY_ADD_FORM);
+      setAddError(null);
+      toast({ title: "Entry added" });
+    },
+    onError: async (error: any) => {
+      // apiRequest throws Error("STATUS: body") for non-2xx
+      const msg = String(error?.message || "");
+      const overlapMatch = msg.match(/^409:\s*(.+)$/);
+      if (overlapMatch) {
+        try {
+          const parsed = JSON.parse(overlapMatch[1]);
+          if (parsed?.error === "overlap") {
+            setAddError(parsed.message || "This entry overlaps with an existing entry.");
+            return;
+          }
+        } catch {/* fall through */}
+      }
+      const display = msg.replace(/^\d+:\s*/, "");
+      toast({ title: "Failed to add entry", description: display, variant: "destructive" });
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, payload }: { id: string; payload: Record<string, unknown> }) => {
+      const res = await apiRequest("PATCH", `/api/timesheets/${id}`, payload);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/timesheets"] });
+      setEditTarget(null);
+      setEditError(null);
+      toast({ title: "Entry updated" });
+    },
+    onError: (error: any) => {
+      const msg = String(error?.message || "");
+      const overlapMatch = msg.match(/^409:\s*(.+)$/);
+      if (overlapMatch) {
+        try {
+          const parsed = JSON.parse(overlapMatch[1]);
+          if (parsed?.error === "overlap") {
+            setEditError(parsed.message || "This entry overlaps with an existing entry.");
+            return;
+          }
+        } catch {/* fall through */}
+      }
+      const display = msg.replace(/^\d+:\s*/, "");
+      toast({ title: "Failed to update entry", description: display, variant: "destructive" });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/timesheets/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/timesheets"] });
+      setDeleteTarget(null);
+      toast({ title: "Entry deleted" });
+    },
+    onError: (error: any) => {
+      const display = String(error?.message || "Failed to delete entry").replace(/^\d+:\s*/, "");
+      toast({ title: "Failed to delete entry", description: display, variant: "destructive" });
+    },
+  });
+
+  const openAddModal = () => {
+    setAddForm(EMPTY_ADD_FORM);
+    setAddError(null);
+    setAddOpen(true);
+  };
+
+  const handleAddSubmit = () => {
+    setAddError(null);
+    if (!addForm.userId) { setAddError("Select a user."); return; }
+    if (!addForm.projectId) { setAddError("Select a project."); return; }
+    if (!addForm.clockIn) { setAddError("Clock in is required."); return; }
+    if (!addForm.clockOut) { setAddError("Clock out is required."); return; }
+    const inDate = new Date(addForm.clockIn);
+    const outDate = new Date(addForm.clockOut);
+    if (Number.isNaN(inDate.getTime()) || Number.isNaN(outDate.getTime())) {
+      setAddError("Enter valid clock in/out times.");
+      return;
+    }
+    if (outDate <= inDate) {
+      setAddError("Clock out must be after clock in.");
+      return;
+    }
+    createMutation.mutate({
+      userId: addForm.userId,
+      projectId: Number(addForm.projectId),
+      clockIn: inDate.toISOString(),
+      clockOut: outDate.toISOString(),
+      notes: addForm.notes.trim() ? addForm.notes.trim() : null,
+    });
+  };
+
+  const openEditModal = (entry: TimeEntry) => {
+    setEditTarget(entry);
+    setEditError(null);
+    setEditForm({
+      projectId: String(entry.projectId),
+      clockIn: dateToLocalDatetimeInput(new Date(entry.clockIn)),
+      clockOut: entry.clockOut ? dateToLocalDatetimeInput(new Date(entry.clockOut)) : "",
+      notes: entry.notes || "",
+    });
+  };
+
+  const handleEditSubmit = () => {
+    if (!editTarget) return;
+    setEditError(null);
+    if (!editForm.projectId) { setEditError("Select a project."); return; }
+    if (!editForm.clockIn) { setEditError("Clock in is required."); return; }
+    if (!editForm.clockOut) { setEditError("Clock out is required."); return; }
+    const inDate = new Date(editForm.clockIn);
+    const outDate = new Date(editForm.clockOut);
+    if (Number.isNaN(inDate.getTime()) || Number.isNaN(outDate.getTime())) {
+      setEditError("Enter valid clock in/out times.");
+      return;
+    }
+    if (outDate <= inDate) {
+      setEditError("Clock out must be after clock in.");
+      return;
+    }
+    updateMutation.mutate({
+      id: editTarget.id,
+      payload: {
+        projectId: Number(editForm.projectId),
+        clockIn: inDate.toISOString(),
+        clockOut: outDate.toISOString(),
+        notes: editForm.notes.trim() ? editForm.notes.trim() : null,
+      },
+    });
+  };
 
   const handleExport = (format: ExportFormat) => {
     const tz = getBrowserTz();
@@ -347,7 +580,16 @@ export default function ManagerTimesheetsPage() {
         <span className="text-xs text-muted-foreground ml-1" data-testid="text-range-summary">
           {formatLocalDateTime(range.from)} – {formatLocalDateTime(range.to)}
         </span>
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
+          <Button
+            size="sm"
+            onClick={openAddModal}
+            className="bg-[#F09000] hover:bg-[#d98000] text-white"
+            data-testid="button-add-entry"
+          >
+            <Plus className="h-4 w-4 mr-1.5" />
+            Add entry
+          </Button>
           <Tooltip>
             <TooltipTrigger asChild>
               <DropdownMenu>
@@ -473,7 +715,10 @@ export default function ManagerTimesheetsPage() {
                     isOpen={isOpen}
                     onToggle={() => toggleRow(row.userId)}
                     projectsById={projectsById}
+                    userIdToName={userIdToName}
                     now={now}
+                    onEdit={openEditModal}
+                    onDelete={(entry) => setDeleteTarget(entry)}
                   />
                 );
               })}
@@ -481,8 +726,319 @@ export default function ManagerTimesheetsPage() {
           </Table>
         )}
       </Card>
+
+      {/* Add Entry modal */}
+      <Dialog
+        open={addOpen}
+        onOpenChange={(open) => {
+          if (!open && !createMutation.isPending) {
+            setAddOpen(false);
+            setAddForm(EMPTY_ADD_FORM);
+            setAddError(null);
+          }
+        }}
+      >
+        <DialogContent data-testid="dialog-add-entry">
+          <DialogHeader>
+            <DialogTitle>Add timesheet entry</DialogTitle>
+            <DialogDescription>
+              Manually record hours for a team member. The user's current hourly rate will be snapshotted onto the entry.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="add-user">User</Label>
+              <Select
+                value={addForm.userId}
+                onValueChange={(v) => setAddForm((p) => ({ ...p, userId: v }))}
+              >
+                <SelectTrigger id="add-user" data-testid="select-add-user">
+                  <SelectValue placeholder="Select user..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {enabledUsers.length === 0 && (
+                    <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                      No users have timesheet tracking enabled.
+                    </div>
+                  )}
+                  {enabledUsers.map((u) => {
+                    const name = userDisplayName(u, u.id);
+                    const rateLabel =
+                      u.hourlyRateCents != null
+                        ? centsToCurrency(u.hourlyRateCents) + "/hr"
+                        : "no rate";
+                    return (
+                      <SelectItem key={u.id} value={u.id} data-testid={`option-add-user-${u.id}`}>
+                        {name} — {rateLabel}
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="add-project">Project</Label>
+              <Select
+                value={addForm.projectId}
+                onValueChange={(v) => setAddForm((p) => ({ ...p, projectId: v }))}
+              >
+                <SelectTrigger id="add-project" data-testid="select-add-project">
+                  <SelectValue placeholder="Select project..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {(projects || []).map((p) => (
+                    <SelectItem key={p.id} value={String(p.id)} data-testid={`option-add-project-${p.id}`}>
+                      {p.name}
+                      {p.address ? ` — ${p.address}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="add-clock-in">Clock in</Label>
+                <Input
+                  id="add-clock-in"
+                  type="datetime-local"
+                  value={addForm.clockIn}
+                  onChange={(e) => setAddForm((p) => ({ ...p, clockIn: e.target.value }))}
+                  data-testid="input-add-clock-in"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="add-clock-out">Clock out</Label>
+                <Input
+                  id="add-clock-out"
+                  type="datetime-local"
+                  value={addForm.clockOut}
+                  onChange={(e) => setAddForm((p) => ({ ...p, clockOut: e.target.value }))}
+                  data-testid="input-add-clock-out"
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="add-notes">Notes (optional)</Label>
+              <Textarea
+                id="add-notes"
+                rows={2}
+                value={addForm.notes}
+                onChange={(e) => setAddForm((p) => ({ ...p, notes: e.target.value }))}
+                data-testid="input-add-notes"
+              />
+            </div>
+            {addError && (
+              <p className="text-xs text-destructive" data-testid="text-add-error">
+                {addError}
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setAddOpen(false)}
+              disabled={createMutation.isPending}
+              data-testid="button-add-cancel"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleAddSubmit}
+              disabled={createMutation.isPending}
+              className="bg-[#F09000] hover:bg-[#d98000] text-white"
+              data-testid="button-add-save"
+            >
+              {createMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Save entry
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Entry modal */}
+      <Dialog
+        open={editTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !updateMutation.isPending) {
+            setEditTarget(null);
+            setEditError(null);
+          }
+        }}
+      >
+        <DialogContent data-testid="dialog-edit-entry">
+          <DialogHeader>
+            <DialogTitle>Edit entry</DialogTitle>
+            <DialogDescription>
+              {editTarget
+                ? userIdToName.get(editTarget.userId) || editTarget.userId
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-user-display">User</Label>
+              <Input
+                id="edit-user-display"
+                value={editTarget ? (userIdToName.get(editTarget.userId) || editTarget.userId) : ""}
+                disabled
+                data-testid="input-edit-user-display"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-project">Project</Label>
+              <Select
+                value={editForm.projectId}
+                onValueChange={(v) => setEditForm((p) => ({ ...p, projectId: v }))}
+              >
+                <SelectTrigger id="edit-project" data-testid="select-edit-project">
+                  <SelectValue placeholder="Select project..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {(projects || []).map((p) => (
+                    <SelectItem key={p.id} value={String(p.id)} data-testid={`option-edit-project-${p.id}`}>
+                      {p.name}
+                      {p.address ? ` — ${p.address}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-clock-in">Clock in</Label>
+                <Input
+                  id="edit-clock-in"
+                  type="datetime-local"
+                  value={editForm.clockIn}
+                  onChange={(e) => setEditForm((p) => ({ ...p, clockIn: e.target.value }))}
+                  data-testid="input-edit-clock-in"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-clock-out">Clock out</Label>
+                <Input
+                  id="edit-clock-out"
+                  type="datetime-local"
+                  value={editForm.clockOut}
+                  onChange={(e) => setEditForm((p) => ({ ...p, clockOut: e.target.value }))}
+                  data-testid="input-edit-clock-out"
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-notes">Notes</Label>
+              <Textarea
+                id="edit-notes"
+                rows={2}
+                value={editForm.notes}
+                onChange={(e) => setEditForm((p) => ({ ...p, notes: e.target.value }))}
+                data-testid="input-edit-notes"
+              />
+            </div>
+            {editError && (
+              <p className="text-xs text-destructive" data-testid="text-edit-error">
+                {editError}
+              </p>
+            )}
+          </div>
+          <DialogFooter className="sm:justify-between">
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (editTarget) {
+                  const target = editTarget;
+                  setEditTarget(null);
+                  setEditError(null);
+                  setDeleteTarget(target);
+                }
+              }}
+              disabled={updateMutation.isPending}
+              data-testid="button-edit-delete"
+            >
+              <Trash2 className="h-4 w-4 mr-1.5" />
+              Delete entry
+            </Button>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setEditTarget(null)}
+                disabled={updateMutation.isPending}
+                data-testid="button-edit-cancel"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleEditSubmit}
+                disabled={updateMutation.isPending}
+                className="bg-[#F09000] hover:bg-[#d98000] text-white"
+                data-testid="button-edit-save"
+              >
+                {updateMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                Save changes
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirmation */}
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !deleteMutation.isPending) setDeleteTarget(null);
+        }}
+      >
+        <AlertDialogContent data-testid="dialog-delete-entry">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this entry?</AlertDialogTitle>
+            <AlertDialogDescription data-testid="text-delete-description">
+              {deleteTarget
+                ? buildDeleteDescription(deleteTarget, userIdToName, projectsById, now)
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMutation.isPending} data-testid="button-delete-cancel">
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                if (deleteTarget) deleteMutation.mutate(deleteTarget.id);
+              }}
+              disabled={deleteMutation.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-delete-confirm"
+            >
+              {deleteMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
+}
+
+function buildDeleteDescription(
+  entry: TimeEntry,
+  userIdToName: Map<string, string>,
+  projectsById: Map<number, Project>,
+  now: Date,
+): string {
+  const userName = userIdToName.get(entry.userId) || entry.userId;
+  const projectName = projectsById.get(entry.projectId)?.name || `Project #${entry.projectId}`;
+  const isActive = entry.clockOut == null;
+  if (isActive) {
+    const hours = hoursFromInterval(entry.clockIn, null, now);
+    return `Delete entry: ${userName}, ${projectName}, started ${formatLocalDateTime(entry.clockIn)} (currently active, ${formatHours(hours)} so far). This entry is currently active. Deleting it will cancel the in-progress clock-in.`;
+  }
+  const hours = hoursFromInterval(entry.clockIn, entry.clockOut);
+  const costStr =
+    entry.rateCentsSnapshot != null
+      ? `, ${centsToCurrency(Math.round(hours * entry.rateCentsSnapshot))}`
+      : "";
+  return `Delete entry: ${userName}, ${projectName}, ${formatLocalDateTime(entry.clockIn)} – ${formatLocalDateTime(entry.clockOut!)} (${formatHours(hours)}${costStr}). This cannot be undone.`;
 }
 
 function HoursChart({
@@ -597,13 +1153,19 @@ function UserRowGroup({
   isOpen,
   onToggle,
   projectsById,
+  userIdToName,
   now,
+  onEdit,
+  onDelete,
 }: {
   row: UserRow;
   isOpen: boolean;
   onToggle: () => void;
   projectsById: Map<number, Project>;
+  userIdToName: Map<string, string>;
   now: Date;
+  onEdit: (entry: TimeEntry) => void;
+  onDelete: (entry: TimeEntry) => void;
 }) {
   const name = userDisplayName(row.user, row.userId);
   const initials = userInitials(row.user);
@@ -678,7 +1240,14 @@ function UserRowGroup({
       {isOpen && (
         <TableRow id={detailId} data-testid={`row-detail-${row.userId}`}>
           <TableCell colSpan={5} className="bg-muted/30 p-0">
-            <NestedEntries entries={row.entries} projectsById={projectsById} now={now} />
+            <NestedEntries
+              entries={row.entries}
+              projectsById={projectsById}
+              userIdToName={userIdToName}
+              now={now}
+              onEdit={onEdit}
+              onDelete={onDelete}
+            />
           </TableCell>
         </TableRow>
       )}
@@ -706,11 +1275,17 @@ function ActiveBadge() {
 function NestedEntries({
   entries,
   projectsById,
+  userIdToName,
   now,
+  onEdit,
+  onDelete,
 }: {
   entries: TimeEntry[];
   projectsById: Map<number, Project>;
+  userIdToName: Map<string, string>;
   now: Date;
+  onEdit: (entry: TimeEntry) => void;
+  onDelete: (entry: TimeEntry) => void;
 }) {
   const sorted = [...entries].sort(
     (a, b) => new Date(b.clockIn).getTime() - new Date(a.clockIn).getTime(),
@@ -728,6 +1303,7 @@ function NestedEntries({
             <TableHead className="text-right text-xs">Cost</TableHead>
             <TableHead className="text-xs">Source</TableHead>
             <TableHead className="text-xs">Notes</TableHead>
+            <TableHead className="text-right text-xs">Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -795,12 +1371,34 @@ function NestedEntries({
                   )}
                 </TableCell>
                 <TableCell className="py-1.5 text-xs">
-                  <Badge
-                    variant="secondary"
-                    className={`${SOURCE_BADGE_CLASS[entry.source] || "bg-muted"} text-[10px] px-1.5 py-0 h-5`}
-                  >
-                    {SOURCE_LABELS[entry.source] || entry.source}
-                  </Badge>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <Badge
+                      variant="secondary"
+                      className={`${SOURCE_BADGE_CLASS[entry.source] || "bg-muted"} text-[10px] px-1.5 py-0 h-5`}
+                    >
+                      {SOURCE_LABELS[entry.source] || entry.source}
+                    </Badge>
+                    {entry.editedAt && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Badge
+                            variant="outline"
+                            className="text-[10px] px-1.5 py-0 h-5 text-muted-foreground cursor-help"
+                            data-testid={`badge-edited-${entry.id}`}
+                          >
+                            Edited
+                          </Badge>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          Edited by{" "}
+                          {entry.editedByUserId
+                            ? userIdToName.get(entry.editedByUserId) || "unknown"
+                            : "unknown"}{" "}
+                          on {formatLocalDateTime(entry.editedAt)}
+                        </TooltipContent>
+                      </Tooltip>
+                    )}
+                  </div>
                 </TableCell>
                 <TableCell className="py-1.5 text-xs max-w-[200px]">
                   {entry.notes ? (
@@ -815,6 +1413,63 @@ function NestedEntries({
                   ) : (
                     <span className="text-muted-foreground/40">—</span>
                   )}
+                </TableCell>
+                <TableCell className="py-1.5 text-xs text-right">
+                  <div className="inline-flex items-center gap-0.5">
+                    {isActive ? (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          {/* span needed for tooltip on disabled button */}
+                          <span className="inline-block">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 w-7 p-0"
+                              disabled
+                              data-testid={`button-edit-entry-${entry.id}`}
+                              aria-label="Edit entry (disabled — entry is active)"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          Cannot edit an active entry — clock the user out first
+                        </TooltipContent>
+                      </Tooltip>
+                    ) : (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 p-0"
+                            onClick={() => onEdit(entry)}
+                            data-testid={`button-edit-entry-${entry.id}`}
+                            aria-label="Edit entry"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Edit entry</TooltipContent>
+                      </Tooltip>
+                    )}
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                          onClick={() => onDelete(entry)}
+                          data-testid={`button-delete-entry-${entry.id}`}
+                          aria-label="Delete entry"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Delete entry</TooltipContent>
+                    </Tooltip>
+                  </div>
                 </TableCell>
               </TableRow>
             );

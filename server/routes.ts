@@ -2225,6 +2225,29 @@ export async function registerRoutes(
         return res.status(403).json({ message: "Access denied" });
       }
 
+      // Overlap check (boundary-touch allowed). Race window is intentional —
+      // managers are low-concurrency. We log so we can monitor for actual races.
+      const conflict = await storage.hasOverlappingEntry({
+        accountId,
+        userId: body.data.userId,
+        start: body.data.clockIn,
+        end: body.data.clockOut,
+      });
+      if (conflict) {
+        console.warn("[timesheets] overlap detected", {
+          accountId,
+          userId: body.data.userId,
+          attemptedStart: body.data.clockIn.toISOString(),
+          attemptedEnd: body.data.clockOut.toISOString(),
+          conflictingEntryId: conflict.id,
+        });
+        return res.status(409).json({
+          error: "overlap",
+          message: "This entry overlaps with an existing entry for this user.",
+          conflictingEntryId: conflict.id,
+        });
+      }
+
       const created = await storage.createTimeEntry({
         accountId,
         userId: body.data.userId,
@@ -2273,6 +2296,36 @@ export async function registerRoutes(
       if (body.data.projectId !== undefined) {
         const project = await storage.getProject(body.data.projectId);
         if (!project || project.accountId !== accountId) return res.status(403).json({ message: "Access denied" });
+      }
+
+      // Overlap check on edit (only when timing actually changes — same predicate as POST,
+      // but excluding the entry being edited). Skip for active entries (clockOut still null
+      // after the edit) since the partial unique index already protects that case.
+      if (
+        nextClockOut &&
+        (body.data.clockIn !== undefined || "clockOut" in body.data)
+      ) {
+        const conflict = await storage.hasOverlappingEntry({
+          accountId,
+          userId: existing.userId,
+          start: nextClockIn,
+          end: nextClockOut,
+          excludeEntryId: id,
+        });
+        if (conflict) {
+          console.warn("[timesheets] overlap detected", {
+            accountId,
+            userId: existing.userId,
+            attemptedStart: nextClockIn.toISOString(),
+            attemptedEnd: nextClockOut.toISOString(),
+            conflictingEntryId: conflict.id,
+          });
+          return res.status(409).json({
+            error: "overlap",
+            message: "This entry overlaps with an existing entry for this user.",
+            conflictingEntryId: conflict.id,
+          });
+        }
       }
 
       const updates: any = { updatedAt: new Date() };

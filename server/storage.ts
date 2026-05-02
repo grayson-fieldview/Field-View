@@ -145,6 +145,16 @@ export interface IStorage {
   createTimeEntry(entry: InsertTimeEntry): Promise<TimeEntry>;
   updateTimeEntry(id: string, data: Partial<InsertTimeEntry> & { updatedAt?: Date }): Promise<TimeEntry | undefined>;
   deleteTimeEntry(id: string): Promise<void>;
+  // Returns the first overlapping entry for the same user within the account, or undefined.
+  // Boundary touch (existing.clockOut == newStart, or existing.clockIn == newEnd) is allowed.
+  // An active entry (clock_out IS NULL) is treated as extending to +infinity.
+  hasOverlappingEntry(opts: {
+    accountId: string;
+    userId: string;
+    start: Date;
+    end: Date;
+    excludeEntryId?: string;
+  }): Promise<TimeEntry | undefined>;
   listTimeEntries(opts: {
     accountId: string;
     startDate: Date;
@@ -763,6 +773,29 @@ export class DatabaseStorage implements IStorage {
 
   async deleteTimeEntry(id: string): Promise<void> {
     await db.delete(timeEntries).where(eq(timeEntries.id, id));
+  }
+
+  async hasOverlappingEntry(opts: {
+    accountId: string;
+    userId: string;
+    start: Date;
+    end: Date;
+    excludeEntryId?: string;
+  }): Promise<TimeEntry | undefined> {
+    // Predicate (boundary touch is intentionally allowed via strict <, >):
+    //   existing.clock_in < $newEnd
+    //   AND COALESCE(existing.clock_out, 'infinity'::timestamptz) > $newStart
+    const conditions = [
+      eq(timeEntries.accountId, opts.accountId),
+      eq(timeEntries.userId, opts.userId),
+      sql`${timeEntries.clockIn} < ${opts.end.toISOString()}::timestamptz`,
+      sql`COALESCE(${timeEntries.clockOut}, 'infinity'::timestamptz) > ${opts.start.toISOString()}::timestamptz`,
+    ];
+    if (opts.excludeEntryId) {
+      conditions.push(sql`${timeEntries.id} <> ${opts.excludeEntryId}`);
+    }
+    const [row] = await db.select().from(timeEntries).where(and(...conditions)).limit(1);
+    return row;
   }
 
   async listTimeEntries(opts: {
