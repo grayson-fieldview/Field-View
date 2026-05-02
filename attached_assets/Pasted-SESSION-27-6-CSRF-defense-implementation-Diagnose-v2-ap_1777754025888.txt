@@ -1,0 +1,140 @@
+SESSION 27.6 — CSRF defense implementation.
+
+Diagnose v2 approved. All findings accepted. Implement the hybrid plan
+in three coordinated steps across Web, Mobile, and rollout.
+
+CONFIRMED FINAL SPEC
+
+Allowlist hosts (web Origin/Referer):
+- app.field-view.com (exact)
+- *.vercel.app (suffix — covers field-view.vercel.app + previews)
+- *.replit.dev (suffix — Replit dev random subdomains)
+- localhost (for future local dev)
+
+Mobile signal: X-FieldView-Client: mobile-1 header on non-GET requests.
+
+Path bypass list (no CSRF check at all):
+- /api/stripe/webhook (Stripe-signature verified instead)
+- /api/login
+- /api/register
+- /api/forgot-password
+- /api/reset-password
+- /api/resend-verification
+- /api/logout (chicken-and-egg if session is broken)
+
+CSRF_MODE env var:
+- "warn" → run check, log [csrf] would-block on failure, but call
+  next() (don't block)
+- unset or "enforce" → return 403 on failure
+- "off" → skip middleware entirely (killswitch for incidents)
+
+PHASE 1 — IMPLEMENT (DO NOT DEPLOY YET)
+
+WEB SERVER
+
+1. Create server/middleware/csrf.ts (~70 LOC). Pseudocode from diagnose
+   v2 is the right structure. Specifically:
+
+   - Export csrfGuard: RequestHandler
+   - SAFE_METHODS = GET, HEAD, OPTIONS → next()
+   - PATH_BYPASS list → if req.path matches exactly OR startsWith path+"/"
+     → next() (the +"/" check matters for paths like /api/stripe/webhook
+     followed by anything, though Stripe is exact)
+   - Mobile branch: if x-fieldview-client header equals "mobile-1" → next()
+     - Note: Express normalizes headers to lowercase. Use req.headers["x-fieldview-client"]
+   - Web branch: extract Origin (preferred) or Referer (fallback). Parse
+     URL. Check host against allowlist (exact match for app.field-view.com
+     and localhost; suffix match for the wildcards via host === suffix
+     OR host.endsWith("." + suffix))
+   - On failure: check CSRF_MODE
+     - "warn" → console.warn with reason and basic request context
+       (method, path, origin/referer, x-fieldview-client value if any)
+       and call next()
+     - "off" → next() (killswitch — no logging needed beyond startup)
+     - default/enforce → return 403 with { error: "csrf",
+       message: "CSRF check failed" }
+
+2. On startup (server/index.ts boot logging), log the active CSRF mode
+   once: console.log(`[csrf] mode=${process.env.CSRF_MODE || "enforce"}`).
+   Helps visibility in production.
+
+3. Mount the middleware in server/replit_integrations/auth/replitAuth.ts
+   setupAuth(), AFTER passport.session() and BEFORE registerRoutes /
+   the request logger. Or, if cleaner, mount it in server/index.ts
+   between the express.json/urlencoded parsers and registerRoutes.
+   Pick whichever insertion point requires fewer code changes and
+   document the choice in the file.
+
+4. Update replit.md with a short paragraph documenting:
+   - What the CSRF strategy is (Origin allowlist for web + custom
+     header for mobile)
+   - The bypass paths and why
+   - How to flip CSRF_MODE for warn-only / killswitch
+   - The hard rule: if cors() middleware is ever added later, it MUST
+     NOT allow X-FieldView-Client cross-origin or the mobile defense
+     is bypassed. This is critical and easy to miss.
+
+WEB CLIENT — NO CHANGE NEEDED
+The web wrapper at client/src/lib/queryClient.ts already sends
+credentials: "include" and same-origin POSTs from app.field-view.com
+will have Origin set automatically by the browser. No client changes.
+
+DO NOT TOUCH THE MOBILE REPO FROM THIS AGENT
+The mobile app is in a separate codebase (artifacts/mobile in another
+Replit project). Grayson will handle the mobile-side X-FieldView-Client
+header in a separate session. For this session, just note in the
+deliverable that the mobile change is required but pending.
+
+TESTING (LOCAL DEV ONLY — DO NOT SHIP)
+
+After implementing, with CSRF_MODE unset (defaults to enforce):
+
+1. Same-origin web POST should pass:
+   curl -X POST http://localhost:5000/api/timesheets/clock-in \
+     -H "Content-Type: application/json" \
+     -H "Origin: http://localhost:5000" \
+     -H "Cookie: connect.sid=..." \
+     -d '{"projectId":...}'
+   Expected: not 403 (whatever the actual endpoint returns —
+   could be 4xx for missing auth or invalid body, that's fine; we just
+   need to confirm the CSRF middleware passed).
+
+2. Cross-origin web POST should be blocked:
+   Same as above but with -H "Origin: https://evil.example.com"
+   Expected: 403 { error: "csrf", message: "CSRF check failed" }
+
+3. Mobile-style POST should pass:
+   curl -X POST http://localhost:5000/api/timesheets/clock-in \
+     -H "Content-Type: application/json" \
+     -H "Origin: capacitor://localhost" \  # or any random origin
+     -H "X-FieldView-Client: mobile-1" \
+     -H "Cookie: connect.sid=..." \
+     -d '{"projectId":...}'
+   Expected: not 403 (the mobile header bypasses Origin check).
+
+4. Stripe webhook should pass even with no Origin and no header:
+   curl -X POST http://localhost:5000/api/stripe/webhook \
+     -H "Content-Type: application/json" \
+     -d 'whatever'
+   Expected: not 403 from CSRF middleware (Stripe sig verification
+   will return its own error, that's fine).
+
+5. CSRF_MODE=warn run-through:
+   - export CSRF_MODE=warn
+   - restart server
+   - confirm startup log says mode=warn
+   - rerun test 2 (cross-origin POST)
+   - expected: 200/400/whatever the endpoint returns, NOT 403, AND
+     console shows [csrf] would-block warning
+
+DELIVERABLE
+1. Files touched + LOC count
+2. Mount-point choice (replitAuth.ts vs index.ts) + reasoning
+3. Test results for all 5 curl tests above
+4. Confirmation replit.md is updated with the CORS warning
+5. Explicit note: mobile change pending, must ship before web ENFORCE
+   mode
+
+After Grayson reviews: still NOT pushing to git from this turn. He'll
+commit when ready and decide rollout cadence (warn-only first or
+straight to enforce in a controlled environment).

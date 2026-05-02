@@ -25,6 +25,7 @@ import {
   verifyEmailLimiter,
 } from "../../middleware/rate-limit";
 import { Sentry } from "../../lib/sentry";
+import { csrfGuard } from "../../middleware/csrf";
 
 function getBaseUrl(req?: Request) {
   if (process.env.OAUTH_BASE_URL) return process.env.OAUTH_BASE_URL;
@@ -220,6 +221,9 @@ export async function setupAuth(app: Express) {
   app.use(getSession());
   app.use(passport.initialize());
   app.use(passport.session());
+  // CSRF defense — runs after session/passport so /api/* routes are guarded.
+  // See server/middleware/csrf.ts for strategy and CSRF_MODE env var.
+  app.use(csrfGuard);
 
   passport.use(
     new LocalStrategy(

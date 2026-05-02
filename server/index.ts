@@ -12,8 +12,11 @@ import { users, accounts } from "@shared/models/auth";
 import { eq } from "drizzle-orm";
 import { isAccountBillingEnabled, computeSeatCountFromSub } from "./lib/billing";
 import { initSentry, Sentry } from "./lib/sentry";
+import { logCsrfStartupMode } from "./middleware/csrf";
 
 initSentry();
+
+logCsrfStartupMode();
 
 const app = express();
 
