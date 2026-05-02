@@ -1,0 +1,233 @@
+SESSION 25 — Manager manual entry + edit/audit flow on /manager/timesheets
+Web only. Manager-only. Builds on Sessions 22 and 24.
+
+This is the highest-stakes session in this feature — once these flows
+ship, manager edits and manual entries directly affect what gets paid out.
+Diagnose carefully. Implement carefully. Verify carefully.
+
+DIAGNOSE FIRST — DO NOT WRITE CODE YET
+
+1. Backend audit-trail behavior verification
+   - Read server/routes.ts handlers for POST /api/timesheets and
+     PATCH /api/timesheets/:id
+   - Confirm:
+     a. POST /api/timesheets accepts manager input and snapshots the
+        user's current hourlyRateCents into rate_cents_snapshot
+     b. POST /api/timesheets sets source = "manual"
+     c. PATCH /api/timesheets/:id, on FIRST edit only, copies current
+        clock_in/clock_out into original_clock_in/original_clock_out
+     d. PATCH sets edited_by_user_id and edited_at on every edit
+     e. PATCH does NOT mutate rate_cents_snapshot unless explicitly
+        passed in the body
+     f. Both endpoints account-scope correctly
+   - Paste the relevant code excerpts so I can verify alongside you.
+
+2. Overlap checking
+   - Currently, the partial unique index prevents a user from having
+     two ACTIVE entries (clock_out IS NULL) at once. But there's no
+     constraint preventing manager-created OVERLAPPING completed entries
+     (e.g., entry A: 8am-12pm, entry B: 11am-2pm — both valid by current
+     index, conceptually nonsensical).
+   - Question for your recommendation:
+     a. Should POST and PATCH reject overlap with existing entries for
+        the same user?
+     b. What's the cleanest implementation? Likely a server-side check
+        at write time: "SELECT count(*) FROM time_entries WHERE user_id
+        = $1 AND id != $2 AND tstzrange(clock_in, COALESCE(clock_out,
+        'infinity')) && tstzrange($3, $4)". The && operator requires
+        the btree_gist extension OR we use boolean logic on the
+        timestamps directly.
+   - Recommend an approach. My instinct is YES on overlap rejection,
+     using boolean timestamp logic (no new extension needed).
+     Specifically: "WHERE user_id = $u AND id != $self AND clock_in 
+     $newEnd AND COALESCE(clock_out, 'infinity'::timestamptz) > $newStart"
+   - Edge cases to think through:
+     a. Boundary touch: A ends at 12:00:00, B starts at 12:00:00. Allow.
+     b. Sub-second overlap: A ends 12:00:00.500, B starts 12:00:00.499.
+        Reject with clear error.
+     c. Active entry vs new completed: if a user has an active entry
+        (no clock_out) at 9am, and manager tries to add a completed
+        entry from 8-10am, this overlaps. Reject.
+   - Confirm the "boundary touch is allowed" rule is reasonable for
+     contractors (yes — back-to-back jobs are common).
+
+3. Existing modal patterns on /manager/timesheets and /team
+   - The page already has a Dialog usage from yesterday's hourly-rate
+     edit on /team — paste the JSX pattern (just the relevant bits).
+     I want to mirror the same shadcn Dialog structure for both new
+     modals.
+   - Existing form state pattern (we decided plain useState last
+     session). Confirm same here.
+
+4. Action buttons on the timesheets dashboard
+   - Currently the page has filter bar + stats + table/chart toggle +
+     data display. Where would you put:
+     a. "Add manual entry" button — at the top with the export button?
+        Or as a primary action somewhere more prominent?
+     b. Per-row Edit + Delete icons — inside the expanded entry rows
+        next to the existing source badge? Or in a new column?
+   - Recommend layout, mock out with a quick description.
+
+5. Time input UX
+   - For the manual entry / edit modal, we need clock_in and clock_out
+     as date+time inputs. Native <input type="datetime-local"> is the
+     simplest path; HTML5-supported in all modern browsers; tz-naive
+     (uses browser's local tz). Sends "YYYY-MM-DDTHH:mm" string we
+     parse + convert to ISO using the user's local tz on submit.
+   - Question: are there any existing date+time pickers in the
+     codebase we should use instead? The analytics page uses
+     <input type="date"> — but that's date-only.
+   - Confirm: native datetime-local is fine for v1, or do we need
+     something fancier?
+
+REPORT BACK before writing any code.
+
+IMPLEMENTATION (after I approve patterns and decisions)
+
+PART A — BACKEND CHANGES (if any)
+
+If overlap checking is approved (item 2 above), add it to:
+  - POST /api/timesheets handler
+  - PATCH /api/timesheets/:id handler
+
+Helper function in storage:
+  - hasOverlappingEntry(userId, accountId, start, end, excludeEntryId?):
+    boolean
+  - Used by both handlers above
+
+Error response shape:
+  - 409 Conflict
+  - { error: "overlap", message: "...", conflictingEntryId: string }
+  - The conflicting entry id helps the UI surface "this overlaps with
+    Entry X" rather than a generic message
+
+Verification SQL the agent should write to test:
+  - Insert a completed entry: user A, project 1, 8am-12pm
+  - Try to insert another: user A, project 2, 11am-2pm → expect 409
+  - Try boundary touch: user A, 12pm-2pm → expect 200 (allowed)
+  - Try sub-second overlap: 12:00:00.001 - 2pm → expect 409
+  - Try same range different user: → expect 200 (different user, fine)
+
+PART B — UI: Manual entry modal
+
+Trigger:
+  - "Add entry" button (with PlusIcon from lucide) in the filter bar,
+    placed left of the export dropdown. Manager-only (already gated
+    by the page's role redirect).
+
+Modal contents:
+  - Title: "Add timesheet entry"
+  - User select: dropdown of users where timesheet_enabled = true in
+    the account. Show name + (rate if set, otherwise "no rate").
+    Required.
+  - Project select: dropdown of all projects in account. Show name +
+    address. Required.
+  - Clock in: <input type="datetime-local"> required
+  - Clock out: <input type="datetime-local"> required
+  - Notes: <textarea> optional
+  - Cancel / Save buttons
+
+Validation (client-side):
+  - All required fields present
+  - clock_out > clock_in (parsed as Date objects)
+  - If invalid, show inline error on the offending field, disable Save
+  - On submit: convert datetime-local strings to ISO via
+    new Date(localStr).toISOString() — this respects browser tz
+
+Submit:
+  - POST /api/timesheets with the body
+  - On 200: close modal, refresh the entries list, toast "Entry added"
+  - On 409 overlap: show inline error "This entry overlaps with an
+    existing entry for [user name]." Keep the modal open so manager
+    can adjust.
+  - On 400 / 403 / 500: toast with the server's error message
+  - On any error: do NOT clear the form
+
+PART C — UI: Edit entry modal
+
+Trigger:
+  - Pencil icon next to each entry in the expanded row of the table
+  - Tooltip: "Edit entry"
+
+Modal contents:
+  - Title: "Edit entry"
+  - User: DISABLED select (display only — show user name, can't change)
+  - Project: editable select (same as add modal)
+  - Clock in / Clock out: <input type="datetime-local">, prefilled
+    with current values converted to local-datetime format
+  - Notes: prefilled
+  - Cancel / Save buttons
+  - "Delete entry" button (destructive variant) on the bottom-left of
+    the dialog footer — opens a separate confirmation alert dialog
+
+Submit:
+  - PATCH /api/timesheets/:id
+  - Same 200/409/error handling as add modal
+  - On success: toast "Entry updated"
+
+Helper utility:
+  - dateToLocalDatetime(d: Date): string — converts an ISO date to the
+    "YYYY-MM-DDTHH:mm" format expected by datetime-local inputs.
+    Use d.toLocaleString("sv-SE", { hour12: false }).slice(0, 16)
+    or build manually. Place in client/src/lib/duration.ts (or new
+    file if cleaner).
+
+PART D — UI: Delete confirmation
+
+  - AlertDialog (shadcn pattern matching existing remove-user flow on
+    /team)
+  - Title: "Delete this entry?"
+  - Description: shows entry summary, e.g. "Bob Smith, Smith Residence,
+    Apr 30 2026 8:00 AM – 4:00 PM (8h, $200.00). This cannot be undone."
+  - Buttons: Cancel / Delete (destructive)
+  - On confirm: DELETE /api/timesheets/:id, refresh, toast
+
+PART E — UI: Edited badge in expanded row
+
+  - For any entry where edited_at is non-null:
+    - Small "Edited" badge with subtle styling (variant="outline",
+      muted color)
+    - Hover tooltip: "Edited by [User Name] on [date+time]"
+    - Place inline next to the source badge in the expanded row
+  - Need user-name lookup — the entries response includes
+    edited_by_user_id but probably not the name. Either:
+    a. Look up by id from the team list (already loaded for the user
+       select in modals)
+    b. Add edited_by_name to the timesheets API response
+  - Recommend (a) — no backend change. Build a userIdToName map in
+    a useMemo from the existing team query.
+
+VERIFICATION
+- Backend overlap tests via curl per item 2 above
+- Manual entry: add an entry for test-std-s22 yesterday, verify shows
+  in dashboard, rate snapshotted correctly
+- Manual entry overlap: try adding overlapping entry, get 409,
+  inline error appears
+- Edit: change clock-out time on a Session 24 test entry, verify:
+  - Audit fields populated (original_clock_in, edited_by, edited_at)
+  - Edited badge appears in UI
+  - Tooltip shows correct editor name + date
+- Edit: change a SECOND time on the same entry, verify:
+  - original_clock_in is NOT overwritten (preserves the FIRST original)
+  - edited_at IS updated
+- Delete: delete a test entry with confirmation, verify gone from DB
+- Standard user → 403 on POST and PATCH and DELETE
+- Restricted user → 403
+- Self-edit gate: a manager cannot create an entry for themselves
+  (or can they?) — flag in diagnose if you find existing precedent.
+  My recommendation: managers CAN create entries for themselves (they
+  may have legitimately worked on a job and need to record it). But
+  flag if this differs from existing patterns.
+- npm run check stays at baseline 33
+
+DELIVERABLE
+1. Files touched
+2. Overlap check decision (approved or deviated, with reasoning)
+3. UI placement decisions for buttons (with reasoning)
+4. Screenshots: add modal, edit modal, delete confirmation, edited
+   badge with tooltip, overlap error inline
+5. npm run check output
+6. Verification matrix results
+7. Any deviations from spec
+
+Do not push to git. Review in chat first.
