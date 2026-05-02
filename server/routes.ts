@@ -1828,7 +1828,7 @@ export async function registerRoutes(
       }
 
       const body = z.object({
-        projectId: z.number().int().positive(),
+        projectId: z.coerce.number().int().positive(),
         notes: z.string().max(2000).optional().nullable(),
       }).safeParse(req.body ?? {});
       if (!body.success) {
