@@ -1,0 +1,64 @@
+Pivot — three findings from the failed capture:
+
+1. Web prod traffic doesn't hit this dev server (Vercel terminates it).
+   We cannot capture prod headers without deploying. SKIP.
+2. Mobile traffic also hits prod (mobile uses
+   EXPO_PUBLIC_API_BASE_URL = https://app.field-view.com), proven by the
+   Zod error reaching it. We cannot capture mobile-prod headers either.
+   SKIP.
+3. Browser headers for both web prod and web dev are predictable —
+   Origin will be the literal site URL. Don't need to capture them.
+
+REVISED STRATEGY
+
+Hybrid approach:
+- WEB requests: validate Origin against allowlist (browsers set this
+  reliably and cannot be forged from JS)
+- MOBILE requests: require a custom header X-FieldView-Client: mobile-1
+  on state-changing requests. Browsers cannot set arbitrary X- headers
+  cross-origin without CORS approval (which we don't grant). The
+  presence of this header acts as a CSRF defense for mobile, since
+  attacker browsers can't forge it.
+- WEBHOOKS (/api/stripe/webhook): path-prefix bypass.
+- UNAUTH endpoints (login, register, forgot-password, reset-password,
+  resend-verification): path-prefix bypass.
+
+DIAGNOSE — DO NOT WRITE CODE YET
+
+1. Confirm the unauth endpoints list. The diagnose said 5:
+   /api/login, /api/register, /api/forgot-password, /api/reset-password,
+   /api/resend-verification. Are there others I missed? OAuth
+   callback endpoints? Public health checks?
+
+2. Confirm the webhook list. Stripe webhook is /api/stripe/webhook.
+   Are there any other inbound webhooks? Calendar sync, third-party
+   integrations, etc.?
+
+3. The custom header strategy requires the mobile app to send it.
+   In the mobile codebase (artifacts/mobile if accessible from here,
+   or just confirm from the Web side what we'd need):
+   - The mobile app already uses cookie auth and JSON POSTs
+   - We need to add X-FieldView-Client: mobile-1 to every state-changing
+     request from mobile
+   - Update services/api.ts apiFetch to include this header on
+     POST/PUT/PATCH/DELETE
+   - Trivial change, but means mobile MUST be deployed before web CSRF
+     ships, otherwise mobile breaks
+   
+   Estimate: how many request paths in services/api.ts would need this
+   header added? Or is it set globally for all requests through one
+   wrapper?
+
+4. Allowlist hosts:
+   - Prod web: app.field-view.com
+   - Dev web (Replit): *.replit.dev (any subdomain — Replit assigns
+     random IDs)
+   - Anything else? Localhost ports for desktop dev? Vercel preview
+     URLs (*.vercel.app or similar)?
+
+REPORT all 4 items. Then propose middleware structure + estimated LOC
++ the rollout sequence we'd need (mobile first OR feature-flag the
+middleware OR deploy middleware in "warn-only" mode that logs but
+doesn't block, etc.).
+
+Do not write code yet.
