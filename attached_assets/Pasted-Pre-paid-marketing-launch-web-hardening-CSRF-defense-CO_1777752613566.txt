@@ -1,0 +1,106 @@
+Pre-paid-marketing-launch web hardening: CSRF defense.
+
+CONTEXT
+Web server currently has NO CSRF defense beyond SameSite=Lax cookies on
+connect.sid. This was confirmed in Session 27.5 — cross-origin POSTs
+against state-changing endpoints currently succeed (verified). SameSite=Lax
+blocks third-party iframe POSTs but does NOT block POSTs from a malicious
+page when the user navigates there directly, nor non-simple cross-origin
+POSTs after a CORS preflight.
+
+The mobile app uses cookie-only auth and works correctly with this — any
+CSRF defense we add must NOT break the mobile app. Mobile uses native
+fetch with credentials, attaches cookies via cookie jar, and POSTs JSON
+to the same origin via the dev server proxy in dev and direct in prod.
+
+GOAL
+Add CSRF protection to all state-changing endpoints (POST/PUT/PATCH/DELETE)
+without breaking:
+- Mobile app (cookie auth, JSON POSTs)
+- Web app (same origin, session cookie, JSON POSTs)
+- Stripe webhooks (POST from Stripe servers — these MUST bypass CSRF)
+- Any other webhook endpoints (if they exist)
+
+DIAGNOSE FIRST — DO NOT WRITE CODE YET
+
+1. Inventory the auth/session middleware setup
+   - Find server/index.ts (or whatever the express app entry is)
+   - Paste the middleware order: cookieParser, session, body parser,
+     CORS (if any), routes
+   - What session library? express-session? Confirm.
+   - What's the connect.sid cookie config? Paste it (httpOnly, secure,
+     sameSite, maxAge, etc.)
+
+2. Inventory ALL POST/PUT/PATCH/DELETE routes in the codebase
+   - rg -n "router\.(post|put|patch|delete)" server/
+   - rg -n "app\.(post|put|patch|delete)" server/
+   - Group routes by category: auth, billing/Stripe, projects, photos,
+     timesheets, account, etc.
+   - Specifically flag webhook endpoints (Stripe especially) that need
+     to bypass CSRF — these are POSTs from external servers, not the
+     browser
+
+3. CORS state
+   - Is there CORS middleware? If yes, what origins are allowed?
+   - If no CORS middleware, are cross-origin POSTs working today only
+     because they're "simple requests" (form-urlencoded, no preflight
+     needed)?
+   - If our endpoints accept application/json, the browser sends a
+     CORS preflight, which means cross-origin attackers without an
+     allowed origin can't actually POST today — confirm this
+
+4. Mobile app POST behavior
+   - The mobile app's services/api.ts sets headers — what does it set?
+     (Specifically: does it set Content-Type: application/json? Custom
+     X- headers? Origin or Referer?)
+   - Confirm: does the mobile app send any X- prefix custom header
+     today that could double as a CSRF token (the "double-submit cookie"
+     pattern uses a custom header that browsers can't set cross-origin
+     without CORS approval)?
+
+5. Existing CSRF infrastructure
+   - rg -in "csrf|xsrf" server/ client/ — is there ANY existing partial
+     attempt at CSRF that I should be aware of?
+   - Are there any libraries already in package.json that could provide
+     this (csurf, csrf-csrf, etc.)?
+
+REPORT FINDINGS before proposing any approach. Do not propose a fix yet.
+
+PROPOSED APPROACHES (FOR DISCUSSION AFTER DIAGNOSE)
+
+Option A — csurf middleware
+The classic Express CSRF library. Generates per-session token, expects
+it on POST. csurf is technically deprecated as of 2022 but still works.
+Requires touching every form/POST in the web client to attach the token.
+Mobile app would need to fetch and submit the token too — adds round trip.
+
+Option B — Custom double-submit cookie (csrf-csrf or hand-rolled)
+Server sets a CSRF cookie with a random value. Client reads cookie via
+JS and echoes it in a custom header on POST. Server verifies header ==
+cookie. Mobile reads cookie via cookie jar and adds the header.
+- Web: ~50 lines of JS to read cookie + add to fetch wrapper
+- Mobile: read cookie from jar, add X-CSRF-Token header
+- Doesn't require per-form integration
+
+Option C — Origin/Referer header validation
+Reject any state-changing request whose Origin or Referer doesn't match
+allowlisted hosts (app.field-view.com + dev origins). Cheap, no token,
+no client changes. Browsers always send these headers and don't let JS
+forge them.
+- Pros: zero client changes, single ~30-line middleware
+- Cons: brittle if browsers ever stop sending Referer (some privacy
+  modes do); some legitimate referrer-stripped requests get blocked
+- Mobile app sends Origin from native fetch? Need to verify.
+
+Recommend after diagnose. I lean toward C (smallest blast radius, no
+mobile changes) supplemented by validating that mobile sends a usable
+Origin header. If mobile doesn't send Origin reliably, fall back to B.
+
+DELIVERABLE FROM THIS DIAGNOSE
+1. All 5 inventory items
+2. Specific webhook endpoints that need CSRF bypass
+3. Any existing partial CSRF attempts found
+4. Recommended approach (A/B/C/other) with reasoning grounded in the
+   inventory
+
+Do not write code. Do not push to git.
