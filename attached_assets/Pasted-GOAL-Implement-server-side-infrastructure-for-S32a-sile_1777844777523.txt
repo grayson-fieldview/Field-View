@@ -1,0 +1,192 @@
+GOAL
+Implement server-side infrastructure for S32a: silent-auto clock-OUT after a 5-minute debounce on geofence exit events. This is the symmetric counterpart to S31b (silent-auto clock-IN), which is already shipped.
+
+User journey we're building toward (full picture, for context):
+- User crosses out of a registered project's geofence boundary
+- Mobile sends "exit detected" to server, which schedules a delayed clock-out
+- Server waits 5 minutes (Vercel Cron polls a pending table)
+- If user re-enters within 5 min, mobile sends "exit cancelled" → server cancels
+- Otherwise, after 5 min, server executes auto clock-out and (later, S32b) sends a push notification with Undo
+- User can auto-undo the clock-out using the same pattern as S31b's auto-undo
+
+THIS PROMPT IS THE WEB HALF ONLY. Mobile will be done in a follow-up prompt.
+
+DIAGNOSE-FIRST CHECKLIST
+Before writing code, verify each item by reading the codebase. If any answer differs, STOP and report in chat.
+
+1. POST /api/timesheets/clock-in lives at server/routes.ts:1912, uses requireWriteAccess, persists a row to time_entries with source='auto_geofence' when called from auto-geofence flow.
+2. POST /api/timesheets/clock-out lives at server/routes.ts:1972, uses requireWriteAccess, finds the active entry via storage.getActiveTimeEntryForUser(userId), populates clock_out, optional notes body.
+3. DELETE /api/timesheets/:id/auto-undo exists (shipped today) at L2015-2040 with safety constraints: requireWriteAccess + own-user (403 if cross-user same account) + source must be auto_geofence (403) + within 60-min window of clock_in (410). Returns {message: "..."} on errors.
+4. timeEntrySourceEnum is in shared/schema.ts:18 with values ["manual", "auto_geofence", "edited"].
+5. time_entries columns include id, account_id, user_id, project_id, source, clock_in, clock_out.
+6. vercel.json exists at repo root with rewrites but NO crons section yet.
+7. storage layer (server/storage.ts) has getActiveTimeEntryForUser, getTimeEntry, deleteTimeEntry, and likely an "update entry to set clock_out" method. Find it and confirm its name.
+8. Schema migrations follow the pattern in script/migrations/migrate_session22_timesheets.ts: db.transaction wrapping DDL, env guard requiring rds.amazonaws.com or neon.tech in URL plus ALLOW_PROD_MIGRATION=yes for RDS, IF NOT EXISTS guards, log host (no password), entry-point guard preventing dynamic-import auto-execution.
+
+REQUIREMENTS
+
+=== PART 1: NEW TABLE pending_geofence_exits ===
+
+Create a new table. Add a Drizzle declaration in shared/schema.ts AND write a migration script in script/migrations/.
+
+Schema:
+- id: uuid primary key, default gen_random_uuid()
+- user_id: uuid not null, references users(id) on delete cascade (or string fk matching the existing pattern in time_entries — check how time_entries.user_id is declared and match it exactly)
+- account_id: uuid/string not null, matches time_entries.account_id type
+- project_id: integer not null, references projects(id) on delete cascade
+- time_entry_id: uuid not null, references time_entries(id) on delete cascade — the active clock-in entry to be auto-clocked-out
+- exit_detected_at: timestamp with time zone, not null, default now()
+- fires_at: timestamp with time zone, not null — set by mobile to now() + 5 min when exit detected
+- status: text or enum, not null, default 'pending'. Values: 'pending', 'fired', 'cancelled', 'failed'
+- cancelled_at: timestamp with time zone, nullable
+- fired_at: timestamp with time zone, nullable
+- error_message: text, nullable (for status='failed')
+- created_at: timestamp with time zone, default now()
+- updated_at: timestamp with time zone, default now()
+
+Indexes:
+- index on (status, fires_at) — cron job's primary query
+- index on (user_id, project_id, status) — for cancellation lookup
+- unique constraint on (time_entry_id) where status='pending' — prevents duplicate pending exits for the same active session
+
+Migration script: script/migrations/migrate_session32a_pending_exits.ts
+Follow the exact template from migrate_session22_timesheets.ts:
+- db.transaction wrapping all DDL
+- Env guard: throw unless DATABASE_URL contains rds.amazonaws.com or neon.tech; require ALLOW_PROD_MIGRATION=yes when targeting RDS
+- Entry-point guard: only execute when run directly (require.main === module pattern), not on import
+- Log connection host (NO password) and mode (RDS vs Neon) before DB call
+- IF NOT EXISTS on every CREATE TABLE/INDEX/CONSTRAINT for re-run safety
+
+=== PART 2: NEW ENDPOINT — POST /api/geofence/exit-detected ===
+
+Place after the existing auto-undo endpoint at L2040 in server/routes.ts. Group all S32a endpoints together.
+
+Middleware: requireWriteAccess (matches clock-in/clock-out pattern)
+
+Body schema (Zod):
+{
+  projectId: z.coerce.number().int().positive(),
+  timeEntryId: z.string().uuid(),
+  detectedAt: z.string().datetime(), // ISO 8601, when mobile detected the exit
+}
+
+Behavior:
+1. Verify the active time entry exists, belongs to req.user, has source='auto_geofence', has clock_out IS NULL. If any fails → 400 with appropriate message.
+2. Verify projectId matches time_entry.project_id. If not → 400.
+3. Verify there is NOT already a pending row for this time_entry_id. If duplicate → idempotent: return 200 with the existing pending row's id, do not insert.
+4. Insert pending_geofence_exits row:
+   - status='pending'
+   - fires_at = NOW() + INTERVAL '5 minutes' (server-authoritative; ignore mobile's detectedAt for actual fires_at calc, but persist it as exit_detected_at for diagnostics)
+5. Return 201 with { id, fires_at, status } so mobile can track.
+
+Error responses use {message: "..."} pattern matching the rest of the codebase.
+
+=== PART 3: NEW ENDPOINT — POST /api/geofence/exit-cancelled ===
+
+Middleware: requireWriteAccess
+
+Body schema:
+{
+  pendingExitId: z.string().uuid().optional(),
+  timeEntryId: z.string().uuid().optional(),
+}
+At least one of (pendingExitId, timeEntryId) must be provided. If neither → 400.
+
+Behavior:
+1. Find the pending_geofence_exits row by id (preferred) or by time_entry_id where status='pending'.
+2. If not found → 404 (idempotent — fine to silently 404 if mobile cancels something already fired).
+3. Verify the row's user_id matches req.user.id. If not → 404 (privacy: don't leak existence of other users' rows).
+4. Update status='cancelled', cancelled_at=NOW().
+5. Return 200 with {id, status: 'cancelled'}.
+
+=== PART 4: NEW ENDPOINT — GET /api/cron/process-pending-exits ===
+
+Cron-only endpoint. Vercel Cron will hit this every minute.
+
+Authentication: Vercel Cron sends a special header. Verify CRON_SECRET env var matches the Authorization: Bearer <secret> header. If missing or wrong → 401.
+
+Reference: https://vercel.com/docs/cron-jobs/manage-cron-jobs#securing-cron-jobs (read this if uncertain about the exact header pattern)
+
+Behavior:
+1. Find all rows where status='pending' AND fires_at <= NOW(). LIMIT 100 per run as a safety bound.
+2. For each row, in a database transaction:
+   a. Re-verify the row's status='pending' (defensive against concurrent cron runs)
+   b. Look up the time_entry by id. If clock_out is already populated → mark this pending row status='fired' with note "already_clocked_out", skip.
+   c. Otherwise, set time_entries.clock_out = NOW(), edited_at=NOW(), edited_by_user_id=user_id (the auto-clock-out is "edited by themselves" since the system acts on their behalf). DO use a separate column or marker if there's a cleaner pattern in storage.ts — check whether updateTimeEntry or similar exists.
+   d. Update pending_geofence_exits status='fired', fired_at=NOW().
+3. Aggregate counts: { processed, fired, skipped_already_clocked_out, errored }
+4. Return 200 with the aggregate counts.
+5. Each row's processing is in its own try/catch. A single failure does not abort the batch. On error, set status='failed', error_message=<error>, log to Sentry.
+
+DO NOT send push notifications from this endpoint. That's S32b. For S32a, the user discovers the auto-clock-out next time they open the app (mobile polls /api/timesheets/active on app foreground).
+
+=== PART 5: EXTEND DELETE /api/timesheets/:id/auto-undo ===
+
+The existing handler hard-deletes the row. For auto-clock-OUT undo, we don't want to delete — we want to re-open the entry by setting clock_out=NULL.
+
+Modify the existing handler at L2015-2040:
+
+NEW BEHAVIOR:
+- If the entry's clock_out IS NULL (i.e., this is undo of an auto-clock-IN, current S31b behavior) → hard delete the row. Existing behavior preserved.
+- If the entry's clock_out IS NOT NULL AND the entry has a corresponding pending_geofence_exits row that fired within the last 60 min (i.e., this is undo of an auto-clock-OUT) → set clock_out=NULL, edited_at=NULL, edited_by_user_id=NULL on time_entries. Also delete the pending_geofence_exits row.
+- If neither condition matches → 410 Gone with existing message ("Auto clock-in undo window has expired. Edit the entry instead.")
+
+Window check (60 min) is now from the more recent of (clock_in, fired_at on pending row).
+
+DO NOT change the existing safety constraints (own-user, source=auto_geofence, etc). Only extend the action taken when constraints pass.
+
+=== PART 6: VERCEL.JSON CRON CONFIGURATION ===
+
+Add a `crons` array to vercel.json:
+{
+  "version": 2,
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist/public",
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/index" },
+    { "source": "/((?!api).*)", "destination": "/index.html" }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/process-pending-exits",
+      "schedule": "* * * * *"
+    }
+  ]
+}
+
+CRON_SECRET must be added to Vercel project env vars. The agent should NOT hardcode a value; instead, output instructions for Grayson to generate (e.g., openssl rand -hex 32) and add via Vercel dashboard.
+
+=== PART 7: SHARED LOGIC EXTRACTION ===
+
+The auto-clock-out logic (mark time_entries.clock_out, edited_at, edited_by_user_id) is now executed from BOTH the existing POST /clock-out handler AND the new cron job. Extract this to a shared function.
+
+Place in server/services/timesheets.ts (new file):
+- export async function executeAutoClockOut({ timeEntryId, userId }: { timeEntryId: string; userId: string }): Promise<TimeEntry>
+- The function performs the DB update. It does NOT send notifications (S32b concern).
+- Returns the updated row.
+
+Refactor the cron handler to call executeAutoClockOut. POST /clock-out can stay as-is (it's user-initiated, slightly different concerns — notes field, etc). Decision rationale: don't refactor the user-initiated clock-out path now; just centralize the auto path.
+
+=== PART 8: TYPECHECK + VERIFICATION ===
+
+Before claiming done:
+1. pnpm typecheck (or whatever the script is) passes.
+2. pnpm test passes if there are existing tests.
+3. grep -n "exit-detected\|exit-cancelled\|process-pending-exits" server/routes.ts returns the three new endpoints.
+4. grep -n "pending_geofence_exits" shared/schema.ts returns the new table declaration.
+5. ls script/migrations/ shows the new migration file.
+6. cat vercel.json shows the crons array.
+
+OUTPUT
+- Summary of files changed/created
+- The full new code for shared/schema.ts (just the new declaration), the migration script, the new endpoints in server/routes.ts (just the new blocks), the modified auto-undo handler diff, server/services/timesheets.ts (full file), vercel.json
+- Confirmation of the diagnose-first checklist, item by item
+- Any deviations from this spec, with reasoning
+
+DO NOT
+- Do not push to git. Grayson pushes manually after review.
+- Do not run the migration. The migration runs against prod RDS manually following the schema-touching deploy hard rule (snapshot → whitelist Replit IP → run with env guards → verify schema → THEN promote Vercel deploy → unwhitelist). Just write the migration script.
+- Do not implement push notifications, device token registration, or any APNs sending. That's S32b.
+- Do not modify mobile code. That's a separate prompt.
+- Do not add tests beyond what's already conventional in the codebase.
+- Do not "improve" surrounding code. Single-purpose diff.
