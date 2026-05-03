@@ -1,0 +1,28 @@
+Approved: Option (a) DELETE /api/timesheets/:id/auto-undo, with all three of your flagged tweaks accepted.
+
+Final scope:
+- New endpoint: DELETE /api/timesheets/:id/auto-undo
+- Middleware: requireWriteAccess + getUser (NOT requireAdminOrManager — this is a self-service action available to any authenticated user with write access)
+- Safety constraints (in order, all must pass):
+  1. Entry exists (else 404)
+  2. Entry's accountId === currentUser.accountId (else 404 — per multi-tenancy convention, treat cross-account as "not found" rather than 403, to avoid leaking entry existence)
+  3. Entry's userId === currentUser.id (else 403, "You can only undo your own auto clock-in entries")
+  4. Entry's source === 'auto_geofence' (else 403, "Only auto clock-in entries can be undone via this endpoint. Use the manager dashboard to edit or delete manual entries.")
+  5. (now() - entry.clockIn) <= TIME_ENTRY_DELETE_WINDOW_MS (else 410, "Auto clock-in undo window has expired. Edit the entry instead.")
+- On all checks pass: storage.deleteTimeEntry(id), return 204 No Content with no body
+- Constant: TIME_ENTRY_DELETE_WINDOW_MS = 60 * 60 * 1000, defined at top of timesheet section in routes.ts with a brief comment ("// Auto clock-in undo window — narrow to prevent retroactive timesheet manipulation")
+- Handler location: immediately after POST /api/timesheets/clock-out (~L2010), before the manager-only block starts at L2025
+
+NOTE on the cross-account check returning 404 vs 403: I'm changing your spec slightly here. Returning 403 on cross-account leaks "this entry exists, you just can't access it" — better to return 404 ("entry does not exist as far as you're concerned"). This is consistent with how most multi-tenant systems handle account isolation. Same outcome for legitimate users (they only ever see their own entries), but harder to enumerate for malicious ones.
+
+Acceptance test matrix (curl-based smoke per existing project convention, T7 dropped):
+- T1: User deletes their own auto entry, within 60 min window → 204
+- T2: User deletes their own MANUAL entry → 403 (source mismatch)
+- T3: User deletes their own auto entry, but >60 min old → 410 (window expired)
+- T4: User deletes another user's auto entry (same account) → 403 (ownership)
+- T5: User deletes nonexistent entry → 404
+- T6: Cross-account deletion attempt → 404 (per the change above; not 403)
+
+Show me the diff. After approval, I'll commit + push from the Replit Web Git pane and Vercel will auto-deploy.
+
+Mobile-side will be calling this endpoint within an hour. Coordinate carefully.

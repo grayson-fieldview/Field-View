@@ -1908,6 +1908,9 @@ export async function registerRoutes(
   // Timesheets
   // ============================================================
 
+  // Auto clock-in undo window — narrow to prevent retroactive timesheet manipulation
+  const TIME_ENTRY_DELETE_WINDOW_MS = 60 * 60 * 1000;
+
   // POST /api/timesheets/clock-in
   app.post("/api/timesheets/clock-in", requireWriteAccess, async (req: any, res) => {
     try {
@@ -2006,6 +2009,33 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("clock-out error:", error);
       res.status(500).json({ message: "Failed to clock out" });
+    }
+  });
+
+  // DELETE /api/timesheets/:id/auto-undo (self-service undo of auto clock-in within window)
+  app.delete("/api/timesheets/:id/auto-undo", requireWriteAccess, async (req: any, res) => {
+    try {
+      const currentUser = req.user;
+      const id = req.params.id;
+      const entry = await storage.getTimeEntry(id);
+      if (!entry) return res.status(404).json({ message: "Entry not found" });
+      if (entry.accountId !== currentUser.accountId) {
+        return res.status(404).json({ message: "Entry not found" });
+      }
+      if (entry.userId !== currentUser.id) {
+        return res.status(403).json({ message: "You can only undo your own auto clock-in entries" });
+      }
+      if (entry.source !== "auto_geofence") {
+        return res.status(403).json({ message: "Only auto clock-in entries can be undone via this endpoint. Use the manager dashboard to edit or delete manual entries." });
+      }
+      if (Date.now() - new Date(entry.clockIn).getTime() > TIME_ENTRY_DELETE_WINDOW_MS) {
+        return res.status(410).json({ message: "Auto clock-in undo window has expired. Edit the entry instead." });
+      }
+      await storage.deleteTimeEntry(id);
+      return res.status(204).end();
+    } catch (error: any) {
+      console.error("auto-undo error:", error);
+      res.status(500).json({ message: "Failed to undo auto clock-in" });
     }
   });
 
