@@ -47,10 +47,13 @@ import {
   timeEntries,
   type TimeEntry,
   type InsertTimeEntry,
+  pendingGeofenceExits,
+  type PendingGeofenceExit,
+  type InsertPendingGeofenceExit,
 } from "@shared/schema";
 import { users, type User } from "@shared/models/auth";
 import { db } from "./db";
-import { eq, desc, sql, asc, and, inArray } from "drizzle-orm";
+import { eq, desc, sql, asc, and, inArray, lte } from "drizzle-orm";
 
 export interface ProjectWithDetails extends Project {
   photoCount: number;
@@ -145,6 +148,16 @@ export interface IStorage {
   createTimeEntry(entry: InsertTimeEntry): Promise<TimeEntry>;
   updateTimeEntry(id: string, data: Partial<InsertTimeEntry> & { updatedAt?: Date }): Promise<TimeEntry | undefined>;
   deleteTimeEntry(id: string): Promise<void>;
+  // Pending geofence exits (S32a auto clock-out debounce)
+  createPendingExit(data: InsertPendingGeofenceExit): Promise<PendingGeofenceExit>;
+  getPendingExitById(id: string): Promise<PendingGeofenceExit | undefined>;
+  getPendingExitByTimeEntryPending(timeEntryId: string): Promise<PendingGeofenceExit | undefined>;
+  getPendingExitByTimeEntryAny(timeEntryId: string): Promise<PendingGeofenceExit | undefined>;
+  getPendingExitsDue(limit: number): Promise<PendingGeofenceExit[]>;
+  cancelPendingExit(id: string): Promise<PendingGeofenceExit | undefined>;
+  markPendingExitFired(id: string, notes?: string): Promise<PendingGeofenceExit | undefined>;
+  markPendingExitFailed(id: string, notes: string): Promise<PendingGeofenceExit | undefined>;
+  deletePendingExit(id: string): Promise<void>;
   // Returns the first overlapping entry for the same user within the account, or undefined.
   // Boundary touch (existing.clockOut == newStart, or existing.clockIn == newEnd) is allowed.
   // An active entry (clock_out IS NULL) is treated as extending to +infinity.
@@ -773,6 +786,72 @@ export class DatabaseStorage implements IStorage {
 
   async deleteTimeEntry(id: string): Promise<void> {
     await db.delete(timeEntries).where(eq(timeEntries.id, id));
+  }
+
+  // ===== S32a: pending geofence exits =====
+  async createPendingExit(data: InsertPendingGeofenceExit): Promise<PendingGeofenceExit> {
+    const [row] = await db.insert(pendingGeofenceExits).values(data as any).returning();
+    return row;
+  }
+  async getPendingExitById(id: string): Promise<PendingGeofenceExit | undefined> {
+    const [row] = await db.select().from(pendingGeofenceExits)
+      .where(eq(pendingGeofenceExits.id, id)).limit(1);
+    return row;
+  }
+  async getPendingExitByTimeEntryPending(timeEntryId: string): Promise<PendingGeofenceExit | undefined> {
+    const [row] = await db.select().from(pendingGeofenceExits)
+      .where(and(
+        eq(pendingGeofenceExits.timeEntryId, timeEntryId),
+        eq(pendingGeofenceExits.status, "pending"),
+      )).limit(1);
+    return row;
+  }
+  async getPendingExitByTimeEntryAny(timeEntryId: string): Promise<PendingGeofenceExit | undefined> {
+    // Most recent row of any status for this entry — used by auto-undo to find a recent fire.
+    const [row] = await db.select().from(pendingGeofenceExits)
+      .where(eq(pendingGeofenceExits.timeEntryId, timeEntryId))
+      .orderBy(desc(pendingGeofenceExits.createdAt))
+      .limit(1);
+    return row;
+  }
+  async getPendingExitsDue(limit: number): Promise<PendingGeofenceExit[]> {
+    return db.select().from(pendingGeofenceExits)
+      .where(and(
+        eq(pendingGeofenceExits.status, "pending"),
+        lte(pendingGeofenceExits.firesAt, new Date()),
+      ))
+      .orderBy(pendingGeofenceExits.firesAt)
+      .limit(limit);
+  }
+  async cancelPendingExit(id: string): Promise<PendingGeofenceExit | undefined> {
+    const now = new Date();
+    const [row] = await db.update(pendingGeofenceExits)
+      .set({ status: "cancelled", cancelledAt: now, updatedAt: now })
+      .where(and(
+        eq(pendingGeofenceExits.id, id),
+        eq(pendingGeofenceExits.status, "pending"),
+      ))
+      .returning();
+    return row;
+  }
+  async markPendingExitFired(id: string, notes?: string): Promise<PendingGeofenceExit | undefined> {
+    const now = new Date();
+    const [row] = await db.update(pendingGeofenceExits)
+      .set({ status: "fired", firedAt: now, updatedAt: now, ...(notes ? { notes } : {}) })
+      .where(eq(pendingGeofenceExits.id, id))
+      .returning();
+    return row;
+  }
+  async markPendingExitFailed(id: string, notes: string): Promise<PendingGeofenceExit | undefined> {
+    const now = new Date();
+    const [row] = await db.update(pendingGeofenceExits)
+      .set({ status: "failed", notes, updatedAt: now })
+      .where(eq(pendingGeofenceExits.id, id))
+      .returning();
+    return row;
+  }
+  async deletePendingExit(id: string): Promise<void> {
+    await db.delete(pendingGeofenceExits).where(eq(pendingGeofenceExits.id, id));
   }
 
   async hasOverlappingEntry(opts: {

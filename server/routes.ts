@@ -7,7 +7,8 @@ import { getAccountBilling, isAccountBillingEnabled, overlayAccountBillingOnUser
 import { requireAdmin, requireAdminOrManager } from "./middleware/auth";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
-import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertReportSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertReportTemplateSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, reports, projectAssignments, timeEntries } from "@shared/schema";
+import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertReportSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertReportTemplateSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, reports, projectAssignments, timeEntries, pendingGeofenceExits } from "@shared/schema";
+import { executeAutoClockOut } from "./lib/timesheets";
 import { users, invitations, accounts } from "@shared/models/auth";
 import { db } from "./db";
 import { eq, sql, and, or, inArray, count, isNull, desc } from "drizzle-orm";
@@ -1910,6 +1911,7 @@ export async function registerRoutes(
 
   // Auto clock-in undo window — narrow to prevent retroactive timesheet manipulation
   const TIME_ENTRY_DELETE_WINDOW_MS = 60 * 60 * 1000;
+  const GEOFENCE_EXIT_DEBOUNCE_MS = 5 * 60 * 1000;
 
   // POST /api/timesheets/clock-in
   app.post("/api/timesheets/clock-in", requireWriteAccess, async (req: any, res) => {
@@ -2012,7 +2014,21 @@ export async function registerRoutes(
     }
   });
 
-  // DELETE /api/timesheets/:id/auto-undo (self-service undo of auto clock-in within window)
+  // DELETE /api/timesheets/:id/auto-undo
+  // Self-service undo of an auto-geofence time entry. Three behaviors (S32a, decisions C=b, D=yes-guard):
+  //   1. clock_out IS NULL                                → hard-delete (undo of auto clock-IN, S31b)
+  //   2. clock_out NOT NULL + pending row fired in last 60min
+  //                                                       → re-open: clear clock_out, AND clear
+  //                                                         edited_at/edited_by_user_id IFF the edit
+  //                                                         was self (preserves manager edits). Also
+  //                                                         delete the pending row.
+  //   3. clock_out NOT NULL + no recent pending row + within 60min of clock_in
+  //                                                       → hard-delete (fallback: "undo my auto entry"
+  //                                                         = undo the whole thing, even if user
+  //                                                         manually clocked out a wrongly auto-clocked
+  //                                                         session).
+  // Cross-account → 404. Cross-user same-account → 403. Source ≠ auto_geofence → 403. Outside any
+  // 60-min window → 410 Gone.
   app.delete("/api/timesheets/:id/auto-undo", requireWriteAccess, async (req: any, res) => {
     try {
       const currentUser = req.user;
@@ -2028,14 +2044,252 @@ export async function registerRoutes(
       if (entry.source !== "auto_geofence") {
         return res.status(403).json({ message: "Only auto clock-in entries can be undone via this endpoint. Use the manager dashboard to edit or delete manual entries." });
       }
-      if (Date.now() - new Date(entry.clockIn).getTime() > TIME_ENTRY_DELETE_WINDOW_MS) {
-        return res.status(410).json({ message: "Auto clock-in undo window has expired. Edit the entry instead." });
+
+      const now = Date.now();
+      const clockInAgeMs = now - new Date(entry.clockIn).getTime();
+      const inClockInWindow = clockInAgeMs <= TIME_ENTRY_DELETE_WINDOW_MS;
+
+      // Case 1: still clocked in → hard delete (S31b unchanged)
+      if (entry.clockOut === null) {
+        if (!inClockInWindow) {
+          return res.status(410).json({ message: "Auto clock-in undo window has expired. Edit the entry instead." });
+        }
+        await storage.deleteTimeEntry(id);
+        return res.status(204).end();
       }
-      await storage.deleteTimeEntry(id);
-      return res.status(204).end();
+
+      // Case 2: clocked out, has a recent pending row that fired → re-open
+      const pending = await storage.getPendingExitByTimeEntryAny(id);
+      if (pending && pending.status === "fired" && pending.firedAt) {
+        const firedAgeMs = now - new Date(pending.firedAt).getTime();
+        if (firedAgeMs <= TIME_ENTRY_DELETE_WINDOW_MS) {
+          const updates: any = { clockOut: null, updatedAt: new Date() };
+          if (entry.editedByUserId === currentUser.id) {
+            // Self-edit (the auto-clock-out itself) → safe to clear audit fields.
+            // If a manager later edited this entry, editedByUserId !== userId, and we
+            // preserve their audit trail by leaving these fields alone.
+            updates.editedAt = null;
+            updates.editedByUserId = null;
+          }
+          await storage.updateTimeEntry(id, updates);
+          await storage.deletePendingExit(pending.id);
+          return res.status(204).end();
+        }
+      }
+
+      // Case 3: clocked out, no recent fired pending row → hard-delete fallback (within clock-in window)
+      if (inClockInWindow) {
+        await storage.deleteTimeEntry(id);
+        return res.status(204).end();
+      }
+
+      return res.status(410).json({ message: "Auto clock-in undo window has expired. Edit the entry instead." });
     } catch (error: any) {
       console.error("auto-undo error:", error);
+      Sentry.captureException(error);
       res.status(500).json({ message: "Failed to undo auto clock-in" });
+    }
+  });
+
+  // ============================================================
+  // S32a: Auto clock-OUT debounce infrastructure
+  // ============================================================
+
+  // POST /api/geofence/exit-detected
+  // Mobile reports a geofence exit; server schedules an auto clock-out 5 min later.
+  // Cron (/api/cron/process-pending-exits) fires when the debounce expires.
+  // Idempotent: duplicate exit-detected for the same active entry returns 200 with the
+  // existing pending row (does NOT reset firesAt — first detection wins).
+  app.post("/api/geofence/exit-detected", requireWriteAccess, async (req: any, res) => {
+    try {
+      const currentUser = req.user;
+      const body = z.object({
+        projectId: z.coerce.number().int().positive(),
+        timeEntryId: z.string().uuid(),
+        detectedAt: z.string().datetime(),
+      }).safeParse(req.body ?? {});
+      if (!body.success) {
+        return res.status(400).json({ message: body.error.issues[0]?.message || "Invalid body" });
+      }
+      const { projectId, timeEntryId, detectedAt } = body.data;
+
+      const entry = await storage.getTimeEntry(timeEntryId);
+      if (!entry) return res.status(404).json({ message: "Time entry not found" });
+      if (entry.accountId !== currentUser.accountId) {
+        return res.status(404).json({ message: "Time entry not found" });
+      }
+      if (entry.userId !== currentUser.id) {
+        return res.status(403).json({ message: "Cannot schedule exit for another user's entry" });
+      }
+      if (entry.source !== "auto_geofence") {
+        return res.status(400).json({ message: "Only auto-geofence entries can be auto-clocked-out" });
+      }
+      if (entry.clockOut !== null) {
+        return res.status(400).json({ message: "Time entry is already clocked out" });
+      }
+      if (entry.projectId !== projectId) {
+        return res.status(400).json({ message: "projectId does not match entry's project" });
+      }
+
+      // Idempotency: if a pending row already exists, return it without resetting firesAt.
+      const existing = await storage.getPendingExitByTimeEntryPending(timeEntryId);
+      if (existing) {
+        return res.status(200).json({
+          id: existing.id,
+          firesAt: existing.firesAt,
+          status: existing.status,
+        });
+      }
+
+      // Server-authoritative firesAt; mobile's detectedAt is persisted for diagnostics only.
+      const firesAt = new Date(Date.now() + GEOFENCE_EXIT_DEBOUNCE_MS);
+      const created = await storage.createPendingExit({
+        accountId: currentUser.accountId,
+        userId: currentUser.id,
+        projectId,
+        timeEntryId,
+        exitDetectedAt: new Date(detectedAt),
+        firesAt,
+        status: "pending",
+      });
+      return res.status(201).json({
+        id: created.id,
+        firesAt: created.firesAt,
+        status: created.status,
+      });
+    } catch (error: any) {
+      console.error("exit-detected error:", error);
+      Sentry.captureException(error);
+      res.status(500).json({ message: "Failed to schedule auto clock-out" });
+    }
+  });
+
+  // POST /api/geofence/exit-cancelled
+  // Mobile reports user re-entered the geofence within the 5-min debounce; cancel the pending exit.
+  // Idempotent: 404 is a fine no-op response if the row was already fired or cancelled.
+  app.post("/api/geofence/exit-cancelled", requireWriteAccess, async (req: any, res) => {
+    try {
+      const currentUser = req.user;
+      const body = z.object({
+        pendingExitId: z.string().uuid().optional(),
+        timeEntryId: z.string().uuid().optional(),
+      })
+        .refine((d) => d.pendingExitId || d.timeEntryId, {
+          message: "pendingExitId or timeEntryId is required",
+        })
+        .safeParse(req.body ?? {});
+      if (!body.success) {
+        return res.status(400).json({ message: body.error.issues[0]?.message || "Invalid body" });
+      }
+
+      const pending = body.data.pendingExitId
+        ? await storage.getPendingExitById(body.data.pendingExitId)
+        : await storage.getPendingExitByTimeEntryPending(body.data.timeEntryId!);
+
+      // Don't leak existence: 404 covers not-found, cross-user, and already-non-pending uniformly.
+      if (!pending) return res.status(404).json({ message: "Pending exit not found" });
+      if (pending.userId !== currentUser.id) return res.status(404).json({ message: "Pending exit not found" });
+      if (pending.status !== "pending") return res.status(404).json({ message: "Pending exit not found" });
+
+      const cancelled = await storage.cancelPendingExit(pending.id);
+      if (!cancelled) return res.status(404).json({ message: "Pending exit not found" });
+      return res.status(200).json({ id: cancelled.id, status: cancelled.status });
+    } catch (error: any) {
+      console.error("exit-cancelled error:", error);
+      Sentry.captureException(error);
+      res.status(500).json({ message: "Failed to cancel pending exit" });
+    }
+  });
+
+  // GET /api/cron/process-pending-exits
+  // Vercel Cron hits this every minute (see vercel.json `crons`).
+  //
+  // Auth: `Authorization: Bearer <CRON_SECRET>` — Vercel-managed env var.
+  // Generate the secret with:   openssl rand -hex 32
+  // Then add it to BOTH:
+  //   - Vercel project env vars (so Vercel Cron can sign requests in production)
+  //   - Replit secrets         (so dev parity; cron only runs on Vercel in practice)
+  // Reference: https://vercel.com/docs/cron-jobs/manage-cron-jobs#securing-cron-jobs
+  // Note: string compare is not constant-time; Vercel network jitter dominates any timing signal.
+  app.get("/api/cron/process-pending-exits", async (req, res) => {
+    try {
+      const expected = process.env.CRON_SECRET;
+      if (!expected) {
+        console.error("[cron] CRON_SECRET not set — refusing");
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const auth = req.headers.authorization || "";
+      if (auth !== `Bearer ${expected}`) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const due = await storage.getPendingExitsDue(100);
+      let fired = 0;
+      let skippedAlreadyClockedOut = 0;
+      let errored = 0;
+
+      for (const pending of due) {
+        try {
+          // Per-row transaction: defensive re-check + entry update + pending mark in one atom.
+          await db.transaction(async (tx) => {
+            const [stillPending] = await tx.select().from(pendingGeofenceExits)
+              .where(and(
+                eq(pendingGeofenceExits.id, pending.id),
+                eq(pendingGeofenceExits.status, "pending"),
+              )).limit(1);
+            if (!stillPending) return; // another worker handled it; counters unchanged
+
+            const [entryNow] = await tx.select().from(timeEntries)
+              .where(eq(timeEntries.id, pending.timeEntryId)).limit(1);
+
+            const now = new Date();
+            if (!entryNow) {
+              await tx.update(pendingGeofenceExits)
+                .set({ status: "failed", notes: "time_entry_missing", updatedAt: now })
+                .where(eq(pendingGeofenceExits.id, pending.id));
+              errored++;
+              return;
+            }
+            if (entryNow.clockOut !== null) {
+              await tx.update(pendingGeofenceExits)
+                .set({ status: "fired", firedAt: now, notes: "already_clocked_out", updatedAt: now })
+                .where(eq(pendingGeofenceExits.id, pending.id));
+              skippedAlreadyClockedOut++;
+              return;
+            }
+
+            await executeAutoClockOut(
+              { timeEntryId: entryNow.id, userId: pending.userId },
+              tx,
+            );
+            await tx.update(pendingGeofenceExits)
+              .set({ status: "fired", firedAt: now, updatedAt: now })
+              .where(eq(pendingGeofenceExits.id, pending.id));
+            fired++;
+          });
+        } catch (rowErr: any) {
+          console.error(`[cron] row ${pending.id} failed:`, rowErr);
+          Sentry.captureException(rowErr);
+          // Best-effort failure mark (outside the rolled-back tx)
+          try {
+            await storage.markPendingExitFailed(pending.id, String(rowErr?.message ?? rowErr));
+          } catch (markErr) {
+            console.error(`[cron] also failed to mark ${pending.id} as failed:`, markErr);
+          }
+          errored++;
+        }
+      }
+
+      return res.status(200).json({
+        processed: due.length,
+        fired,
+        skipped_already_clocked_out: skippedAlreadyClockedOut,
+        errored,
+      });
+    } catch (error: any) {
+      console.error("[cron] process-pending-exits fatal:", error);
+      Sentry.captureException(error);
+      res.status(500).json({ message: "Cron run failed" });
     }
   });
 

@@ -294,6 +294,47 @@ export const timeEntriesRelations = relations(timeEntries, ({ one }) => ({
   editedBy: one(users, { fields: [timeEntries.editedByUserId], references: [users.id] }),
 }));
 
+// ============================================================
+// S32a: pending auto clock-out (geofence exit debounce)
+// ============================================================
+
+export const pendingExitStatusEnum = pgEnum("pending_exit_status", [
+  "pending", "fired", "cancelled", "failed",
+]);
+
+export const pendingGeofenceExits = pgTable("pending_geofence_exits", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  accountId: varchar("account_id").references(() => accounts.id).notNull(),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+  projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }).notNull(),
+  timeEntryId: varchar("time_entry_id").references(() => timeEntries.id, { onDelete: "cascade" }).notNull(),
+  exitDetectedAt: timestamp("exit_detected_at", { withTimezone: true }).defaultNow().notNull(),
+  firesAt: timestamp("fires_at", { withTimezone: true }).notNull(),
+  status: pendingExitStatusEnum("status").default("pending").notNull(),
+  cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+  firedAt: timestamp("fired_at", { withTimezone: true }),
+  // `notes` is double-duty: stores error text for status='failed' AND short tags
+  // like "already_clocked_out" or "time_entry_missing" for clean status='fired' rows.
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index("pending_geofence_exits_status_fires_at_idx").on(table.status, table.firesAt),
+  index("pending_geofence_exits_user_project_status_idx").on(table.userId, table.projectId, table.status),
+  uniqueIndex("pending_geofence_exits_one_pending_per_entry")
+    .on(table.timeEntryId)
+    .where(sql`status = 'pending'`),
+]);
+
+export const insertPendingGeofenceExitSchema = createInsertSchema(pendingGeofenceExits, {
+  exitDetectedAt: z.coerce.date().optional(),
+  firesAt: z.coerce.date(),
+  cancelledAt: z.coerce.date().nullable().optional(),
+  firedAt: z.coerce.date().nullable().optional(),
+}).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertPendingGeofenceExit = z.infer<typeof insertPendingGeofenceExitSchema>;
+export type PendingGeofenceExit = typeof pendingGeofenceExits.$inferSelect;
+
 export const insertCalendarEventSchema = createInsertSchema(calendarEvents, {
   startsAt: z.coerce.date(),
   endsAt: z.coerce.date(),
