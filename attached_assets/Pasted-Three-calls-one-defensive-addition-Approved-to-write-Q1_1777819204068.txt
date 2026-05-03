@@ -1,0 +1,30 @@
+Three calls + one defensive addition. Approved to write.
+
+Q1 — status filter: status = 'active' only. Not status != 'archived'. Reasoning: geofence is for live job sites, not paused or completed work. Reactivating a completed/on-hold project picks it up on the next sync cycle, no data loss.
+
+Q2 — media filter: photos only, mimeType LIKE 'image/%'. Field View is a photo documentation product; photo upload is the primary "I was here" signal. Videos are too rare and too easily generated remotely (manager reviewing footage) to count as activity.
+
+Q3 — restricted role: match existing /api/projects exactly. Use getRestrictedAssignedProjectIds() helper from L71-76 PLUS the createdById === req.user.id OR clause. Don't inline the logic. The two endpoints should be observably identical in their access semantics — the only difference is filtering criteria (geocoded + recent + active).
+
+ADDITIONAL — defensive account scoping in LATERAL subqueries: include accountId = currentUser.accountId in the WHERE clauses of BOTH the time_entries subquery AND the media subquery, even though it's logically redundant given the project.accountId constraint. The leading index column is accountId, so it's free, and it protects against any future multi-tenant boundary bugs leaking cross-account activity timestamps.
+
+Final query plan:
+- SELECT projects.id, name, latitude, longitude, GREATEST(COALESCE(...), COALESCE(...), updatedAt) AS lastActivityAt
+- FROM projects
+- LEFT JOIN LATERAL (SELECT MAX(clockIn) FROM time_entries WHERE project_id = projects.id AND account_id = $accountId) te
+- LEFT JOIN LATERAL (SELECT MAX(created_at) FROM media WHERE project_id = projects.id AND account_id = $accountId AND mime_type LIKE 'image/%') ph
+- WHERE projects.account_id = $accountId
+- AND projects.status = 'active'
+- AND projects.latitude IS NOT NULL AND projects.longitude IS NOT NULL
+- AND GREATEST(...) >= NOW() - INTERVAL '14 days'
+- AND (restricted role: project.id IN (assigned set) OR projects.created_by_id = $userId)
+- ORDER BY lastActivityAt DESC
+- LIMIT 20
+
+Run EXPLAIN on the final query against a representative account and report the cost + plan before considering it done. If sequential scan shows up on time_entries or media, flag it — the existing indexes should handle this but I want to see the proof.
+
+Response shape: array of { id, name, latitude, longitude, lastActivityAt: ISO string }. Empty array if no matches (don't 404). Same auth / 401 behavior as existing /api/projects.
+
+DO NOT cache the response server-side. Mobile will call it on every sync (which is rare — app launch + AppState active + permission change). Caching adds invalidation complexity for negligible perf gain.
+
+Proceed with the implementation. Show me the route handler diff + an EXPLAIN output sample before I approve commit.
