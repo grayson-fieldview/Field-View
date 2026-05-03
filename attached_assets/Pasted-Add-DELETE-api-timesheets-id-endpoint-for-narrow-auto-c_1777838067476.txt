@@ -1,0 +1,60 @@
+Add DELETE /api/timesheets/:id endpoint for narrow auto-clock-in undo
+
+CONTEXT
+Mobile S31b is shipping silent-auto clock-in. When iOS fires a geofence Enter event, the app silently calls POST /api/timesheets/clock-in with source: "auto_geofence" and fires a local notification ("Clocked in at [Project] · 3:15 PM"). User can tap the notification to open the project detail screen, which shows an undo banner.
+
+The undo banner must DELETE the time entry rather than clock out. Reasoning: Undo means reverse, not nullify. A clock-in followed by immediate clock-out leaves a 0-second time entry in the data, which is noise in manager dashboards, reports, and CSV exports.
+
+This requires a new DELETE endpoint with strict safety constraints to prevent it from becoming a general-purpose "delete any time entry" tool that contractors could use to erase paid work hours retroactively.
+
+CHANGES NEEDED
+
+1. New endpoint: DELETE /api/timesheets/:id
+   - Path: server/routes.ts, alongside existing time entry endpoints (clock-in, clock-out, active)
+   - Auth: standard requireWriteAccess + getUser middleware chain (same as clock-in)
+
+2. Safety constraints (ALL must pass — any failure returns the appropriate status):
+   a. Entry must exist (else 404)
+   b. Entry's userId must match req.user.id (else 403, "You can only delete your own time entries")
+   c. Entry's source must be 'auto_geofence' (else 403, "Only auto clock-in entries can be deleted via this endpoint. Use edit/clock-out for manual entries.")
+   d. Entry's clockIn must be within last 60 minutes (else 410 Gone, "Auto clock-in undo window has expired. Edit the entry instead.")
+
+3. On all checks pass: storage.deleteTimeEntry(id), return 204 No Content, no body
+
+4. Add storage.deleteTimeEntry method if it doesn't already exist:
+   - server/storage.ts (or wherever the storage layer is)
+   - Drizzle: db.delete(timeEntries).where(eq(timeEntries.id, id))
+   - No additional safety checks at storage layer (route-level checks are authoritative)
+
+DIAGNOSE FIRST
+
+1. Locate the existing clock-in/clock-out/active endpoints in server/routes.ts. Confirm middleware patterns and storage method conventions.
+2. Check shared/schema.ts for the time_entries table structure — confirm columns (id, userId, projectId, source, clockIn, clockOut, accountId, etc.) and types.
+3. Check storage layer (server/storage.ts probably) — does deleteTimeEntry exist already? If yes, what's its current shape? If no, where would it fit alphabetically/logically.
+4. Check whether there are existing tests for time entry routes — if yes, the new endpoint should have parallel tests.
+
+Report findings. Wait for approval before modifying.
+
+ACCEPTANCE
+
+Test matrix (run in dev DB after implementation):
+
+T1: User deletes their own auto entry, within 60 min window → 204
+T2: User deletes their own MANUAL entry → 403 (source mismatch)
+T3: User deletes their own auto entry, but >60 min old → 410 (window expired)
+T4: User deletes another user's auto entry → 403 (ownership)
+T5: User deletes nonexistent entry → 404
+T6: User passes valid id but no auth → 401 (middleware short-circuit)
+T7: User passes invalid UUID format → 400 (Zod validation on path param)
+
+After T1: SELECT count(*) FROM time_entries WHERE id = :deletedId returns 0.
+
+Existing endpoints (clock-in, clock-out, active, list) — unaffected.
+
+This is moderate scope: ~30 lines route handler + ~5 lines storage method + tests. The 60-minute window value is a constant — define as TIME_ENTRY_DELETE_WINDOW_MS = 60 * 60 * 1000 at top of routes.ts or in a constants file. Will be tunable later if user feedback indicates the window is too short.
+
+Standing rules:
+- Don't push to git, don't deploy
+- Show the diff for review before committing
+- After my approval, I'll commit + push from Replit Web Git pane → Vercel auto-deploys
+- Mobile-side will be calling this endpoint within an hour of when this ships, so coordinate carefully
