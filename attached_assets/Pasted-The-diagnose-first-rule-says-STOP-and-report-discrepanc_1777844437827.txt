@@ -1,0 +1,59 @@
+The diagnose-first rule says STOP and report discrepancies before writing code. The endpoint already exists in the working tree — shipped 1 turn ago after your explicit approval. This new spec contradicts what was approved. Verifying state first:
+
+
+2 actions
+STOP — Endpoint already exists. Spec contradicts what was approved & shipped 2 commits ago.
+Current state
+258f6fa (HEAD -> main, origin/main) Add ability to undo auto clock-in entries within a limited time
+613a1bc Add a way to undo recent automatic clock-ins
+
+origin/main is already at 258f6fa — you pushed it. Vercel deployed it. Mobile is hitting a live endpoint, not a missing one. The spec's premise ("the endpoint was assumed to exist in earlier sessions but never actually shipped") is wrong.
+
+rg -n auto-undo server/routes.ts returns the live handler at L2015-2040. Working tree clean (only the spec attachment is untracked).
+
+Diagnose-checklist results — 4/5 confirmed, 1 mismatch
+#	Spec assertion	Reality	OK?
+1	POST /api/timesheets/clock-in at L1912 with requireWriteAccess + source field	Now at L1918 (file shifted +6 lines from yesterday's geofence-eligible + auto-undo additions). Same middleware, same source field.	✅ semantics, ⚠️ line#
+2	timeEntrySourceEnum at shared/schema.ts:18 = ["manual","auto_geofence","edited"]	Exact match	✅
+3	columns: id, account_id, user_id, project_id, source, clock_in, clock_out	All present, exact names	✅
+4	Manager DELETE at L2451 hard-deletes via SQL	Now at L2484 (same +6 line shift + auto-undo's +33 lines). Hard delete via storage.deleteTimeEntry confirmed.	✅ semantics, ⚠️ line#
+5	isAuthenticated exported from server/replit_integrations/auth	Confirmed at server/replit_integrations/auth/index.ts:1, definition at replit_integrations/auth/replitAuth.ts:762. But this is NOT what the live handler uses.	⚠️
+What's actually in the live handler vs. what this spec wants
+Concern	Live (shipped, in prod)	This new spec wants	Behavioral delta
+Middleware	requireWriteAccess	isAuthenticated	Read-only/inactive-subscription users can't currently undo. Spec wants any signed-in user.
+Cross-user, same account	403 + "You can only undo your own auto clock-in entries"	404 + "Entry not found"	Spec wants stricter no-leak.
+Cross-account	404 (no leak)	404 (no leak)	matches
+Source mismatch (manual/edited)	403 + long message	400 + "Only auto-geofence entries can be auto-undone"	Status code change
+Window expired	410 Gone + "Auto clock-in undo window has expired. Edit the entry instead."	400 + "Auto-undo window has expired"	Status code + message change
+Invalid UUID format	(none — falls through to 404 via getTimeEntry)	400 + "Invalid entry ID"	New validation step
+Response key	{message: "..."}	{error: "..."}	All error bodies change shape
+500 error message	"Failed to undo auto clock-in"	"Server error"	Message change
+Placement	After clock-out, before /active (L2015)	After the manager DELETE at L2484	Move handler ~470 lines down
+Comment block	1-line // DELETE /api/timesheets/:id/auto-undo (self-service undo of auto clock-in within window)	4-line block w/ specific wording	Change comment
+This is not a small tweak. It's a near-complete rewrite of every error path, response shape, status code, and the middleware contract. The wire shape change alone (message → error) breaks the mobile client that the spec says is already wired up — its error-display code reads data.message, not data.error. Same for the 410→400 change (mobile treats 410 differently from 400 for "expired" UX, per typical REST conventions).
+
+Why I'm stopping per the spec's own rule
+The spec says:
+
+"If any answer differs from what's stated below, STOP and report the discrepancy in chat before proceeding."
+
+The single biggest discrepancy is item 0 (not on the checklist): the endpoint exists. Items 1 and 4 also have line-number drift (spec is reading the codebase from before yesterday's three commits — 27.8 geofence-eligible at L138-230 added ~93 lines, 27.7 source field added 1, this morning's auto-undo added 33). Item 5 is "correct as a fact" but the implication ("use it instead of requireWriteAccess") contradicts what you approved this morning.
+
+Three plausible explanations — your call
+Mobile reported a real bug (404 / silently swallowed) and someone — different agent, you, mobile dev — drafted a "rewrite from scratch" spec without checking that an endpoint already shipped. In which case the actual problem is "why isn't mobile's working call producing the expected outcome," not "build the endpoint." Most likely culprits if mobile is getting 404:
+mobile is calling the URL without the /auto-undo suffix (hits the manager-only L2484 handler → 403 if non-manager, which mobile may be misreporting as 404)
+mobile is sending the entry's local UUID before the server-issued UUID round-trips back (race)
+CSRF: mobile DELETE missing X-FieldView-Client: mobile-1 header → 403 CSRF, also misreportable
+mobile's apiFetch wrapper at services/api.ts:495 isn't actually sending the cookie / auth header
+You actually want to change the contract (middleware, status codes, response shape) and the "missing endpoint" framing is just the spec's lead-in. In which case I need explicit approval per-row of the table above before touching any of it — every change has a real cost (mobile must update its error handler for the message→error rename; user-facing copy changes for the "Auto clock-in undo window has expired. Edit the entry instead." message you specifically approved this morning).
+The spec was written without seeing today's commits — perhaps drafted before push or by someone without access to the latest main. Discard it and let me know what mobile is actually seeing, and I'll diagnose from there.
+My recommendation
+Option 1 — diagnose the mobile failure first. Send me what mobile is seeing in the wild (the actual HTTP status it gets, the actual URL it's calling, whether connect.sid cookie + X-FieldView-Client: mobile-1 header are present). 90% chance the endpoint is working and mobile is hitting a different problem (URL typo, missing CSRF header, missing cookie). Tearing up a working endpoint to "fix" a mobile-side bug is the wrong move — and rewriting it to a contract that mobile also doesn't yet match ({error: ...} vs the {message: ...} mobile is presumably parsing) just shifts the breakage.
+
+If after diagnosis you genuinely want the contract changes from the new spec, I'll do them — but I want explicit confirmation per row, especially:
+
+Middleware change (requireWriteAccess → isAuthenticated) — this loosens access; users with read-only/canceled subscriptions could undo entries.
+Cross-user same-account → 404 (currently 403). This is a privacy upgrade I'd actually back, but it's a contract change.
+410 → 400 for window-expired. I disagree with this one — 410 Gone is the textbook status for "this resource existed but is no longer available," exactly the case here. 400 means "your request was malformed," which it isn't.
+{message} → {error} body key change. This breaks mobile's error display unless mobile updates simultaneously.
+Standing by for direction. Not touching code until you confirm intent.
