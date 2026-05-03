@@ -1924,6 +1924,7 @@ export async function registerRoutes(
       const body = z.object({
         projectId: z.coerce.number().int().positive(),
         notes: z.string().max(2000).optional().nullable(),
+        source: z.enum(["manual", "auto_geofence"]).default("manual"),
       }).safeParse(req.body ?? {});
       if (!body.success) {
         return res.status(400).json({ message: body.error.issues[0]?.message || "Invalid body" });
@@ -1950,7 +1951,7 @@ export async function registerRoutes(
           projectId: project.id,
           clockIn: new Date(),
           clockOut: null,
-          source: "manual",
+          source: body.data.source,
           notes: body.data.notes ?? null,
           rateCentsSnapshot: null,
         } as any);
