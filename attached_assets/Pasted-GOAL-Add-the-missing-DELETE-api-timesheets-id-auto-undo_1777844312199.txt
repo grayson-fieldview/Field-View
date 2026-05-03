@@ -1,0 +1,78 @@
+GOAL
+Add the missing DELETE /api/timesheets/:id/auto-undo endpoint to server/routes.ts. This endpoint allows a user to undo their own recent auto-geofence clock-in within a safety window. The endpoint was assumed to exist in earlier sessions but never actually shipped. The mobile client (services/api.ts:495 in the mobile repo) already calls this URL via apiFetch; today's testing confirmed the call returns either 404 or is silently swallowed.
+
+DIAGNOSE-FIRST CHECKLIST
+Before writing any code, confirm the following by reading the existing code. If any answer differs from what's stated below, STOP and report the discrepancy in chat before proceeding.
+
+1. POST /api/timesheets/clock-in lives at server/routes.ts:1912, uses requireWriteAccess middleware, and accepts a body with a `source` field of type timeEntrySourceEnum.
+2. timeEntrySourceEnum is declared in shared/schema.ts:18 with values ["manual", "auto_geofence", "edited"].
+3. time_entries table has columns including: id (string), account_id, user_id, project_id, source (USER-DEFINED enum), clock_in (timestamp w/ tz), clock_out (timestamp w/ tz). Confirm column names exactly.
+4. The existing manager-only DELETE at server/routes.ts:2451 hard-deletes via a SQL DELETE (not soft-delete). Confirm.
+5. isAuthenticated middleware is exported from server/replit_integrations/auth (per server/routes.ts:5 import). Confirm it's the right middleware to use for "any signed-in user, no role gate."
+
+REQUIREMENTS
+
+Endpoint: DELETE /api/timesheets/:id/auto-undo
+Middleware: isAuthenticated (NOT requireWriteAccess, NOT requireAdminOrManager — any signed-in user can undo their own entry)
+Behavior: Hard-delete the time_entries row matching :id, ONLY if all safety constraints pass.
+
+SAFETY CONSTRAINTS (all must pass; any failure → reject with appropriate status)
+
+A. Entry must exist. If not found → 404. Do not leak existence beyond that.
+
+B. Entry must belong to the authenticated user.
+   - If entry.user_id !== req.user.id → return 404 (NOT 403). Same-shape response as "not found." This is intentional: we don't reveal that an entry exists for someone else.
+   - This is the cross-account / cross-user privacy guarantee.
+
+C. Entry must have source === 'auto_geofence'.
+   - If source is 'manual' or 'edited' → return 400 with error message "Only auto-geofence entries can be auto-undone."
+   - This prevents manual entries from being silently destroyed.
+
+D. Entry must be within the 60-minute window from its clock_in timestamp.
+   - If (NOW() - entry.clock_in) > 60 minutes → return 400 with error message "Auto-undo window has expired."
+   - Window is measured from clock_in, not created_at, not the current time of an active session.
+
+E. If all constraints pass → hard DELETE the row. Return 204 No Content (no body).
+
+ERROR HANDLING
+- Wrap DB calls in try/catch. On unexpected errors → 500 with generic message; log full error server-side.
+- Use the same logger pattern as surrounding endpoints in server/routes.ts.
+
+PARAMETER VALIDATION
+- :id is a UUID. Validate format before querying DB. If invalid → 400 "Invalid entry ID."
+- Check the codebase for existing UUID validation utility (likely a Zod uuid() schema or similar). If one exists, use it. Do not invent a new pattern.
+
+RESPONSE BODY CONTRACT
+- Success: 204 No Content, empty body.
+- 404: { error: "Entry not found" }
+- 400 (source mismatch): { error: "Only auto-geofence entries can be auto-undone" }
+- 400 (window expired): { error: "Auto-undo window has expired" }
+- 400 (invalid id): { error: "Invalid entry ID" }
+- 500: { error: "Server error" }
+
+PLACEMENT IN FILE
+Place the new handler immediately after the existing manager-only DELETE handler at server/routes.ts:2451. Add a clear comment block above it:
+// DELETE /api/timesheets/:id/auto-undo
+// Self-service auto-undo for users who triggered an auto-geofence clock-in.
+// Safety constraints: own-user only, source must be auto_geofence, within 60-min window.
+// Cross-user attempts return 404 (not 403) to avoid leaking entry existence.
+
+NO SCHEMA CHANGES
+This endpoint reads from and deletes from the existing time_entries table. No new tables, no new columns, no migration needed.
+
+DO NOT
+- Do not add a body schema (Zod object). DELETE has no body.
+- Do not modify the existing clock-in or clock-out handlers.
+- Do not add routes elsewhere; this is a pure addition at the specified location.
+- Do not "improve" surrounding code while you're in there. Single-purpose diff.
+
+VERIFICATION STEPS YOU MUST RUN BEFORE CLAIMING DONE
+1. TypeScript typecheck passes (`pnpm typecheck` or equivalent).
+2. The new route appears in `grep -n "auto-undo" server/routes.ts` output.
+3. No other routes were modified — diff should be additive only.
+4. The comment block above the handler is present and correct.
+
+OUTPUT
+- The full diff of server/routes.ts (or just the added block + line range).
+- A short paragraph confirming each safety constraint is implemented and pointing to the line in your diff that handles it.
+- The output of the verification steps above.
