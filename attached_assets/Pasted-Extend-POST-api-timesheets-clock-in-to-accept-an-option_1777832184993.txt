@@ -1,0 +1,48 @@
+Extend POST /api/timesheets/clock-in to accept an optional source parameter
+
+CONTEXT
+Mobile Phase 2 geofencing (Sessions 30-34) is shipping auto clock-in functionality. The mobile client will start sending source: "auto" with clock-in requests when triggered by a geofence enter event. Currently the endpoint's body schema doesn't accept source, which (depending on Zod strictness) will either silently drop it or reject the request with a 400.
+
+Today's existing schema (server/routes.ts around line 1830, established in yesterday's CSRF + projectId coerce session):
+
+const body = z.object({
+  projectId: z.coerce.number().int().positive(),
+  notes: z.string().max(2000).optional().nullable(),
+}).safeParse(req.body ?? {});
+
+CHANGES NEEDED
+
+1. Add source field to the inline Zod body schema:
+   source: z.enum(["auto", "manual"]).default("manual")
+   
+   z.enum() rejects unknown values with a clear error. .default("manual") preserves backward compatibility — existing manual clock-in requests that don't send source still work.
+
+2. Pass body.data.source through to the storage.createTimeEntry call:
+   Currently: source: "manual" (hardcoded at L1857-ish)
+   New: source: body.data.source
+
+3. Verify time_entries table source column already accepts "auto" and "manual" values. Per the session-22 timesheets spec memory, the column was created as a text/varchar column, not an enum. If it's an enum, may need an ALTER TYPE ADD VALUE migration — flag in diagnosis.
+
+DIAGNOSE FIRST
+
+1. Find the inline Zod body schema in server/routes.ts for POST /api/timesheets/clock-in. Confirm location (line number) and current shape.
+2. Find the storage.createTimeEntry call inside the same handler. Confirm where source is currently hardcoded.
+3. Check shared/schema.ts for the time_entries.source column definition. Is it text? varchar? enum? If enum, what are its allowed values today?
+4. Check if there are any existing time_entries rows with source != "manual" — should be zero (S22 didn't ship anything that emits other values), but worth confirming with a SELECT.
+
+Report findings. Wait for approval before modifying.
+
+ACCEPTANCE
+
+- POST /api/timesheets/clock-in with no source field → 201, source defaults to "manual" (backward compatible)
+- POST with source: "auto" → 201, time entry created with source = "auto"
+- POST with source: "manual" → 201, explicit manual works
+- POST with source: "remote" or any other string → 400 with clear error message about allowed values
+- Existing /api/projects, /api/timesheets/active, etc. — unaffected
+- No schema migration needed (assuming the column is text/varchar)
+
+If the source column is a postgres enum: STOP. Don't auto-modify. Report it and we'll schedule a separate migration session per the standing rule (migrations are their own session with snapshot + RDS prep).
+
+This is a tiny change. After approval, the diff should be ~5 lines: schema field added, hardcoded "manual" replaced with body.data.source.
+
+Don't push to git, don't deploy. Show the diff for review. After my approval, I'll commit + push from the Replit Web Git pane and Vercel will auto-deploy.
