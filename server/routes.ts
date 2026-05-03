@@ -163,11 +163,7 @@ export async function registerRoutes(
           projects.name,
           projects.latitude,
           projects.longitude,
-          GREATEST(
-            projects.updated_at::timestamptz,
-            COALESCE(te.last_clock_in, 'epoch'::timestamptz),
-            COALESCE(ph.last_photo_at::timestamptz, 'epoch'::timestamptz)
-          ) AS last_activity_at
+          act.last_activity_at
         FROM projects
         LEFT JOIN LATERAL (
           SELECT MAX(time_entries.clock_in) AS last_clock_in
@@ -185,27 +181,44 @@ export async function registerRoutes(
           WHERE media.project_id = projects.id
             AND media.mime_type LIKE 'image/%'
         ) ph ON TRUE
+        LEFT JOIN LATERAL (
+          -- Single source of truth for the activity timestamp; referenced by
+          -- both the SELECT and the 14-day WHERE filter to avoid drift.
+          SELECT GREATEST(
+            projects.updated_at::timestamptz,
+            COALESCE(te.last_clock_in, 'epoch'::timestamptz),
+            COALESCE(ph.last_photo_at::timestamptz, 'epoch'::timestamptz)
+          ) AS last_activity_at
+        ) act ON TRUE
         WHERE projects.account_id = ${accountId}
           AND projects.status = 'active'
           AND projects.latitude IS NOT NULL
           AND projects.longitude IS NOT NULL
           AND ${restrictedClause}
-          AND GREATEST(
-                projects.updated_at::timestamptz,
-                COALESCE(te.last_clock_in, 'epoch'::timestamptz),
-                COALESCE(ph.last_photo_at::timestamptz, 'epoch'::timestamptz)
-              ) >= NOW() - INTERVAL '14 days'
-        ORDER BY last_activity_at DESC
+          AND act.last_activity_at >= NOW() - INTERVAL '14 days'
+        ORDER BY act.last_activity_at DESC
         LIMIT 20
       `);
 
-      const rows = (result.rows as any[]).map(r => ({
-        id: Number(r.id),
-        name: String(r.name),
-        latitude: Number(r.latitude),
-        longitude: Number(r.longitude),
-        lastActivityAt: new Date(r.last_activity_at).toISOString(),
-      }));
+      const rows = (result.rows as any[]).map(r => {
+        const lat = Number(r.latitude);
+        const lng = Number(r.longitude);
+        // Belt-and-suspenders: the WHERE clause filters NOT NULL coords, but
+        // the pg driver can return numerics as strings under some configs and
+        // Number(null) silently returns 0 — failing loud here beats serving
+        // a phantom geofence at (0, 0) off the coast of West Africa.
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+          console.warn("[geofence-eligible] dropping row with invalid coords:", r.id);
+          return null;
+        }
+        return {
+          id: Number(r.id),
+          name: String(r.name),
+          latitude: lat,
+          longitude: lng,
+          lastActivityAt: new Date(r.last_activity_at).toISOString(),
+        };
+      }).filter(Boolean);
       res.json(rows);
     } catch (error) {
       console.error("geofence-eligible error:", error);

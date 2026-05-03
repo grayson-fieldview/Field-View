@@ -1,0 +1,33 @@
+Approved with two tweaks before commit, plus a call on prod EXPLAIN.
+
+TWEAK 1 — Coordinate type coercion safety. The mapping uses Number(r.latitude) / Number(r.longitude). With db.execute(sql`...`) rather than the Drizzle query builder, the pg driver type parsing can return values as strings depending on configuration, and Number(null) silently returns 0. Defensive check:
+
+const lat = Number(r.latitude);
+const lng = Number(r.longitude);
+if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+  console.warn("[geofence-eligible] dropping row with invalid coords:", r.id);
+  return null;
+}
+return { id: Number(r.id), name: String(r.name), latitude: lat, longitude: lng, lastActivityAt: new Date(r.last_activity_at).toISOString() };
+
+Then .filter(Boolean) after the map. Belt-and-suspenders against pg type-coercion edge cases. Should never fire (we filter NOT NULL in WHERE) but failing loudly with a warn is better than serving a region at (0, 0) which is somewhere off the coast of West Africa.
+
+TWEAK 2 — Deduplicate the GREATEST(...) expression. It's currently copy-pasted in the SELECT and the WHERE. A future maintainer will update one and forget the other. Wrap it in a third LATERAL:
+
+LEFT JOIN LATERAL (
+  SELECT GREATEST(
+    projects.updated_at::timestamptz,
+    COALESCE(te.last_clock_in, 'epoch'::timestamptz),
+    COALESCE(ph.last_photo_at::timestamptz, 'epoch'::timestamptz)
+  ) AS last_activity_at
+) act ON TRUE
+
+Then SELECT references act.last_activity_at and the WHERE clause becomes AND act.last_activity_at >= NOW() - INTERVAL '14 days'. Single source of truth. Planner cost identical.
+
+PROD EXPLAIN — skip. 
+
+Your forced-index plan with enable_seqscan=OFF already proved the indexes work and the plan is optimal (Index Only Scan on time_entries, Heap Fetches: 0). At 17 accounts of production data, the planner won't make a wildly different choice. Worst case if it does is 200ms on a rarely-called endpoint, not user-visible. Not worth the IP-whitelist-and-remove dance for a read-only EXPLAIN. Revisit if the endpoint shows up in slow-query logs post-launch.
+
+Apply both tweaks. Show me the updated diff. After that, this is ready to commit + push to Vercel. CSRF middleware will protect it (it's a GET so it bypasses anyway). No env vars needed. No migration needed.
+
+Standing by for the updated diff.
