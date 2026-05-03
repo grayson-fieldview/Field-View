@@ -132,6 +132,87 @@ export async function registerRoutes(
     }
   });
 
+  // Geocoded, active projects with activity in the last 14 days. Powers the
+  // mobile geofence sync — only nearby live jobs are worth registering with iOS.
+  // MUST be registered BEFORE /api/projects/:id or the :id route captures
+  // "geofence-eligible" as a project ID.
+  app.get("/api/projects/geofence-eligible", requireReadAccess, async (req: any, res) => {
+    try {
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const userId = req.user.id;
+      const isRestricted = req.user.role === "restricted";
+
+      // Restricted users see only assigned projects + their own — match the
+      // semantics of GET /api/projects exactly. Use the shared helper, not
+      // an inlined query, so the two endpoints stay observably identical.
+      let restrictedClause = sql`TRUE`;
+      if (isRestricted) {
+        const assignedSet = await getRestrictedAssignedProjectIds(userId);
+        const assignedIds = Array.from(assignedSet);
+        if (assignedIds.length === 0) {
+          restrictedClause = sql`projects.created_by_id = ${userId}`;
+        } else {
+          restrictedClause = sql`(projects.created_by_id = ${userId} OR projects.id IN (${sql.join(assignedIds.map(id => sql`${id}`), sql`, `)}))`;
+        }
+      }
+
+      const result = await db.execute(sql`
+        SELECT
+          projects.id,
+          projects.name,
+          projects.latitude,
+          projects.longitude,
+          GREATEST(
+            projects.updated_at::timestamptz,
+            COALESCE(te.last_clock_in, 'epoch'::timestamptz),
+            COALESCE(ph.last_photo_at::timestamptz, 'epoch'::timestamptz)
+          ) AS last_activity_at
+        FROM projects
+        LEFT JOIN LATERAL (
+          SELECT MAX(time_entries.clock_in) AS last_clock_in
+          FROM time_entries
+          WHERE time_entries.project_id = projects.id
+            AND time_entries.account_id = ${accountId}
+        ) te ON TRUE
+        LEFT JOIN LATERAL (
+          -- INNER JOIN projects to re-assert account boundary; media has no
+          -- direct accountId column, so this enforces tenant scoping at the
+          -- subquery level even if the outer WHERE is refactored.
+          SELECT MAX(media.created_at) AS last_photo_at
+          FROM media
+          INNER JOIN projects p ON p.id = media.project_id AND p.account_id = ${accountId}
+          WHERE media.project_id = projects.id
+            AND media.mime_type LIKE 'image/%'
+        ) ph ON TRUE
+        WHERE projects.account_id = ${accountId}
+          AND projects.status = 'active'
+          AND projects.latitude IS NOT NULL
+          AND projects.longitude IS NOT NULL
+          AND ${restrictedClause}
+          AND GREATEST(
+                projects.updated_at::timestamptz,
+                COALESCE(te.last_clock_in, 'epoch'::timestamptz),
+                COALESCE(ph.last_photo_at::timestamptz, 'epoch'::timestamptz)
+              ) >= NOW() - INTERVAL '14 days'
+        ORDER BY last_activity_at DESC
+        LIMIT 20
+      `);
+
+      const rows = (result.rows as any[]).map(r => ({
+        id: Number(r.id),
+        name: String(r.name),
+        latitude: Number(r.latitude),
+        longitude: Number(r.longitude),
+        lastActivityAt: new Date(r.last_activity_at).toISOString(),
+      }));
+      res.json(rows);
+    } catch (error) {
+      console.error("geofence-eligible error:", error);
+      res.status(500).json({ message: "Failed to fetch geofence-eligible projects" });
+    }
+  });
+
   app.get("/api/projects/:id", requireReadAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
