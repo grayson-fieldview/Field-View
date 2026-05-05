@@ -1,0 +1,76 @@
+TWO FOLLOW-UPS on text annotations. Investigate first, then fix together.
+
+Issue 1: CANNOT RE-EDIT TEXT AFTER PLACEMENT
+The build output mentioned "handleTextNodeClick (eraser deletes / text tool 
+re-edits)". User reports clicking on existing text with the text tool 
+active does NOT re-open the inline input.
+
+INVESTIGATE:
+- Find handleTextNodeClick in photo-viewer.tsx — read its actual logic
+- Trace: when text tool is active and user clicks an existing text node 
+  in their own annotation, does this handler fire? Or is the click 
+  intercepted upstream (canvas pointer handler swallowing it, 
+  pointer-events conflict, conditional gate blocking it)?
+- Likely culprits: 
+  a) handleTextNodeClick exists but is only attached for the eraser case
+  b) The text node's onClick is gated by isAnnotating but not by 
+     annotationTool === "text"
+  c) The HTML overlay for "mine" text has pointer-events:none in the 
+     wrong mode
+  d) The click bubbles to a canvas handler that calls preventDefault first
+
+FIX:
+- Single click on an existing text node (mine) while text tool is active 
+  → re-opens inline input at that text's position, pre-filled with 
+  current content, with the existing id preserved (so save updates 
+  in-place, doesn't duplicate)
+- On Enter/blur: replaces the original. On Escape: cancels (original 
+  text remains unchanged).
+- Eraser tool branch unchanged (single click deletes).
+- Other tools (pencil/arrow/circle/etc): clicking text does nothing — 
+  text shouldn't get in the way of drawing.
+
+Issue 2: FONT SIZE CONTROL MISSING
+Schema supports fontSize 8-96 (default 18) but there's no UI to set it 
+when placing or editing text. Currently every text annotation lands at 
+the default 18px.
+
+INVESTIGATE:
+- Where is the existing "Size" slider rendered in the toolbar? 
+  (visible in screenshot — slider with two yellow dots)
+- What state does it bind to? Probably annotationWidth or similar — 
+  used for stroke width on pencil/arrow/etc.
+
+FIX: pick the cleaner of these two options:
+   Option A: When annotationTool === "text", the same Size slider 
+   semantically becomes "font size" — bind to a separate textFontSize 
+   state with range 8-96, label updates to "Font Size" when text tool 
+   is active. Switching back to a stroke tool restores the stroke 
+   width slider.
+   
+   Option B: Add a separate, small font-size selector (e.g., a 3-step 
+   picker: S=14, M=18, L=28) that only appears when text tool is 
+   active, sitting next to the color palette.
+   
+   Pick A if it's a clean repurpose. Pick B if A would require ugly 
+   conditional logic in the slider component. Briefly note your call 
+   in the output.
+   
+Apply fontSize from this state to:
+- Newly placed text annotations
+- Re-edited text annotations (the new size overrides the old one when 
+  the user re-saves)
+
+VERIFY:
+- Typecheck baseline (33/33, 0 new)
+- Mentally smoke test: 
+  a) Place text at default size, click text tool + click it again → 
+     input re-opens pre-filled
+  b) Adjust font size slider, place new text → renders at that size
+  c) Click existing text with text tool, change content + size, save → 
+     both update on the existing record (id preserved)
+  d) Switch to eraser → click text → deletes
+  e) Switch to pencil → click on text node → no interference, can draw 
+     freely
+
+OUTPUT: diff stat, files touched, final diff. NOT committed, NOT pushed.

@@ -198,6 +198,7 @@ export default function PhotoViewer({
   const [showOverlay, setShowOverlay] = useState(true);
   const [annotationColor, setAnnotationColor] = useState("#ff3b30");
   const [annotationWidth, setAnnotationWidth] = useState(3);
+  const [annotationFontSize, setAnnotationFontSize] = useState(18);
   const [annotationTool, setAnnotationToolRaw] = useState<AnnotationTool>("freehand");
   const [drawStart, setDrawStart] = useState<AnnotationPoint | null>(null);
   const [textInput, setTextInput] = useState<{ x: number; y: number; content: string; editingId: string | null } | null>(null);
@@ -777,29 +778,50 @@ export default function PhotoViewer({
         setAnnotations((shapes) =>
           shapes.map((s) =>
             isTextShape(s) && s.id === prev.editingId
-              ? { ...s, content: trimmed, color: annotationColor }
+              ? { ...s, content: trimmed, color: annotationColor, fontSize: annotationFontSize }
               : s,
           ),
         );
       } else {
         setAnnotations((shapes) => [
           ...shapes,
-          { type: "text", id: newId(), x: prev.x, y: prev.y, content: trimmed, color: annotationColor, fontSize: 18 },
+          { type: "text", id: newId(), x: prev.x, y: prev.y, content: trimmed, color: annotationColor, fontSize: annotationFontSize },
         ]);
       }
       return null;
     });
   };
 
-  const handleTextNodeClick = (id: string, x: number, y: number, content: string) => {
+  const handleTextNodeClick = (id: string, x: number, y: number, content: string, fontSize: number) => {
     if (!isAnnotating) return;
     if (annotationTool === "eraser") {
       setAnnotations((prev) => prev.filter((s) => !(isTextShape(s) && s.id === id)));
       return;
     }
     if (annotationTool === "text") {
+      setAnnotationFontSize(fontSize);
       setTextInput({ x, y, content, editingId: id });
     }
+  };
+
+  // Saved (already-persisted) text node belonging to current user — promote to edit-mine then open input or delete.
+  const handleSavedMineTextClick = (
+    row: MediaAnnotation,
+    t: Extract<AnnotationStroke, { type: "text" }>,
+  ) => {
+    if (!isAnnotating) return;
+    if (annotationTool !== "text" && annotationTool !== "eraser") return;
+    const allStrokes = Array.isArray(row.strokes) ? (row.strokes as AnnotationStroke[]) : [];
+    if (annotationTool === "eraser") {
+      const remaining = allStrokes.filter((s) => !(isTextStroke(s) && s.id === t.id));
+      setAnnotations(remaining.map(strokeToShape));
+      setEditingAnnotationId(row.id);
+      return;
+    }
+    setAnnotations(allStrokes.map(strokeToShape));
+    setEditingAnnotationId(row.id);
+    setAnnotationFontSize(t.fontSize);
+    setTextInput({ x: t.x, y: t.y, content: t.content, editingId: t.id });
   };
 
   const undoAnnotation = () => {
@@ -848,26 +870,34 @@ export default function PhotoViewer({
         className="overflow-hidden"
         data-testid="text-annotations-layer"
       >
-        {showOverlay && allDisplayedStrokes.filter(isTextStroke).map((t) => (
-          <div
-            key={`saved-${t.id}`}
-            className="absolute select-none"
-            style={{
-              left: `${t.x * 100}%`,
-              top: `${t.y * 100}%`,
-              color: t.color,
-              fontSize: t.fontSize,
-              fontWeight: 600,
-              lineHeight: 1.1,
-              whiteSpace: "nowrap",
-              textShadow: "0 0 4px rgba(0,0,0,0.9), 0 0 2px rgba(0,0,0,0.9)",
-              pointerEvents: "none",
-            }}
-            data-testid={`text-annotation-saved-${t.id}`}
-          >
-            {t.content}
-          </div>
-        ))}
+        {showOverlay && (savedAnnotations || []).flatMap((row) => {
+          if (editingAnnotationId && row.id === editingAnnotationId) return [];
+          const isMine = !!currentUser?.id && row.userId === currentUser.id;
+          const interactive = isMine && isAnnotating && (annotationTool === "text" || annotationTool === "eraser");
+          const strokes = Array.isArray(row.strokes) ? (row.strokes as AnnotationStroke[]) : [];
+          return strokes.filter(isTextStroke).map((t) => (
+            <div
+              key={`saved-${row.id}-${t.id}`}
+              className="absolute select-none group"
+              style={{
+                left: `${t.x * 100}%`,
+                top: `${t.y * 100}%`,
+                color: t.color,
+                fontSize: t.fontSize,
+                fontWeight: 600,
+                lineHeight: 1.1,
+                whiteSpace: "nowrap",
+                textShadow: "0 0 4px rgba(0,0,0,0.9), 0 0 2px rgba(0,0,0,0.9)",
+                pointerEvents: interactive ? "auto" : "none",
+                cursor: interactive ? (annotationTool === "eraser" ? "not-allowed" : "text") : "default",
+              }}
+              onClick={interactive ? (e) => { e.stopPropagation(); handleSavedMineTextClick(row, t); } : undefined}
+              data-testid={isMine ? `text-annotation-saved-mine-${t.id}` : `text-annotation-saved-${t.id}`}
+            >
+              {t.content}
+            </div>
+          ));
+        })}
         {annotations.filter(isTextShape).map((t) => {
           const interactive = isAnnotating && (annotationTool === "text" || annotationTool === "eraser");
           return (
@@ -886,7 +916,7 @@ export default function PhotoViewer({
                 pointerEvents: interactive ? "auto" : "none",
                 cursor: annotationTool === "eraser" ? "not-allowed" : "text",
               }}
-              onClick={() => handleTextNodeClick(t.id, t.x, t.y, t.content)}
+              onClick={(e) => { e.stopPropagation(); handleTextNodeClick(t.id, t.x, t.y, t.content, t.fontSize); }}
               data-testid={`text-annotation-mine-${t.id}`}
             >
               {t.content}
@@ -1174,21 +1204,47 @@ export default function PhotoViewer({
             </div>
 
             <div className="flex items-center gap-2 bg-white/90 dark:bg-black/70 rounded-md shadow-md px-2 py-1">
-              <span className="text-[10px] font-medium text-black dark:text-white whitespace-nowrap">Size</span>
-              <input
-                type="range"
-                min={1}
-                max={8}
-                value={annotationWidth}
-                onChange={(e) => setAnnotationWidth(Number(e.target.value))}
-                className="w-20 h-1 accent-current"
-                style={{ color: annotationColor }}
-                data-testid="slider-stroke-width"
-              />
-              <div
-                className="rounded-full shrink-0"
-                style={{ width: annotationWidth * 2 + 4, height: annotationWidth * 2 + 4, backgroundColor: annotationColor }}
-              />
+              <span className="text-[10px] font-medium text-black dark:text-white whitespace-nowrap">
+                {annotationTool === "text" ? "Font" : "Size"}
+              </span>
+              {annotationTool === "text" ? (
+                <>
+                  <input
+                    type="range"
+                    min={8}
+                    max={96}
+                    value={annotationFontSize}
+                    onChange={(e) => setAnnotationFontSize(Number(e.target.value))}
+                    className="w-20 h-1 accent-current"
+                    style={{ color: annotationColor }}
+                    data-testid="slider-font-size"
+                  />
+                  <span
+                    className="shrink-0 leading-none font-bold tabular-nums"
+                    style={{ fontSize: Math.min(annotationFontSize, 22), color: annotationColor }}
+                    data-testid="text-font-size-preview"
+                  >
+                    {annotationFontSize}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <input
+                    type="range"
+                    min={1}
+                    max={8}
+                    value={annotationWidth}
+                    onChange={(e) => setAnnotationWidth(Number(e.target.value))}
+                    className="w-20 h-1 accent-current"
+                    style={{ color: annotationColor }}
+                    data-testid="slider-stroke-width"
+                  />
+                  <div
+                    className="rounded-full shrink-0"
+                    style={{ width: annotationWidth * 2 + 4, height: annotationWidth * 2 + 4, backgroundColor: annotationColor }}
+                  />
+                </>
+              )}
             </div>
           </div>
         )}
