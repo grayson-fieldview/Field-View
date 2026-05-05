@@ -1,0 +1,81 @@
+DIAGNOSE-FIRST: text annotations on photos. Read-only investigation, NO 
+CODE CHANGES.
+
+Context: photo viewer currently supports freehand drawing annotations 
+(strokes rendered via AnnotationOverlay SVG + canvas at 
+client/src/components/photo-viewer.tsx, with normalized 0..1 coords). 
+I want to add the ability for users to TYPE TEXT NOTES at specific points 
+on a photo, similar to CompanyCam's text annotation feature.
+
+Goal: a user clicks a "text" tool, taps on the photo, a text input appears 
+at that spot, they type, and the note persists at that location. On 
+re-open, the text appears where they placed it, scales correctly with 
+window resizing.
+
+INVESTIGATION:
+
+1. EXISTING ANNOTATION DATA MODEL
+   - Where are annotations stored in the database? (server schema — likely 
+     shared/schema.ts or shared/models/)
+   - What does an annotation/stroke record look like (columns + types)?
+   - Are annotations stored as discrete rows or as JSON blobs on the 
+     photo/media record?
+   - Show the schema definition AND a representative example row if you 
+     can find one in dev data
+
+2. CURRENT ANNOTATION FLOW (web)
+   - How does the user enter "draw" mode? (toolbar button location in 
+     photo-viewer.tsx)
+   - When a stroke is completed, what API endpoint is called and with 
+     what payload?
+   - On photo open, how are existing annotations loaded?
+   - Show the relevant client code paths and the server endpoints handling 
+     CRUD
+
+3. ANNOTATIONOVERLAY CAPABILITY
+   - Can the existing AnnotationOverlay (client/src/lib/annotation-svg.tsx) 
+     render <text> SVG elements, or is it stroke-only?
+   - If stroke-only, what would extending it to support text require?
+
+4. PROPOSED DESIGN — TWO PATHS, RECOMMEND ONE
+   Path A: Extend existing annotation model with a discriminated union 
+   { type: "stroke" | "text", ... } — text annotations stored alongside 
+   strokes in the same table/blob, rendered through the same overlay.
+   Path B: Add a parallel "photoTextNotes" system — separate table, 
+   separate API, separate render layer. Isolated but more code.
+   Which is the right fit given the existing architecture? Why?
+
+5. UX SPEC (recommend, don't build)
+   - Where does the text tool button live in the toolbar?
+   - Click on photo to place note vs drag to position?
+   - Editing after placement — click text to edit? Long-press? Right-click?
+   - Deleting — backspace clears? Trash icon on hover?
+   - Styling — single fixed style first pass (e.g. bold yellow text with 
+     dark drop shadow for legibility on any background), or color picker?
+   - What happens if user clicks an existing text note while in "draw" 
+     mode vs "select" mode?
+
+6. PERSISTENCE & BACKEND
+   - Does Path A or B require a database migration? If yes, the migration 
+     follows the standard hard-rule choreography (script with env guards, 
+     prod RDS migration before code deploy).
+   - Any new server endpoints needed?
+   - Conflict handling if two users annotate the same photo simultaneously 
+     — current behavior for strokes, propose for text
+
+7. MOBILE PARITY (just flag, don't design)
+   - Does the mobile app render annotations? If yes, will mobile see text 
+     notes saved from web? (cross-client consistency check, just yes/no 
+     for now)
+
+8. SCOPE / SIZING
+   - LoC estimate for the recommended path
+   - Files touched (client + server)
+   - Migration required: yes/no
+   - Estimated effort: hours
+   - Risks: what could regress (the drawing experience? mobile? existing 
+     annotations on photos?)
+
+Output: findings on each numbered section, your recommendation between 
+Path A and Path B, a UX spec sketch, and a sizing estimate. Then STOP — 
+do not write any code.
