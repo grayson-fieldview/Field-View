@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, type CSSProperties } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -196,6 +196,43 @@ export default function PhotoViewer({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
+  const [imageRectStyle, setImageRectStyle] = useState<CSSProperties>({});
+
+  const recomputeImageRect = useCallback(() => {
+    const container = containerRef.current;
+    const img = imageRef.current;
+    if (!container || !img) return;
+    if (!img.naturalWidth || !img.naturalHeight) return;
+    const cw = container.clientWidth;
+    const ch = container.clientHeight;
+    if (!cw || !ch) return;
+    const ar = img.naturalWidth / img.naturalHeight;
+    const cAr = cw / ch;
+    let w: number, h: number;
+    if (ar > cAr) {
+      w = cw;
+      h = cw / ar;
+    } else {
+      h = ch;
+      w = ch * ar;
+    }
+    setImageRectStyle({
+      position: "absolute",
+      left: (cw - w) / 2,
+      top: (ch - h) / 2,
+      width: w,
+      height: h,
+    });
+  }, []);
+
+  useEffect(() => {
+    recomputeImageRect();
+    const container = containerRef.current;
+    if (!container) return;
+    const ro = new ResizeObserver(recomputeImageRect);
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, [recomputeImageRect, media.id]);
 
   const currentIndex = allMedia.findIndex((m) => m.id === media.id);
 
@@ -585,20 +622,22 @@ export default function PhotoViewer({
 
   const redrawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
-    const img = imageRef.current;
-    if (!canvas || !img) return;
+    if (!canvas) return;
+    const w = Number(imageRectStyle.width) || 0;
+    const h = Number(imageRectStyle.height) || 0;
+    if (!w || !h) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    canvas.width = img.clientWidth;
-    canvas.height = img.clientHeight;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    canvas.width = w;
+    canvas.height = h;
+    ctx.clearRect(0, 0, w, h);
 
     const allShapes = [...annotations, ...(currentShape ? [currentShape] : [])];
     for (const shape of allShapes) {
-      drawShape(ctx, shape, canvas.width, canvas.height);
+      drawShape(ctx, shape, w, h);
     }
-  }, [annotations, currentShape, drawShape]);
+  }, [annotations, currentShape, drawShape, imageRectStyle]);
 
   useEffect(() => {
     redrawCanvas();
@@ -715,32 +754,31 @@ export default function PhotoViewer({
       className={`relative flex items-center justify-center ${fullscreen ? "w-full h-full" : "flex-1 min-h-0"} bg-black/95 select-none`}
       data-testid="photo-viewer-image-area"
     >
-      <div className="relative inline-block max-w-full max-h-full">
-        <img
-          ref={imageRef}
-          src={media.url}
-          alt={media.caption || media.originalName}
-          className={`${fullscreen ? "max-h-screen" : "max-h-[calc(100vh-4rem)]"} max-w-full object-contain`}
-          onLoad={redrawCanvas}
-          draggable={false}
-          data-testid="photo-viewer-image"
-        />
-        {showOverlay && allDisplayedStrokes.length > 0 && (
-          <AnnotationOverlay strokes={allDisplayedStrokes} />
-        )}
-        <canvas
-          ref={canvasRef}
-          className={`absolute inset-0 w-full h-full ${isAnnotating ? "cursor-crosshair" : "cursor-default"}`}
-          onMouseDown={handlePointerDown}
-          onMouseMove={handlePointerMove}
-          onMouseUp={handlePointerUp}
-          onMouseLeave={handlePointerUp}
-          onTouchStart={handlePointerDown}
-          onTouchMove={handlePointerMove}
-          onTouchEnd={handlePointerUp}
-          data-testid="photo-viewer-canvas"
-        />
-      </div>
+      <img
+        ref={imageRef}
+        src={media.url}
+        alt={media.caption || media.originalName}
+        className="absolute inset-0 w-full h-full object-contain"
+        onLoad={recomputeImageRect}
+        draggable={false}
+        data-testid="photo-viewer-image"
+      />
+      {showOverlay && allDisplayedStrokes.length > 0 && (
+        <AnnotationOverlay strokes={allDisplayedStrokes} style={imageRectStyle} />
+      )}
+      <canvas
+        ref={canvasRef}
+        style={imageRectStyle}
+        className={isAnnotating ? "cursor-crosshair" : "cursor-default"}
+        onMouseDown={handlePointerDown}
+        onMouseMove={handlePointerMove}
+        onMouseUp={handlePointerUp}
+        onMouseLeave={handlePointerUp}
+        onTouchStart={handlePointerDown}
+        onTouchMove={handlePointerMove}
+        onTouchEnd={handlePointerUp}
+        data-testid="photo-viewer-canvas"
+      />
 
       {currentIndex > 0 && (
         <div className="absolute left-3 top-0 bottom-0 flex items-center pointer-events-none">

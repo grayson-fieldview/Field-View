@@ -1,19 +1,23 @@
+import type { CSSProperties } from "react";
 import type { AnnotationStroke } from "@shared/schema";
 
 interface AnnotationOverlayProps {
   strokes: AnnotationStroke[];
   className?: string;
+  style?: CSSProperties;
 }
 
 const ARROW_HEAD_LEN_FRAC = 0.025;
 
-export function AnnotationOverlay({ strokes, className }: AnnotationOverlayProps) {
+export function AnnotationOverlay({ strokes, className, style }: AnnotationOverlayProps) {
   if (strokes.length === 0) return null;
+  const positionClasses = style ? "absolute" : "absolute inset-0 w-full h-full";
   return (
     <svg
       viewBox="0 0 1000 1000"
       preserveAspectRatio="none"
-      className={`pointer-events-none absolute inset-0 w-full h-full ${className || ""}`}
+      className={`pointer-events-none ${positionClasses} ${className || ""}`}
+      style={style}
       data-testid="annotation-overlay"
     >
       <defs>
