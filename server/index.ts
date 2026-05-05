@@ -12,6 +12,7 @@ import { users, accounts } from "@shared/models/auth";
 import { eq } from "drizzle-orm";
 import { isAccountBillingEnabled, computeSeatCountFromSub } from "./lib/billing";
 import { initSentry, Sentry } from "./lib/sentry";
+import { sendSlackNotification, isCompAccount } from "./lib/slack";
 import { logCsrfStartupMode } from "./middleware/csrf";
 
 initSentry();
@@ -372,6 +373,24 @@ async function handleSubscriptionEvent(event: any) {
             subscriptionStatus: appStatus,
             seatCount: seatCountFromSub,
           });
+
+          // Slack notification: any subscription checkout (trial OR paid).
+          // No payment_status gate — Stripe trial sessions complete with payment_status='no_payment_required'.
+          if (data.mode === "subscription") {
+            const email = data.customer_email
+              || data.customer_details?.email
+              || user.email
+              || "(unknown)";
+            if (!isCompAccount(email)) {
+              const isTrial = (data.amount_total ?? 0) === 0;
+              const emoji = isTrial ? "🆓" : "💰";
+              const label = isTrial ? "Trial signup" : "New paid signup";
+              const amount = ((data.amount_total ?? 0) / 100).toFixed(2);
+              const currency = (data.currency ?? "usd").toUpperCase();
+              const suffix = isTrial ? "" : ` — $${amount} ${currency}`;
+              sendSlackNotification(`${emoji} ${label}: ${email}${suffix}`).catch(() => {});
+            }
+          }
         }
       }
     } else if (type === "customer.subscription.updated") {

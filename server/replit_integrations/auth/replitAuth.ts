@@ -25,6 +25,7 @@ import {
   verifyEmailLimiter,
 } from "../../middleware/rate-limit";
 import { Sentry } from "../../lib/sentry";
+import { sendSlackNotification, isCompAccount } from "../../lib/slack";
 import { csrfGuard } from "../../middleware/csrf";
 
 function getBaseUrl(req?: Request) {
@@ -45,7 +46,7 @@ async function findOrCreateOAuthUser(opts: {
   lastName?: string | null;
   profileImageUrl?: string | null;
   inviteToken?: string | null;
-}): Promise<User> {
+}): Promise<{ user: User; isNewSignup: boolean }> {
   const providerIdField = opts.provider === "google" ? "googleId" : "microsoftId";
 
   // 1. Match by provider id (returning user)
@@ -57,7 +58,7 @@ async function findOrCreateOAuthUser(opts: {
     if (restoreResult.expired) {
       throw new Error("Account no longer exists");
     }
-    return restoreResult.user;
+    return { user: restoreResult.user, isNewSignup: false };
   }
 
   // 2. Match by email — link the provider id to the existing account
@@ -74,7 +75,7 @@ async function findOrCreateOAuthUser(opts: {
         lastName: restoreResult.user.lastName || opts.lastName || null,
         profileImageUrl: restoreResult.user.profileImageUrl || opts.profileImageUrl || null,
       } as any);
-      return updated!;
+      return { user: updated!, isNewSignup: false };
     }
   }
 
@@ -109,7 +110,7 @@ async function findOrCreateOAuthUser(opts: {
     role = "admin";
   }
 
-  return authStorage.upsertUser({
+  const created = await authStorage.upsertUser({
     email: opts.email,
     firstName: opts.firstName || null,
     lastName: opts.lastName || null,
@@ -122,6 +123,7 @@ async function findOrCreateOAuthUser(opts: {
     subscriptionStatus: "none",
     trialEndsAt: null,
   } as any);
+  return { user: created, isNewSignup: true };
 }
 
 // 30-day soft-delete grace period. Set deleted_at via DELETE /api/users/me or DELETE /api/account.
@@ -291,7 +293,7 @@ export async function setupAuth(app: Express) {
           try {
             const email = profile.emails?.[0]?.value || null;
             const inviteToken = (req.session as any)?.oauthInviteToken || null;
-            const user = await findOrCreateOAuthUser({
+            const { user, isNewSignup } = await findOrCreateOAuthUser({
               provider: "google",
               providerId: profile.id,
               email,
@@ -300,6 +302,10 @@ export async function setupAuth(app: Express) {
               profileImageUrl: profile.photos?.[0]?.value || null,
               inviteToken,
             });
+            if (isNewSignup && !isCompAccount(user.email)) {
+              const name = [user.firstName, user.lastName].filter(Boolean).join(" ").trim() || "(no name)";
+              sendSlackNotification(`🎉 New signup (Google): ${user.email} — ${name}`).catch(() => {});
+            }
             return done(null, user);
           } catch (err: any) {
             return done(null, false, { message: err.message || "Google sign-in failed" });
@@ -329,7 +335,7 @@ export async function setupAuth(app: Express) {
               profile._json?.userPrincipalName ||
               null;
             const inviteToken = (req.session as any)?.oauthInviteToken || null;
-            const user = await findOrCreateOAuthUser({
+            const { user, isNewSignup } = await findOrCreateOAuthUser({
               provider: "microsoft",
               providerId: profile.id,
               email,
@@ -338,6 +344,10 @@ export async function setupAuth(app: Express) {
               profileImageUrl: null,
               inviteToken,
             });
+            if (isNewSignup && !isCompAccount(user.email)) {
+              const name = [user.firstName, user.lastName].filter(Boolean).join(" ").trim() || "(no name)";
+              sendSlackNotification(`🎉 New signup (Microsoft): ${user.email} — ${name}`).catch(() => {});
+            }
             return done(null, user);
           } catch (err: any) {
             return done(null, false, { message: err.message || "Microsoft sign-in failed" });
@@ -459,6 +469,11 @@ export async function setupAuth(app: Express) {
         termsAcceptedAt: new Date(),
         termsVersion: CURRENT_TERMS_VERSION,
       });
+
+      if (!isCompAccount(user.email)) {
+        const name = [user.firstName, user.lastName].filter(Boolean).join(" ").trim() || "(no name)";
+        sendSlackNotification(`🎉 New signup: ${user.email} — ${name}`).catch(() => {});
+      }
 
       const verificationToken = crypto.randomBytes(32).toString("hex");
       await db.insert(emailVerificationTokens).values({
