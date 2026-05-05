@@ -689,6 +689,94 @@ export default function PhotoViewer({
     setAnnotations((prev) => prev.filter((s) => !shapeHit(s, pos, ERASER_THRESHOLD)));
   };
 
+  const getNormalizedClient = (clientX: number, clientY: number): AnnotationPoint | null => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    return {
+      x: Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)),
+      y: Math.max(0, Math.min(1, (clientY - rect.top) / rect.height)),
+    };
+  };
+
+  const DRAG_THRESHOLD_PX = 5;
+  type TextDragSource =
+    | { kind: "mine"; t: Extract<AnnotationShape, { type: "text" }> }
+    | { kind: "saved"; row: MediaAnnotation; t: Extract<AnnotationStroke, { type: "text" }> };
+  const dragStateRef = useRef<{
+    textId: string;
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    dragged: boolean;
+    promoted: boolean;
+    source: TextDragSource;
+  } | null>(null);
+
+  const handleTextPointerDown = (e: React.PointerEvent<HTMLDivElement>, source: TextDragSource) => {
+    if (!isAnnotating) return;
+    if (annotationTool !== "text" && annotationTool !== "eraser") return;
+    e.stopPropagation();
+    if (annotationTool === "eraser") {
+      if (source.kind === "mine") {
+        setAnnotations((prev) => prev.filter((s) => !(isTextShape(s) && s.id === source.t.id)));
+      } else {
+        handleSavedMineTextClick(source.row, source.t);
+      }
+      return;
+    }
+    e.preventDefault();
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
+    dragStateRef.current = {
+      textId: source.t.id,
+      pointerId: e.pointerId,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      dragged: false,
+      promoted: source.kind === "mine",
+      source,
+    };
+  };
+
+  const handleTextPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragStateRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    const dx = e.clientX - drag.startClientX;
+    const dy = e.clientY - drag.startClientY;
+    if (!drag.dragged && Math.sqrt(dx * dx + dy * dy) < DRAG_THRESHOLD_PX) return;
+    drag.dragged = true;
+    if (!drag.promoted && drag.source.kind === "saved") {
+      const row = drag.source.row;
+      const allStrokes = Array.isArray(row.strokes) ? (row.strokes as AnnotationStroke[]) : [];
+      setAnnotations(allStrokes.map(strokeToShape));
+      setEditingAnnotationId(row.id);
+      drag.promoted = true;
+    }
+    const pos = getNormalizedClient(e.clientX, e.clientY);
+    if (!pos) return;
+    setAnnotations((prev) =>
+      prev.map((s) => (isTextShape(s) && s.id === drag.textId ? { ...s, x: pos.x, y: pos.y } : s)),
+    );
+  };
+
+  const handleTextPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragStateRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+    const wasDrag = drag.dragged;
+    dragStateRef.current = null;
+    if (wasDrag) return;
+    // Click (no drag) — open the inline editor
+    if (drag.source.kind === "mine") {
+      const t = drag.source.t;
+      setAnnotationFontSize(t.fontSize);
+      setTextInput({ x: t.x, y: t.y, content: t.content, editingId: t.id });
+    } else {
+      handleSavedMineTextClick(drag.source.row, drag.source.t);
+    }
+  };
+
   const handlePointerDown = (e: React.MouseEvent | React.TouchEvent) => {
     if (!isAnnotating) return;
     e.preventDefault();
@@ -889,9 +977,11 @@ export default function PhotoViewer({
                 whiteSpace: "nowrap",
                 textShadow: "0 0 4px rgba(0,0,0,0.9), 0 0 2px rgba(0,0,0,0.9)",
                 pointerEvents: interactive ? "auto" : "none",
-                cursor: interactive ? (annotationTool === "eraser" ? "not-allowed" : "text") : "default",
+                cursor: interactive ? (annotationTool === "eraser" ? "not-allowed" : "move") : "default",
               }}
-              onClick={interactive ? (e) => { e.stopPropagation(); handleSavedMineTextClick(row, t); } : undefined}
+              onPointerDown={interactive ? (e) => handleTextPointerDown(e, { kind: "saved", row, t }) : undefined}
+              onPointerMove={interactive ? handleTextPointerMove : undefined}
+              onPointerUp={interactive ? handleTextPointerUp : undefined}
               data-testid={isMine ? `text-annotation-saved-mine-${t.id}` : `text-annotation-saved-${t.id}`}
             >
               {t.content}
@@ -900,6 +990,9 @@ export default function PhotoViewer({
         })}
         {annotations.filter(isTextShape).map((t) => {
           const interactive = isAnnotating && (annotationTool === "text" || annotationTool === "eraser");
+          const beingEdited = textInput?.editingId === t.id;
+          // While editing this node, hide the rendered text — the inline input is the live preview.
+          if (beingEdited) return null;
           return (
             <div
               key={`mine-${t.id}`}
@@ -914,15 +1007,19 @@ export default function PhotoViewer({
                 whiteSpace: "nowrap",
                 textShadow: "0 0 4px rgba(0,0,0,0.9), 0 0 2px rgba(0,0,0,0.9)",
                 pointerEvents: interactive ? "auto" : "none",
-                cursor: annotationTool === "eraser" ? "not-allowed" : "text",
+                cursor: annotationTool === "eraser" ? "not-allowed" : "move",
+                touchAction: interactive && annotationTool === "text" ? "none" : "auto",
               }}
-              onClick={(e) => { e.stopPropagation(); handleTextNodeClick(t.id, t.x, t.y, t.content, t.fontSize); }}
+              onPointerDown={interactive ? (e) => handleTextPointerDown(e, { kind: "mine", t }) : undefined}
+              onPointerMove={interactive ? handleTextPointerMove : undefined}
+              onPointerUp={interactive ? handleTextPointerUp : undefined}
               data-testid={`text-annotation-mine-${t.id}`}
             >
               {t.content}
               {isAnnotating && (
                 <button
                   type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => {
                     e.stopPropagation();
                     setAnnotations((prev) => prev.filter((s) => !(isTextShape(s) && s.id === t.id)));
@@ -963,7 +1060,14 @@ export default function PhotoViewer({
               }}
               onBlur={commitTextInput}
               placeholder="Note…"
-              className="h-7 px-2 text-sm bg-white/95 dark:bg-black/85 border shadow-md min-w-[140px]"
+              className="px-2 py-0.5 bg-white/95 dark:bg-black/85 border shadow-md min-w-[140px]"
+              style={{
+                fontSize: annotationFontSize,
+                lineHeight: 1.2,
+                fontWeight: 600,
+                color: annotationColor,
+                height: "auto",
+              }}
               data-testid="input-text-annotation"
             />
           </div>
@@ -1220,8 +1324,8 @@ export default function PhotoViewer({
                     data-testid="slider-font-size"
                   />
                   <span
-                    className="shrink-0 leading-none font-bold tabular-nums"
-                    style={{ fontSize: Math.min(annotationFontSize, 22), color: annotationColor }}
+                    className="shrink-0 leading-none font-bold tabular-nums text-black dark:text-white"
+                    style={{ fontSize: Math.min(annotationFontSize, 22) }}
                     data-testid="text-font-size-preview"
                   >
                     {annotationFontSize}

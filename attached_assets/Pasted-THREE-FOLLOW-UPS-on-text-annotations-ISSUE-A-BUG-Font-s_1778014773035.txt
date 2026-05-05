@@ -1,0 +1,66 @@
+THREE FOLLOW-UPS on text annotations.
+
+ISSUE A (BUG): Font size doesn't apply when editing existing text
+Repro: click saved text to edit → input opens with content pre-filled → 
+drag the font slider → text size doesn't change visibly. New text 
+placement works fine; only edit path is broken.
+
+INVESTIGATE:
+- In edit mode (editingId set, input open), does the in-progress text 
+  shape's rendered fontSize update live as annotationFontSize state 
+  changes, or is it bound to a stale snapshot from when the input opened?
+- Does commitTextInput actually write annotationFontSize on the 
+  edit-update path, or is it preserving the original fontSize?
+- Trace the rendering: which fontSize value does the text node read at 
+  render time during edit?
+
+FIX:
+- The text being edited should render at annotationFontSize LIVE — as 
+  the slider drags, the text in the viewer resizes immediately
+- The inline input itself should render its content at annotationFontSize 
+  so the user previews what they're typing at actual size
+- On commit (Enter/blur), the saved shape persists with the current 
+  annotationFontSize value
+
+ISSUE B (FEATURE): Drag-to-reposition text annotations
+CompanyCam pattern — click + drag on a text node moves it. Was punted in 
+v1; adding now.
+
+DESIGN:
+- Pointer down on a mine-text node + pointer moves > 5px before pointer 
+  up = DRAG. Pointer down with no movement (or < 5px) = CLICK (existing 
+  behavior — opens edit input).
+- During drag: text follows the pointer, x/y normalized coords (relative 
+  to imageRectStyle bounds, NOT viewport) update live.
+- On release: new position committed to the annotation in annotations[] 
+  buffer. If the drag started on a saved-mine text, promote to 
+  edit-mine first (load row into annotations buffer) and apply the new 
+  position — single motion, no separate "open editor first" step.
+- Cursor: when hovering my text in interactive mode → cursor: move. 
+  When dragging → cursor: grabbing.
+- Use pointer events (onPointerDown / Move / Up) so this works on 
+  touch screens too.
+- Drag must not trigger a click-to-edit when released (suppress the 
+  click handler if a drag was detected).
+
+ISSUE C (CSS): Font-size badge in slider renders red, should be black.
+
+INVESTIGATE: locate the numeric badge styling (the {annotationFontSize}px 
+preview that replaces the colored circle when text tool is active).
+
+FIX: change color from red to black (or theme-default foreground — 
+whichever is consistent with the rest of the toolbar text).
+
+VERIFY:
+- Typecheck baseline (33/33, 0 new)
+- Smoke tests:
+  a) Click saved text → drag font slider → text resizes in real time
+  b) Same flow → save → reopen photo → text persists at new size
+  c) Click + drag a text node ~50px → text moves, release → position saves
+  d) Click WITHOUT dragging (< 5px movement) → opens input as before, 
+     no position change
+  e) Drag a saved-mine text → moves immediately, no extra dialog
+  f) Font badge in slider renders black
+  g) Touch on mobile (mentally — does pointer event handling support it)
+
+OUTPUT: diff stat, files touched, final diff. NOT committed, NOT pushed.
