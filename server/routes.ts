@@ -1905,6 +1905,42 @@ export async function registerRoutes(
     }
   });
 
+  // Self-service user preferences. Authenticated users update their own preferences only.
+  // Distinct from the manager-only PATCH /api/users/:userId above — no admin/manager gate.
+  const userPreferencesPatchSchema = z.object({
+    autoTrackingEnabled: z.boolean().optional(),
+  }).strict();
+
+  app.patch("/api/users/me/preferences", isAuthenticated, async (req: any, res) => {
+    try {
+      const currentUser = req.user;
+      const parsed = userPreferencesPatchSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({ message: parsed.error.issues[0]?.message || "Invalid request body" });
+      }
+      const updates: { autoTrackingEnabled?: boolean } = {};
+      if ("autoTrackingEnabled" in parsed.data) {
+        updates.autoTrackingEnabled = parsed.data.autoTrackingEnabled!;
+      }
+
+      res.setHeader("Cache-Control", "no-store");
+
+      if (Object.keys(updates).length === 0) {
+        const fresh = await authStorage.getUser(currentUser.id);
+        if (!fresh) return res.status(404).json({ message: "User not found" });
+        const { password: _, ...safe } = fresh;
+        return res.json(sanitizeUserForViewer(safe, currentUser));
+      }
+      const [updated] = await db.update(users).set(updates).where(eq(users.id, currentUser.id)).returning();
+      if (!updated) return res.status(404).json({ message: "User not found" });
+      const { password: _, ...safeUser } = updated;
+      res.json(sanitizeUserForViewer(safeUser, currentUser));
+    } catch (error: any) {
+      console.error("Error patching user preferences:", error);
+      res.status(500).json({ message: "Failed to update preferences" });
+    }
+  });
+
   // ============================================================
   // Timesheets
   // ============================================================
@@ -1924,6 +1960,9 @@ export async function registerRoutes(
       if (!fresh) return res.status(404).json({ message: "User not found" });
       if (!fresh.timesheetEnabled) {
         return res.status(403).json({ message: "Timesheet tracking not enabled for this user" });
+      }
+      if (req.body?.source === "auto_geofence" && !fresh.autoTrackingEnabled) {
+        return res.status(403).json({ error: "auto_tracking_disabled" });
       }
 
       const body = z.object({
@@ -2129,6 +2168,13 @@ export async function registerRoutes(
       }
       if (entry.projectId !== projectId) {
         return res.status(400).json({ message: "projectId does not match entry's project" });
+      }
+
+      // Defense-in-depth: stale mobile client may still send exit-detected after user disables
+      // auto-tracking. Silently no-op (200) so mobile doesn't retry; do NOT schedule the cron.
+      const fresh = await authStorage.getUser(currentUser.id);
+      if (!fresh?.autoTrackingEnabled) {
+        return res.status(200).json({ status: "skipped", reason: "auto_tracking_disabled" });
       }
 
       // Idempotency: if a pending row already exists, return it without resetting firesAt.
