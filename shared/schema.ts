@@ -418,13 +418,25 @@ export const insertCommentSchema = createInsertSchema(comments).omit({
   createdAt: true,
 });
 
-export const annotationStrokeSchema = z.object({
+const baseStrokeSchema = z.object({
   id: z.string(),
   type: z.enum(["pencil", "arrow", "rectangle", "circle", "line"]),
   color: z.string(),
   width: z.number(),
   points: z.array(z.object({ x: z.number(), y: z.number() })),
 });
+
+const textAnnotationSchema = z.object({
+  id: z.string(),
+  type: z.literal("text"),
+  x: z.number(),
+  y: z.number(),
+  content: z.string().min(1).max(500),
+  color: z.string(),
+  fontSize: z.number().min(8).max(96).default(18),
+});
+
+export const annotationStrokeSchema = z.union([baseStrokeSchema, textAnnotationSchema]);
 
 export const annotationStrokesSchema = z.array(annotationStrokeSchema);
 

@@ -1,0 +1,81 @@
+BUILD: text annotations on photos. Path A from prior diagnose 
+(extend existing union, no migration, ~250 LoC).
+
+REFERENCE: prior diagnose recommended Path A — extend annotationStrokeSchema 
+to a Zod discriminated union, add a "text" annotation primitive. Reuses 
+existing endpoints, no DB migration, no new server endpoints.
+
+CRITICAL DETAIL: do NOT use SVG <text> for rendering. The existing 
+AnnotationOverlay SVG uses viewBox="0 0 1000 1000" with 
+preserveAspectRatio="none", which would anisotropically stretch text on 
+non-square photos. Use absolute-positioned HTML <div> overlay for text 
+annotations, positioned via the same imageRectStyle pattern from the 
+photo viewer fix.
+
+1. SCHEMA (shared/schema.ts):
+   - Refactor annotationStrokeSchema into a Zod discriminated union by type
+   - Add textAnnotationSchema: { id, type: "text", x, y, content (string 
+     min 1 max 500), color, fontSize (number min 8 max 96 default 18) }
+   - x, y are normalized 0..1 (same coordinate system as strokes)
+   - Export updated annotationStrokesSchema = z.array(union)
+   - VERIFY existing endpoints in server/routes.ts that use 
+     annotationStrokesSchema continue to work unchanged
+
+2. CLIENT — RENDERING:
+   - Extend AnnotationOverlay (client/src/lib/annotation-svg.tsx) to handle 
+     the "text" type — but render via an HTML overlay sibling, NOT inside 
+     the SVG. Two options:
+     a) Make AnnotationOverlay return a fragment with both SVG (strokes) 
+        and a div container (text annotations), positioned identically 
+        via the style prop
+     b) Create a separate TextAnnotationOverlay component sibling to 
+        AnnotationOverlay, called from photo-viewer.tsx
+     Pick whichever is cleaner — explain why in your output
+   - Each text annotation renders as <div> at left: x*100% top: y*100%, 
+     fontSize from the annotation, color from the annotation, with white 
+     drop-shadow (text-shadow: 0 0 4px rgba(0,0,0,0.8) for legibility on 
+     bright photos), pointer-events depend on edit mode
+
+3. CLIENT — TOOLBAR (photo-viewer.tsx):
+   - Add a "T" tool button (lucide Type icon) in the tool palette at L932-985, 
+     between freehand and arrow tools
+   - When text tool is active, click on the photo places a new text 
+     annotation. Show an inline editable <input> at the click point, 
+     auto-focus, with an "Add" / "Save" button. Empty submit cancels.
+   - When text tool is active, clicking an existing text node 
+     (only your own, in "Edit mine" mode) re-opens the inline input pre-filled
+
+4. CLIENT — ERASER:
+   - Eraser tool gets a new branch: single-click on a text annotation 
+     removes the entire text primitive from the strokes array (different 
+     from stroke eraser which works on segments)
+   - Existing stroke eraser behavior unchanged
+
+5. CLIENT — DELETE UI:
+   - When in "Edit mine" mode, hover a text annotation → small × chip 
+     appears in upper-right of the text node → click to delete
+
+6. SAVE/LOAD FLOW:
+   - No changes needed — existing saveAnnotation mutation already sends 
+     strokes: AnnotationStroke[] which now includes text variants
+   - Existing GET endpoint returns the updated shape transparently
+
+7. STYLE DEFAULTS:
+   - Default fontSize: 18px
+   - Default color: pulls from the active annotationColor state (existing 
+     palette at L159-168)
+   - Drop shadow: white text-shadow always applied for legibility
+
+8. VERIFY before declaring done:
+   - Typecheck baseline match (33 errors / 0 new)
+   - Smoke test mentally: 
+     a) Place a text annotation, save, reopen — text appears at right spot
+     b) Resize browser — text follows the image rect
+     c) Switch to fullscreen — text follows
+     d) Draw a freehand stroke + place text on same photo — both coexist
+     e) Eraser deletes text on single click
+     f) Other user's text annotations are read-only when not in "Edit mine"
+   - Old annotation rows (no text) still parse and render unchanged
+
+9. OUTPUT: diff stat, files touched, final diff. NOT committed, NOT pushed. 
+   Standing by for review.

@@ -44,6 +44,9 @@ export function AnnotationOverlay({ strokes, className, style }: AnnotationOverl
 }
 
 function renderStroke(s: AnnotationStroke) {
+  // Text annotations are rendered by the parent (photo-viewer) as HTML divs
+  // because SVG <text> would be anisotropically stretched by viewBox preserveAspectRatio="none".
+  if (s.type === "text") return null;
   const stroke = s.color;
   const strokeWidth = s.width;
   const common = {

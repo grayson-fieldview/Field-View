@@ -38,6 +38,7 @@ import {
   Eye,
   EyeOff,
   Eraser,
+  Type,
 } from "lucide-react";
 import type { Media, Comment, Task, Project, MediaAnnotation, AnnotationStroke } from "@shared/schema";
 import { useAuth } from "@/hooks/use-auth";
@@ -69,7 +70,7 @@ interface PhotoViewerProps {
 }
 
 type AnnotationPoint = { x: number; y: number };
-type AnnotationTool = "freehand" | "arrow" | "circle" | "rectangle" | "line" | "eraser";
+type AnnotationTool = "freehand" | "arrow" | "circle" | "rectangle" | "line" | "eraser" | "text";
 
 const ERASER_THRESHOLD = 0.015;
 
@@ -123,7 +124,12 @@ type AnnotationShape =
   | { type: "arrow"; start: AnnotationPoint; end: AnnotationPoint; color: string; width: number }
   | { type: "circle"; center: AnnotationPoint; radius: AnnotationPoint; color: string; width: number }
   | { type: "rectangle"; start: AnnotationPoint; end: AnnotationPoint; color: string; width: number }
-  | { type: "line"; start: AnnotationPoint; end: AnnotationPoint; color: string; width: number };
+  | { type: "line"; start: AnnotationPoint; end: AnnotationPoint; color: string; width: number }
+  | { type: "text"; id: string; x: number; y: number; content: string; color: string; fontSize: number };
+
+type TextAnnotation = Extract<AnnotationStroke, { type: "text" }>;
+const isTextStroke = (s: AnnotationStroke): s is TextAnnotation => s.type === "text";
+const isTextShape = (s: AnnotationShape): s is Extract<AnnotationShape, { type: "text" }> => s.type === "text";
 
 function newId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -133,6 +139,9 @@ function newId(): string {
 }
 
 function shapeToStroke(shape: AnnotationShape): AnnotationStroke {
+  if (shape.type === "text") {
+    return { id: shape.id, type: "text", x: shape.x, y: shape.y, content: shape.content, color: shape.color, fontSize: shape.fontSize };
+  }
   if (shape.type === "freehand") {
     return { id: newId(), type: "pencil", color: shape.color, width: shape.width, points: shape.points };
   }
@@ -143,6 +152,9 @@ function shapeToStroke(shape: AnnotationShape): AnnotationStroke {
 }
 
 function strokeToShape(stroke: AnnotationStroke): AnnotationShape {
+  if (stroke.type === "text") {
+    return { type: "text", id: stroke.id, x: stroke.x, y: stroke.y, content: stroke.content, color: stroke.color, fontSize: stroke.fontSize };
+  }
   const { color, width, points } = stroke;
   if (stroke.type === "pencil") {
     return { type: "freehand", color, width, points };
@@ -188,6 +200,7 @@ export default function PhotoViewer({
   const [annotationWidth, setAnnotationWidth] = useState(3);
   const [annotationTool, setAnnotationToolRaw] = useState<AnnotationTool>("freehand");
   const [drawStart, setDrawStart] = useState<AnnotationPoint | null>(null);
+  const [textInput, setTextInput] = useState<{ x: number; y: number; content: string; editingId: string | null } | null>(null);
   const setAnnotationTool = useCallback((tool: AnnotationTool) => {
     setCurrentShape(null);
     setDrawStart(null);
@@ -404,10 +417,9 @@ export default function PhotoViewer({
           if (!ctx) return reject(new Error("Canvas context unavailable"));
           ctx.drawImage(img, 0, 0, w, h);
           for (const shape of annotations) {
-            const scaled: AnnotationShape = {
-              ...shape,
-              width: Math.max(1, shape.width * (Math.min(w, h) / 600)),
-            } as AnnotationShape;
+            const scaled: AnnotationShape = isTextShape(shape)
+              ? { ...shape, fontSize: Math.max(8, shape.fontSize * (Math.min(w, h) / 600)) }
+              : ({ ...shape, width: Math.max(1, shape.width * (Math.min(w, h) / 600)) } as AnnotationShape);
             drawShape(ctx, scaled, w, h);
           }
           off.toBlob(
@@ -571,6 +583,17 @@ export default function PhotoViewer({
   }, [onClose, photoOnlyMode, goToPrev, goToNext]);
 
   const drawShape = useCallback((ctx: CanvasRenderingContext2D, shape: AnnotationShape, w: number, h: number) => {
+    if (shape.type === "text") {
+      ctx.save();
+      ctx.font = `600 ${shape.fontSize}px Inter, system-ui, -apple-system, sans-serif`;
+      ctx.textBaseline = "top";
+      ctx.fillStyle = shape.color;
+      ctx.shadowColor = "rgba(0,0,0,0.9)";
+      ctx.shadowBlur = 4;
+      ctx.fillText(shape.content, shape.x * w, shape.y * h);
+      ctx.restore();
+      return;
+    }
     ctx.strokeStyle = shape.color;
     ctx.lineWidth = shape.width;
     ctx.lineCap = "round";
@@ -677,6 +700,11 @@ export default function PhotoViewer({
       return;
     }
 
+    if (annotationTool === "text") {
+      setTextInput({ x: pos.x, y: pos.y, content: "", editingId: null });
+      return;
+    }
+
     if (annotationTool === "freehand") {
       setCurrentShape({ type: "freehand", points: [pos], color: annotationColor, width: annotationWidth });
     } else {
@@ -740,6 +768,40 @@ export default function PhotoViewer({
     setDrawStart(null);
   };
 
+  const commitTextInput = () => {
+    setTextInput((prev) => {
+      if (!prev) return null;
+      const trimmed = prev.content.trim();
+      if (!trimmed) return null;
+      if (prev.editingId) {
+        setAnnotations((shapes) =>
+          shapes.map((s) =>
+            isTextShape(s) && s.id === prev.editingId
+              ? { ...s, content: trimmed, color: annotationColor }
+              : s,
+          ),
+        );
+      } else {
+        setAnnotations((shapes) => [
+          ...shapes,
+          { type: "text", id: newId(), x: prev.x, y: prev.y, content: trimmed, color: annotationColor, fontSize: 18 },
+        ]);
+      }
+      return null;
+    });
+  };
+
+  const handleTextNodeClick = (id: string, x: number, y: number, content: string) => {
+    if (!isAnnotating) return;
+    if (annotationTool === "eraser") {
+      setAnnotations((prev) => prev.filter((s) => !(isTextShape(s) && s.id === id)));
+      return;
+    }
+    if (annotationTool === "text") {
+      setTextInput({ x, y, content, editingId: id });
+    }
+  };
+
   const undoAnnotation = () => {
     setAnnotations((prev) => prev.slice(0, -1));
   };
@@ -779,6 +841,104 @@ export default function PhotoViewer({
         onTouchEnd={handlePointerUp}
         data-testid="photo-viewer-canvas"
       />
+
+      {/* Text annotations layer (HTML divs — SVG <text> would stretch with viewBox preserveAspectRatio="none") */}
+      <div
+        style={{ ...imageRectStyle, pointerEvents: "none" }}
+        className="overflow-hidden"
+        data-testid="text-annotations-layer"
+      >
+        {showOverlay && allDisplayedStrokes.filter(isTextStroke).map((t) => (
+          <div
+            key={`saved-${t.id}`}
+            className="absolute select-none"
+            style={{
+              left: `${t.x * 100}%`,
+              top: `${t.y * 100}%`,
+              color: t.color,
+              fontSize: t.fontSize,
+              fontWeight: 600,
+              lineHeight: 1.1,
+              whiteSpace: "nowrap",
+              textShadow: "0 0 4px rgba(0,0,0,0.9), 0 0 2px rgba(0,0,0,0.9)",
+              pointerEvents: "none",
+            }}
+            data-testid={`text-annotation-saved-${t.id}`}
+          >
+            {t.content}
+          </div>
+        ))}
+        {annotations.filter(isTextShape).map((t) => {
+          const interactive = isAnnotating && (annotationTool === "text" || annotationTool === "eraser");
+          return (
+            <div
+              key={`mine-${t.id}`}
+              className="absolute group select-none"
+              style={{
+                left: `${t.x * 100}%`,
+                top: `${t.y * 100}%`,
+                color: t.color,
+                fontSize: t.fontSize,
+                fontWeight: 600,
+                lineHeight: 1.1,
+                whiteSpace: "nowrap",
+                textShadow: "0 0 4px rgba(0,0,0,0.9), 0 0 2px rgba(0,0,0,0.9)",
+                pointerEvents: interactive ? "auto" : "none",
+                cursor: annotationTool === "eraser" ? "not-allowed" : "text",
+              }}
+              onClick={() => handleTextNodeClick(t.id, t.x, t.y, t.content)}
+              data-testid={`text-annotation-mine-${t.id}`}
+            >
+              {t.content}
+              {isAnnotating && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setAnnotations((prev) => prev.filter((s) => !(isTextShape(s) && s.id === t.id)));
+                  }}
+                  className="absolute -top-2 -right-2 hidden group-hover:flex items-center justify-center w-4 h-4 rounded-full bg-black/80 text-white text-[10px] leading-none"
+                  style={{ pointerEvents: "auto" }}
+                  title="Delete text"
+                  data-testid={`button-delete-text-${t.id}`}
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          );
+        })}
+        {textInput && (
+          <div
+            className="absolute"
+            style={{
+              left: `${textInput.x * 100}%`,
+              top: `${textInput.y * 100}%`,
+              pointerEvents: "auto",
+            }}
+            data-testid="text-annotation-input-wrapper"
+          >
+            <Input
+              autoFocus
+              value={textInput.content}
+              onChange={(e) => setTextInput((s) => (s ? { ...s, content: e.target.value } : null))}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  commitTextInput();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setTextInput(null);
+                }
+              }}
+              onBlur={commitTextInput}
+              placeholder="Note…"
+              className="h-7 px-2 text-sm bg-white/95 dark:bg-black/85 border shadow-md min-w-[140px]"
+              data-testid="input-text-annotation"
+            />
+          </div>
+        )}
+      </div>
 
       {currentIndex > 0 && (
         <div className="absolute left-3 top-0 bottom-0 flex items-center pointer-events-none">
@@ -935,6 +1095,16 @@ export default function PhotoViewer({
                 data-testid="button-tool-freehand"
               >
                 <Pencil className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setAnnotationTool("text")}
+                className={`rounded ${annotationTool === "text" ? "bg-primary text-primary-foreground" : ""}`}
+                title="Text"
+                data-testid="button-tool-text"
+              >
+                <Type className="h-4 w-4" />
               </Button>
               <Button
                 variant="ghost"
