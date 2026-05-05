@@ -1,0 +1,47 @@
+(b) Move to build spec for Option B.
+
+Answers to the three open questions:
+
+1. Mobile delete UX: OUT OF SCOPE. Mobile is field-worker focused (painters);
+   project deletion is admin-only on web. No mobile changes needed for this fix.
+
+2. Archive redirect: after a successful archive action from the modal,
+   redirect to /projects (the list view) and show a success toast:
+   "Project archived. Time entries preserved." Do NOT stay on the now-archived
+   project detail page — the user just wanted to "delete" something, leaving
+   them on its corpse is awkward. Toast wording should reassure them their
+   billable history isn't lost.
+
+3. Error envelope convention: go with your recommended shape — matches REST
+   conventions and is both machine-readable + human-readable:
+   {
+     "error": "project_has_dependents",
+     "message": "Cannot delete project that has time entries",
+     "dependents": { "timeEntries": <count> },
+     "suggestion": "archive"
+   }
+
+ALSO ADD (separate TECH_DEBT item the diagnose surfaced):
+
+In the existing catch block at server/routes.ts:301-319, add 
+console.error(err) BEFORE the generic 500 return. The current handler 
+swallows the actual error type, which is why we couldn't see "FK constraint 
+violation" in Vercel logs earlier today. Even with the new explicit 23503 
+catch, surface unexpected errors so the next ghost issue isn't a black box.
+
+Server-side scope:
+- Update DELETE /api/projects/:id handler to catch Postgres error 23503
+- Query time_entries count for the response body (single COUNT query, fast)
+- Return 409 Conflict with the structured envelope
+- console.error all unhandled errors before the generic 500
+
+Client-side scope:
+- Update delete mutation in project-detail.tsx to handle 409 response specially
+- Show a custom dialog (NOT just a toast — toast is too transient for a 
+  user-actionable choice) with title, body explaining timesheets prevent 
+  deletion, and two buttons: "Cancel" and "Archive Project"
+- "Archive Project" calls PATCH /api/projects/:id { status: "archived" }
+- On archive success: redirect to /projects, show success toast
+
+Write the build spec showing exact code changes. NO CODE WRITTEN YET. 
+Show me the proposed diff first.
