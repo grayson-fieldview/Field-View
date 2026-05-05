@@ -1,0 +1,90 @@
+DIAGNOSE-FIRST then BUILD: photo upload modal with drag-and-drop.
+
+Goal: replace the current "Upload Photos" button behavior with a modal 
+that has a dashed-bordered drop zone. User can click the drop zone to 
+open the local file picker, OR drag & drop image files directly onto 
+the zone. Reference: CompanyCam's Add Photos modal (clean dashed border, 
+centered instruction text, X close in top-right).
+
+PHASE 1 — INVESTIGATE (read-only, no code changes):
+
+1. CURRENT UPLOAD FLOW
+   - Where does the "Upload Photos" button live? (likely on the project 
+     detail page photos tab — client/src/pages/project-detail.tsx — but 
+     verify)
+   - When clicked, what currently happens? (native file picker? existing 
+     modal? something else?)
+   - What component renders the upload UI?
+
+2. UPLOAD MECHANICS
+   - What happens after a user picks files? Trace through to:
+     a) Client-side: file validation, preview, progress UI
+     b) API call: which endpoint, what payload (multipart/FormData? 
+        presigned S3 URLs?)
+     c) Storage: direct S3 PUT? Server proxy?
+     d) Optimistic UI update vs wait for server response
+   - Show me the function names + file paths
+
+3. EXISTING MODAL PRIMITIVES
+   - What dialog/modal component does the codebase use? 
+     (shadcn/ui Dialog probably — confirm)
+   - Show an example usage from elsewhere in the app so the new modal 
+     matches existing patterns
+
+4. DRAG-AND-DROP
+   - Any existing drag-and-drop implementations to reuse? 
+     (rg -i "ondrop\|dragover\|file.drop" client/src/)
+   - If yes: where, and is it usable as-is?
+   - If no: we'll build fresh with native onDrop / onDragOver
+
+5. FILE VALIDATION CURRENT STATE
+   - What file types are accepted today? (images: jpg, png, heic, webp?)
+   - Max file size enforced anywhere?
+   - Multi-file upload supported?
+
+PHASE 2 — DESIGN PROPOSAL (before building, propose the structure)
+
+Modal layout sketch (text only, no code yet):
+- shadcn/ui Dialog wrapper, centered, max-w around lg or xl
+- Header row: "Add Photos" left, X close right
+- Main area: dashed border (2px dashed, neutral-300 light / neutral-600 
+  dark, 12px corner radius), large padding, takes ~60vh
+- Inside drop zone: centered icon (Upload from lucide) + text "Click 
+  here or drag & drop photos"
+- Below drop zone: thin terms-of-service-style text (skip if no TOS to 
+  link to)
+- Below that: when files are uploading, show a list of files with 
+  progress bars or status indicators; modal stays open during upload
+
+Behavior:
+- Click anywhere in the dashed zone → triggers hidden <input type="file" 
+  multiple accept="image/*" /> click()
+- Drag file over modal → border highlights (e.g. dashed → solid + 
+  primary color), background tint
+- Drop files → validate (image types only), kick off upload, append to 
+  in-progress list
+- Multiple files supported (drop a folder's worth)
+- During upload: drop zone stays interactive — user can drop more
+- On close: if uploads in progress, confirm before close (or let them 
+  continue in background — pick the existing pattern)
+- On success: toast + invalidate the photos query so new pics appear 
+  in the project
+
+Mobile: touch devices don't fire dragover/drop the same way — the 
+click-to-browse path is the primary fallback. Verify that the click 
+path works on touch screens too (iPad / iPhone Safari for the web 
+dashboard, even though primary mobile is the native app).
+
+PHASE 3 — STOP AND OUTPUT
+After investigation + design proposal, STOP. Do not write code yet. 
+Output:
+- File paths for everything you'd touch
+- Proposed component structure (new file or modify existing?)
+- Estimated diff size (LoC ballpark)
+- Any architectural decisions that need my call before you proceed 
+  (e.g., "should the upload state survive modal close, yes/no")
+- Any concerns about the existing upload flow being incompatible with 
+  the new modal (e.g., if the current button does something stateful 
+  that breaks when wrapped in a modal)
+
+Standing by for review before approving the build phase.
