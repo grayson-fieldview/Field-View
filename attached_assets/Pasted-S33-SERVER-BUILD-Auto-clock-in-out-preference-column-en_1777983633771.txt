@@ -1,0 +1,55 @@
+S33 SERVER BUILD. Auto clock-in/out preference column + endpoint + 
+defense-in-depth gates.
+
+CONTRACT (matches mobile):
+- Column: autoTrackingEnabled boolean NOT NULL DEFAULT true on users
+- Endpoint: PATCH /api/users/me/preferences, isAuthenticated, body 
+  { autoTrackingEnabled?: boolean }
+- Server returns sanitized user. Mobile reads via existing api.me().
+
+WORK:
+
+1. SCHEMA — shared/models/auth.ts L50, after timesheetEnabled:
+   autoTrackingEnabled: boolean("auto_tracking_enabled").notNull().default(true),
+
+2. MIGRATION — script/migrations/migrate_session33_auto_tracking.ts (NEW):
+   Copy migrate_session22_timesheets.ts as the template. Single statement:
+     ALTER TABLE users
+       ADD COLUMN IF NOT EXISTS auto_tracking_enabled boolean NOT NULL DEFAULT true
+   Wrapped in db.transaction. All env guards from S22:
+   - Refuse non-RDS/non-Neon URLs
+   - Require ALLOW_PROD_MIGRATION=yes for RDS
+   - Entry-point guard against dynamic-import auto-execution
+   - Log host (no password) and mode before DB call
+   - IF NOT EXISTS for re-run safety
+   DEFAULT true backfills existing rows atomically. No separate UPDATE.
+
+3. ENDPOINT — server/routes.ts, near existing user routes (~L1879):
+   app.patch("/api/users/me/preferences", isAuthenticated, async (req, res) => {...})
+   - Strict zod: z.object({ autoTrackingEnabled: z.boolean().optional() }).strict()
+   - Update user record matching req.user.id
+   - Return sanitized user — mirror the shape returned by existing 
+     /api/users/me PATCH at L1879. NO PII leakage.
+   - Set Cache-Control: no-store.
+
+4. DEFENSE-IN-DEPTH GATES (against stale mobile clients):
+   
+   At POST /api/timesheets/clock-in (~L1925), the existing gate is approx 
+   `if (!fresh.timesheetEnabled) return 403...`. Extend to:
+     if (req.body.source === "auto_geofence" && !fresh.autoTrackingEnabled) {
+       return res.status(403).json({ error: "auto_tracking_disabled" });
+     }
+   Manual clock-ins (source !== "auto_geofence") UNAFFECTED.
+   
+   At POST /api/geofence/exit-detected: if !fresh.autoTrackingEnabled, 
+   silently no-op with 200 (do NOT schedule the cron). Always-200 to 
+   detection POSTs is the existing pattern — don't 403 here.
+
+5. NO new TS errors. Confirm with tsc.
+
+DELIVERABLES — show diff before applying:
+- shared/models/auth.ts
+- script/migrations/migrate_session33_auto_tracking.ts (NEW)
+- server/routes.ts (3 changes: new endpoint + 2 gate updates)
+
+DO NOT run the migration. DO NOT commit. DO NOT push. Show the diff, then stop.
