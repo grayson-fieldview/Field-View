@@ -1,0 +1,35 @@
+Diagnose: the writeAccountBilling function does not accept a stripeCustomerId parameter, so when Stripe webhook events fire and try to update an account's billing info, the accounts.stripe_customer_id column never gets written. This was identified as a known bug; a fix may already be prepared in the working directory uncommitted, OR may need to be written from scratch.
+
+DO NOT make any code changes. Investigation only — report findings.
+
+PHASE 1 — Find writeAccountBilling and its callers:
+
+1. Search the repo for "writeAccountBilling" — find the definition and all call sites. For each, paste 10-15 lines of context.
+
+2. Show the current function signature: what parameters does it accept? Does it already include stripeCustomerId, OR is it missing? Report exact parameter list with types.
+
+3. List ALL call sites with the arguments being passed. Specifically check the Stripe webhook handlers in server/lib/stripeWebhook.ts (and server/vercelStripeWebhook.ts if relevant) — when an event fires, what gets passed to writeAccountBilling?
+
+4. Check the database schema for the accounts table — what column receives the stripeCustomerId? Is it `stripe_customer_id` (snake) or `stripeCustomerId` (camel)? Confirm via shared/schema.ts.
+
+PHASE 2 — Check for uncommitted work:
+
+5. Run `git status` — are there modified or untracked files in the working directory related to billing, stripe, or accounts? Report the output.
+
+6. Run `git diff` (or `git diff HEAD`) on any modified files — paste the diffs. We want to see if a fix has been started but not committed.
+
+PHASE 3 — Identify the gap:
+
+7. Trace the data flow: when a customer.subscription.created webhook event fires, what's the path from event → writeAccountBilling → DB write? Where does stripeCustomerId get dropped?
+
+8. Identify EXACTLY what change is needed. Be specific: which file, which lines, what to add/modify.
+
+OUTPUT a structured report:
+- "writeAccountBilling current signature:" + file:line
+- "Caller passing stripeCustomerId? YES/NO + evidence"  
+- "Schema column name:" stripe_customer_id (snake) or other
+- "Uncommitted changes related to this fix:" YES/NO + diff if yes
+- "Required changes:" specific files + specific edits needed to fix the gap
+- "Risk/edge cases to watch:" anything that could break (idempotency, null-handling, etc.)
+
+DO NOT write the fix. Only diagnose.
