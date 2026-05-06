@@ -1,0 +1,65 @@
+DIAGNOSE-FIRST then FIX: trial users blocked from adding seats.
+
+REPRO: Account in trial state with stripeCustomerId set + payment method 
+on file (verified in Stripe billing portal — AmEx on file, trial ends 
+May 20, $0 paid invoice). Sending an invite at capacity opens the 
+SeatAddConfirmationDialog. Clicking Confirm hits POST /api/account/seats 
+which returns 400 "Set up billing before changing seat count."
+
+This is wrong. Trial users with a payment method should be able to add 
+seats — Stripe bills the additional line item at trial end alongside the 
+base subscription.
+
+INVESTIGATE:
+1. Find POST /api/account/seats handler in server/routes.ts — read the 
+   full validation block at the top (likely around L1155-1200 based on 
+   prior diagnose). Show the exact check that produces "Set up billing 
+   before changing seat count."
+2. What conditions trigger this 400?
+   - Probably one of:
+     a) !account.stripeCustomerId
+     b) account.subscriptionStatus !== 'active'  ← most likely culprit
+     c) some other Stripe-state guard
+3. What should be allowed:
+   - Any account with stripeCustomerId set + non-cancelled subscription 
+     should be able to add seats. That includes:
+     - subscriptionStatus === 'trialing'
+     - subscriptionStatus === 'active'
+     - subscriptionStatus === 'past_due' (debatable — Stripe lets you 
+       modify subs in past_due; safer to allow)
+   - Block only if:
+     - No stripeCustomerId at all (truly no billing setup)
+     - subscriptionStatus === 'canceled' or 'incomplete_expired'
+     - No Stripe subscription ID (account never went through checkout)
+
+FIX:
+- Loosen the guard. Reject only when there's no working Stripe 
+  subscription to attach the new seat to.
+- Recommended condition (paraphrased):
+    if (!account.stripeCustomerId || !account.stripeSubscriptionId 
+        || ['canceled', 'incomplete_expired', 'unpaid'].includes(
+           account.subscriptionStatus)) {
+       return 400 "Set up billing first..."
+    }
+- Trial state is valid for adding seats. Confirm with the existing 
+  Stripe API call (stripe.subscriptions.update or similar) that adding a 
+  line item to a trialing subscription works as expected — it should 
+  just update the sub, no charge until trial ends.
+
+ALSO: Improve the error message for the truly-no-billing case:
+- Old: "Set up billing before changing seat count."
+- New: "This account doesn't have an active subscription. Visit Settings 
+  → Billing to set up your subscription before inviting team members."
+- Include a code field in the response so the frontend can branch:
+    { code: "billing_not_set_up", message: "...", action: "setup_billing" }
+
+VERIFY:
+- Typecheck baseline (33/33, 0 new)
+- Manually trace: trial account hits POST /api/account/seats → passes 
+  the new guard → seat is added to Stripe sub via the existing 
+  Stripe call → success
+- Active account: same flow, still works
+- Truly no-billing account: still blocked, with new improved message
+
+OUTPUT: file paths, the exact old condition vs new condition, final 
+diff. NOT committed, NOT pushed.

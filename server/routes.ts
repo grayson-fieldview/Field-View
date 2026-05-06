@@ -1186,9 +1186,25 @@ export async function registerRoutes(
       if (currentSeats !== expectedCurrent) {
         return res.status(409).json({ message: "Seat count changed; please refresh." });
       }
-      if (!acc.stripeCustomerId || !acc.stripeSubscriptionId) {
-        return res.status(400).json({ message: "Set up billing before changing seat count." });
+      // Reject only when there's no working Stripe subscription to attach the
+      // new seat line-item to. Trialing / active / past_due all support
+      // subscription.update — Stripe just modifies the sub and (for trialing)
+      // bills the new line at trial end alongside the base subscription.
+      const blockedSubscriptionStatuses = ["canceled", "incomplete_expired", "unpaid"];
+      const hasWorkingSubscription =
+        !!acc.stripeCustomerId &&
+        !!acc.stripeSubscriptionId &&
+        !(acc.subscriptionStatus &&
+          blockedSubscriptionStatuses.includes(acc.subscriptionStatus));
+      if (!hasWorkingSubscription || !acc.stripeCustomerId || !acc.stripeSubscriptionId) {
+        return res.status(400).json({
+          code: "billing_not_set_up",
+          action: "setup_billing",
+          message:
+            "This account doesn't have an active subscription. Visit Settings → Billing to set up your subscription before inviting team members.",
+        });
       }
+      const stripeSubscriptionId: string = acc.stripeSubscriptionId;
 
       const usage = await computeSeatUsage(db, accountId);
       if (desiredCount < usage.used) {
@@ -1208,7 +1224,7 @@ export async function registerRoutes(
       }
 
       const stripe = await getUncachableStripeClient();
-      const sub = await stripe.subscriptions.retrieve(acc.stripeSubscriptionId, {
+      const sub = await stripe.subscriptions.retrieve(stripeSubscriptionId, {
         expand: ["items.data.price.product"],
       });
 
@@ -1253,7 +1269,7 @@ export async function registerRoutes(
       let prorationAmount: number | null = null;
 
       if (itemsUpdate.length > 0) {
-        await stripe.subscriptions.update(acc.stripeSubscriptionId, {
+        await stripe.subscriptions.update(stripeSubscriptionId, {
           items: itemsUpdate,
           proration_behavior: "create_prorations",
         });
