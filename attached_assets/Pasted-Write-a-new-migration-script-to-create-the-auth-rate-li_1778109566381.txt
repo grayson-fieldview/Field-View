@@ -1,0 +1,43 @@
+Write a new migration script to create the auth_rate_limits table on production RDS. This is needed because the rate-limiter-flexible library is supposed to auto-create the table at runtime, but on production RDS it errors with "Table is not created yet at RateLimiterPostgres._upsert" — login rate limiting is silently failing and brute-force attempts are unblocked.
+
+DO NOT run the migration on any database. Only WRITE the script file and stop.
+
+DIAGNOSTIC PHASE (do these reads first, before writing anything):
+
+1. Read the existing migration template: script/migrations/migrate_session22_timesheets.ts
+   - Note the env guard pattern (throws unless URL contains rds.amazonaws.com or neon.tech, requires ALLOW_PROD_MIGRATION=yes for RDS)
+   - Note the entry-point guard that prevents dynamic-import auto-execution
+   - Note the db.transaction() wrapping for atomic rollback
+   - Note the IF NOT EXISTS guards for re-runnability
+   - Note the host logging (no password) before the DB call
+
+2. Read shared/schema.ts and find the declaration for auth_rate_limits.
+   - Report the exact column names, types, and any indexes/primary keys declared.
+   - This is the canonical schema — the migration MUST match it exactly so the rate-limiter-flexible library can read/write to it correctly.
+
+3. Confirm by reading package.json: which version of rate-limiter-flexible is installed?
+
+WRITE PHASE:
+
+Create a new file: script/migrations/migrate_session34_auth_rate_limits.ts
+
+Follow EXACTLY the pattern of migrate_session22_timesheets.ts (env guards, transaction wrapping, entry-point guard, logging, IF NOT EXISTS).
+
+The migration must:
+- Create the auth_rate_limits table with columns matching the shared/schema.ts declaration exactly
+- Use IF NOT EXISTS for safe re-running
+- Wrap all DDL in db.transaction()
+- Include the same env-guard / ALLOW_PROD_MIGRATION=yes / entry-point checks as the template
+- Log the DB host (no password) and migration mode before executing
+- After running, perform a verification SELECT to confirm the table exists with expected columns
+
+DO NOT:
+- Run the migration on any database (no db:push, no execution)
+- Commit the file (Grayson will review the diff before committing)
+- Modify any other files
+- Touch shared/schema.ts (the declaration is already correct per memory)
+
+OUTPUT:
+- The full path of the new file you created
+- A brief summary of: (a) what columns the table has, (b) what indexes/keys, (c) confirmation the env guards match the template
+- The next steps Grayson needs to take (paraphrase the migration order: snapshot → whitelist Replit IP → set ALLOW_PROD_MIGRATION=yes → run → verify → remove Replit IP) — but do NOT execute these steps yourself.
