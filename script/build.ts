@@ -76,6 +76,22 @@ async function buildAll() {
     external: externals,
     logLevel: "info",
   });
+
+  console.log("building stripe webhook standalone function...");
+  await esbuild({
+    entryPoints: ["server/vercelStripeWebhook.ts"],
+    platform: "node",
+    target: "node20",
+    bundle: true,
+    format: "cjs",
+    outfile: "api/stripe/webhook.js",
+    define: {
+      "process.env.NODE_ENV": '"production"',
+    },
+    minify: true,
+    external: externals,
+    logLevel: "info",
+  });
 }
 
 buildAll().catch((err) => {

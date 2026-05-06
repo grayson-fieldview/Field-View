@@ -1,0 +1,67 @@
+(A) — diagnostic data already collected from prod after the previous 
+patch deployed. From Vercel logs at 21:58:45.405, deployment 
+dpl_Hq2X9Fyi97YEiuN9AsdsoyP... (commit 97726c2):
+
+[stripe-webhook] received {
+  hasRawBody: false,
+  rawBodyLen: null,
+  bodyIsBuf: true,
+  bodyLen: 10237,
+  sigPresent: true
+}
+
+That's the green light. Vercel runtime is NOT populating req.rawBody on 
+this project. The previous patch's req.body fallback runs, but the 
+Buffer it gets is the JSON-roundtripped version, not the original 
+signed bytes — Stripe's HMAC fails and we get the 400 "No signatures" 
+error. Standalone function is justified.
+
+Proceed with the build. Address your concerns explicitly:
+
+1. EXTRACT FIRST: refactor handleSubscriptionEvent + writeAccountBilling 
+   from server/index.ts into a new server/lib/stripeWebhook.ts module 
+   so the standalone function can import without pulling in the Express 
+   app startup side effects. This refactor is required regardless — 
+   server/index.ts is too coupled to be importable.
+
+2. BUILD PIPELINE: add a second esbuild entry to script/build.ts that 
+   bundles api/stripe/webhook.ts → api/stripe/webhook.js. Same 
+   patterns as the existing serverless.ts entry — bundle, externals, 
+   minify settings.
+
+3. @vercel/node TYPES: add it as a devDependency (yes, authorized — 
+   add to package.json devDependencies, run pnpm install). If pnpm 
+   install fails in your env, just type req/res as `any` — runtime 
+   behavior is what matters.
+
+4. vercel.json ROUTING: confirm filesystem-based routing wins over the 
+   catch-all rewrite. Standard Vercel behavior is filesystem-first, but 
+   if you find a project quirk that breaks this, flag it before 
+   shipping. Test: build locally, check the api/ output structure, 
+   verify both api/index.js AND api/stripe/webhook.js exist in build 
+   output.
+
+5. BODY PARSING DISABLE: try export const config = { api: { bodyParser: 
+   false } }; first. If @vercel/node v3+ ignores it (this convention 
+   is Next.js-native), fall back to using getRawBody / raw-body 
+   package, OR manually consume the stream:
+   
+   const buffers: Buffer[] = [];
+   for await (const chunk of req) {
+     buffers.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+   }
+   const rawBody = Buffer.concat(buffers);
+
+   Pick whichever works. Add the same diagnostic console.log so we can 
+   verify the new function is reading raw bytes correctly on first 
+   deploy.
+
+6. KEEP server/index.ts EXPRESS WEBHOOK ROUTE for Replit local dev. 
+   The new standalone function only runs on Vercel via filesystem 
+   routing; on Replit the Express route still handles it. Both call 
+   into the same server/lib/stripeWebhook.ts processing functions.
+
+Output: refactor diff for server/index.ts + new file 
+server/lib/stripeWebhook.ts + new file api/stripe/webhook.ts + 
+script/build.ts changes + vercel.json + package.json devDep change. 
+NOT committed, NOT pushed.
