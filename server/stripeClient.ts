@@ -79,6 +79,9 @@ export async function getStripeSync() {
     const poolConfig: any = {
       connectionString: process.env.DATABASE_URL!,
       max: 2,
+      connectionTimeoutMillis: 5000,
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 10000,
     };
     if (process.env.DATABASE_URL?.includes("rds.amazonaws.com")) {
       poolConfig.ssl = { rejectUnauthorized: false };
