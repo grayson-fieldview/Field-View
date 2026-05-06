@@ -11,6 +11,7 @@ export async function writeAccountBilling(
   event: string,
   stripeCustomerId: string,
   fields: {
+    stripeCustomerId?: string;
     subscriptionStatus?: string;
     stripeSubscriptionId?: string;
     trialEndsAt?: Date | null;
@@ -108,6 +109,7 @@ export async function handleSubscriptionEvent(event: any) {
             `User ${user.id} subscription updated to ${appStatus} via checkout`,
           );
           await writeAccountBilling(type, customerId as string, {
+            stripeCustomerId: customerId,
             stripeSubscriptionId: subscriptionId as string,
             subscriptionStatus: appStatus,
             seatCount: seatCountFromSub,
@@ -186,6 +188,7 @@ export async function handleSubscriptionEvent(event: any) {
         });
         console.log(`User ${user.id} subscription updated to ${appStatus}`);
         await writeAccountBilling(type, customerId as string, {
+          stripeCustomerId: customerId,
           subscriptionStatus: appStatus,
           stripeSubscriptionId: data.id,
           seatCount: seatCountFromSub,
@@ -223,6 +226,7 @@ export async function handleSubscriptionEvent(event: any) {
         });
         console.log(`User ${user.id} subscription canceled`);
         await writeAccountBilling(type, customerId as string, {
+          stripeCustomerId: customerId,
           subscriptionStatus: "canceled",
         });
       }

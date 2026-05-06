@@ -1,0 +1,44 @@
+Apply the writeAccountBilling fix to write stripe_customer_id to the accounts table on Stripe webhook events. Diagnosed bug: function accepts stripeCustomerId as a lookup key but never writes it to the column, so accounts.stripe_customer_id stays NULL forever for webhook-flow signups. Breaks Billing Portal links and any code reading from accounts.stripe_customer_id.
+
+Make EXACTLY these four edits in server/lib/stripeWebhook.ts. No other files. No other lines.
+
+EDIT 1 — fields type signature (around lines 13-19):
+
+Add `stripeCustomerId?: string;` as the FIRST entry inside the fields object type. The signature should become:
+
+export async function writeAccountBilling(
+  event: string,
+  stripeCustomerId: string,
+  fields: {
+    stripeCustomerId?: string;
+    subscriptionStatus?: string;
+    stripeSubscriptionId?: string;
+    trialEndsAt?: Date | null;
+    seatCount?: number;
+    subscriptionLapsedAt?: Date | null;
+  },
+)
+
+EDIT 2 — call site around line 110 (checkout.session.completed):
+
+In the fields object literal passed to writeAccountBilling, add `stripeCustomerId: customerId,` as the FIRST property in the object. Keep all existing fields unchanged.
+
+EDIT 3 — call site around line 188 (customer.subscription.updated):
+
+Same addition: add `stripeCustomerId: customerId,` as the first property in the fields object literal. Keep all existing fields unchanged.
+
+EDIT 4 — call site around line 225 (customer.subscription.deleted):
+
+Same addition: add `stripeCustomerId: customerId,` as the first property in the fields object literal. Keep all existing fields unchanged.
+
+DO NOT:
+- Modify any other files
+- Modify the function body (the cleanFields loop at ~line 58-64 generically iterates Object.entries(fields), so the new field will be picked up automatically)
+- Modify the lookup logic at ~line 27 (SELECT users WHERE stripe_customer_id = $1 stays unchanged)
+- Run tests or commands
+- Commit changes (Grayson will review the diff first)
+
+OUTPUT:
+- The exact diffs for all four edits
+- Confirmation that ONLY server/lib/stripeWebhook.ts was modified  
+- Confirmation that the function body and lookup logic were NOT changed
