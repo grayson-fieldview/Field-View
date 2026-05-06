@@ -515,19 +515,45 @@ app.post(
     try {
       const sig = Array.isArray(signature) ? signature[0] : signature;
 
-      if (!Buffer.isBuffer(req.body)) {
-        console.error("STRIPE WEBHOOK ERROR: req.body is not a Buffer.");
+      console.log("[stripe-webhook] received", {
+        hasRawBody: Buffer.isBuffer((req as any).rawBody),
+        rawBodyLen: Buffer.isBuffer((req as any).rawBody)
+          ? (req as any).rawBody.length
+          : null,
+        bodyIsBuf: Buffer.isBuffer(req.body),
+        bodyLen: Buffer.isBuffer(req.body) ? req.body.length : null,
+        sigPresent: !!sig,
+      });
+
+      // Prefer req.rawBody (populated by @vercel/node with the byte-perfect
+      // original payload before any JSON auto-parsing). Fall back to req.body
+      // when running under plain Express (Replit dev), where express.raw
+      // gives us the raw Buffer directly. Stripe's constructEvent computes
+      // HMAC over these exact bytes — any re-serialization breaks it.
+      const rawPayload: Buffer | undefined = Buffer.isBuffer(
+        (req as any).rawBody,
+      )
+        ? ((req as any).rawBody as Buffer)
+        : Buffer.isBuffer(req.body)
+          ? (req.body as Buffer)
+          : undefined;
+      if (!rawPayload) {
+        console.error("STRIPE WEBHOOK ERROR: no raw body available", {
+          rawBodyType: typeof (req as any).rawBody,
+          bodyType: typeof req.body,
+          bodyIsBuffer: Buffer.isBuffer(req.body),
+        });
         return res.status(500).json({ error: "Webhook processing error" });
       }
 
-      await WebhookHandlers.processWebhook(req.body as Buffer, sig);
+      await WebhookHandlers.processWebhook(rawPayload, sig);
 
       const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
       let event: any;
       if (webhookSecret) {
         try {
           const stripe = await getUncachableStripeClient();
-          event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+          event = stripe.webhooks.constructEvent(rawPayload, sig, webhookSecret);
         } catch (verifyErr: any) {
           console.error(
             "Stripe webhook signature verification failed:",
@@ -555,7 +581,7 @@ app.post(
           "[stripe-webhook] STRIPE_WEBHOOK_SECRET not set — skipping local signature verification (vendor lib verified upstream)",
         );
         try {
-          event = JSON.parse(req.body.toString());
+          event = JSON.parse(rawPayload.toString());
         } catch (parseErr: any) {
           console.error(
             "Stripe webhook body parse failed:",
