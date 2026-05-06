@@ -1,0 +1,45 @@
+Diagnose the production error "Client network socket disconnected before secure TLS connection was established" — fires ~31 times per day per Sentry. Most likely an RDS connection pool config issue for the serverless deployment, but could also be external HTTPS clients (Stripe, Resend, Google APIs).
+
+DO NOT make any code changes. Investigation only. Report findings as a structured report at the end.
+
+PHASE 1 — Database connection setup:
+
+1. Find where the Postgres client/pool is initialized. Search the repo for:
+   - `new Pool(` 
+   - `drizzle(`
+   - `@neondatabase/serverless` 
+   - `import { Pool }` 
+   - `pg.Pool`
+   
+   Report: exact file path, full initialization code with surrounding 10-15 lines of context, all pool config options (max, min, idleTimeoutMillis, connectionTimeoutMillis, ssl, keepAlive, etc.). If multiple configs exist for different environments (dev vs prod, Neon vs RDS), report all of them.
+
+2. Read drizzle.config.ts and report: which DATABASE_URL is referenced, any SSL/connection settings.
+
+3. Search for any retry / reconnect / error-handler logic on the DB connection. Report file paths and code excerpts.
+
+PHASE 2 — Other TLS-using HTTP clients:
+
+4. Find Stripe SDK initialization. Report version, any custom timeout / maxNetworkRetries / httpAgent config.
+
+5. Find Resend, Google OAuth (passport-google), Sentry SDK, and any axios / node-fetch / undici instances in server/. Report file paths and any custom timeout / agent / retry configs.
+
+PHASE 3 — Serverless-fit assessment:
+
+6. Confirm: is this running on Vercel serverless? (Check for vercel.json, api/index.js entry point, VERCEL env var usage.)
+
+7. Evaluate the DB pool config against serverless best practices:
+   - Pool max should be small (1-3) — serverless functions can have many concurrent invocations, and a large pool per function multiplied by Lambda count quickly exhausts RDS max_connections
+   - idleTimeoutMillis should be short (< 30s) so connections don't outlive the function instance
+   - Are connections explicitly closed (pool.end()) at the end of requests? Or is the pool reused across invocations via module-level singleton?
+
+8. Cross-reference: how does the rate-limiter-flexible (RateLimiterPostgres) library connect to the DB? Same pool or a new connection? This was mentioned in earlier work — relevant because we just enabled it.
+
+OUTPUT — structured report:
+
+A. "DB pool config" — file:line + exact settings + comments on whether serverless-friendly
+B. "External HTTPS clients" — list of all found clients with their settings  
+C. "Anti-patterns observed" — bulleted list of any concerning patterns (pool too large for serverless, missing keepAlive, no error handler on pool, connections not released, etc.)
+D. "Top 3 root cause hypotheses" — ranked by likelihood with evidence for each, specifically focused on which would produce the "Client network socket disconnected before secure TLS" error
+E. "Sentry stack trace would help confirm" — note that if we had the actual stack trace from the Sentry issue, we could pinpoint which call site is failing
+
+DO NOT write any fixes. Only report findings.
