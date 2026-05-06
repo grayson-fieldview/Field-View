@@ -1,0 +1,65 @@
+DIAGNOSE-FIRST: Stripe webhook sync gap. Read-only investigation.
+
+CONTEXT: A new account (Palm Beach Painters, account id 
+ebfc2a9b-81c1-4f1a-b79f-16f4475b10a6, owner grayson@palmbeach-painters.com) 
+signed up today around 8:51 PM EDT, completed Stripe checkout 
+successfully (verified: customer cus_USpK7B4gUu0sjl + subscription 
+sub_1TTtgYR1AnlJLf9qIImisfge exist on Stripe with payment method on 
+file), but the accounts row had NULL for stripe_customer_id, 
+stripe_subscription_id, and subscription_status. Manual SQL UPDATE 
+unblocked the account, but the underlying sync failure is unfixed and 
+likely affecting every new signup.
+
+INVESTIGATE:
+
+1. WEBHOOK HANDLER LOCATION & LOGIC
+   - Find /api/stripe/webhook in server/routes.ts (or wherever it lives)
+   - Show the full handler — which Stripe events does it listen for?
+   - For each event type relevant to signup (customer.created, 
+     customer.subscription.created, checkout.session.completed, 
+     customer.subscription.updated), show the matching/lookup logic — 
+     how does it find the right accounts row to update?
+
+2. ACCOUNT CREATION FLOW
+   - Where does a new account get created? (likely the signup or 
+     Stripe checkout success endpoint)
+   - At creation time, is the stripe_customer_id immediately persisted, 
+     or is the account row created first and the customer ID 
+     backfilled by webhook?
+   - If created via Stripe Checkout Session, where does the 
+     post-checkout redirect land, and does that handler do any DB 
+     writes?
+
+3. MATCHING / LOOKUP LOGIC
+   - When customer.subscription.created fires, the webhook handler 
+     needs to find the right account. By what key?
+     a) Match by Stripe customer email → account owner email?
+     b) Match by stripe_customer_id (only works if customer ID was 
+        already on the account row before sub created)?
+     c) Match by metadata embedded in the subscription/customer?
+   - Show the exact matching code
+
+4. ERROR HANDLING
+   - If a webhook event fires for an unknown account, what happens? 
+     Silent skip? 200 OK without doing work? Logged?
+   - If the DB write fails, does the handler return 4xx/5xx so Stripe 
+     retries, or does it swallow and return 200?
+
+5. STRIPE WEBHOOK LOGS
+   - Pull up Stripe Dashboard → Developers → Webhooks → click into 
+     /api/stripe/webhook endpoint → look at the Event log around 
+     8:51 PM EDT today
+   - For each event delivered to that endpoint, what was the response 
+     code? Were any retried?
+   - Specifically look for the sequence around customer 
+     cus_USpK7B4gUu0sjl
+
+6. SIMILAR DRIFT IN OTHER ACCOUNTS
+   - Query: SELECT count(*), array_agg(name) FROM accounts WHERE 
+     stripe_customer_id IS NULL OR stripe_subscription_id IS NULL OR 
+     subscription_status IS NULL;
+   - Are there other accounts in this drifted state? If yes, how many?
+
+OUTPUT: file paths, current matching logic, the exact failure mode 
+(based on webhook log analysis), recommended fix, and a backfill 
+strategy for any other affected accounts. Then STOP.
