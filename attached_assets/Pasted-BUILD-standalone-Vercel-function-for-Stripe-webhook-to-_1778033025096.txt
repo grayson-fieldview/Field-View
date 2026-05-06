@@ -1,0 +1,89 @@
+BUILD: standalone Vercel function for Stripe webhook to bypass body parsing.
+
+CONTEXT: Vercel @vercel/node runtime parses JSON bodies before Express 
+middleware runs, defeating express.raw. Diagnostic shows hasRawBody=false 
+and bodyIsBuf=true but with re-serialized JSON bytes that don't match 
+Stripe's signature. Webhook signature validation fails 100% of the time 
+on production despite correct secret and correct endpoint URL.
+
+Solution: route /api/stripe/webhook to a STANDALONE Vercel serverless 
+function (not routed through Express's api/index handler) with body 
+parsing disabled.
+
+PHASE 1 — INVESTIGATE quickly:
+
+1. vercel.json — show current rewrites/routes config
+2. Where do Vercel serverless functions live in this project? 
+   (e.g. /api/ folder at repo root, or pages/api/, or another location)
+3. server/index.ts:505-575 — the existing webhook handler code we need 
+   to port. What internal modules does it import that the new function 
+   will also need? (WebhookHandlers, getUncachableStripeClient, anything 
+   from server/lib/, the dual-write logic, etc.)
+
+PHASE 2 — BUILD:
+
+1. CREATE NEW STANDALONE FUNCTION at the appropriate Vercel functions 
+   path (likely api/stripe/webhook.ts at repo root, but verify based on 
+   investigation):
+
+   - Disable body parsing. The exact syntax depends on @vercel/node 
+     version and project setup. Try in this order until one works:
+     a) export const config = { api: { bodyParser: false } };
+     b) export const config = { runtime: 'nodejs', api: { bodyParser: false } };
+     c) Use raw-body package to manually consume the stream:
+        import getRawBody from 'raw-body';
+        const rawBody = await getRawBody(req);
+
+   - Function should:
+     a) Read raw body bytes (Buffer)
+     b) Verify signature with stripe.webhooks.constructEvent using 
+        STRIPE_WEBHOOK_SECRET
+     c) Call the same processing logic the Express handler uses 
+        (handleSubscriptionEvent, writeAccountBilling, etc. from 
+        server/index.ts) — import these as named exports from the 
+        existing module so logic stays in one place
+     d) Return 200 on success, 400 on signature failure, 500 on 
+        processing error
+     e) Include the same diagnostic console.log we added before so we 
+        can see hasRawBody status on the new function
+
+   - Refactor server/index.ts to EXPORT the processing functions 
+     (handleSubscriptionEvent, writeAccountBilling, helper utils) so 
+     the new standalone function can reuse them. DO NOT duplicate logic.
+
+2. UPDATE vercel.json to route /api/stripe/webhook DIRECTLY to the new 
+   function, NOT through /api/index:
+
+   {
+     "rewrites": [
+       { "source": "/api/stripe/webhook", "destination": "/api/stripe/webhook" },
+       { "source": "/api/(.*)", "destination": "/api/index" }
+     ]
+   }
+
+   The first rewrite is a no-op pass-through (Vercel will route by 
+   filename), the second catches everything else.
+
+3. REMOVE the webhook handler from server/index.ts:505-575 (the Express 
+   route). Keep the processing functions as exports — those still get 
+   used by the new standalone function. The Express POST 
+   /api/stripe/webhook route registration disappears.
+
+4. Keep express.raw middleware registration if any other route uses it 
+   — but it shouldn't be needed since the webhook is now standalone. 
+   Verify and remove if no callers.
+
+VERIFY:
+- Typecheck baseline (33/33, 0 new) — refactor may introduce type 
+  errors around exports; resolve them
+- Mental trace: Stripe sends webhook → Vercel routes /api/stripe/webhook 
+  to the new standalone function → bodyParser disabled → raw bytes 
+  available via req → constructEvent verifies signature against original 
+  bytes → 200 returned → processing logic runs → writeAccountBilling 
+  updates DB
+- Other routes (/api/projects, /api/users, etc.) still work via 
+  /api/index Express handler — vercel.json rewrites preserved
+
+OUTPUT: file paths, diff (including new file content + vercel.json 
+changes + server/index.ts deletions/exports), final summary. NOT 
+committed, NOT pushed.
