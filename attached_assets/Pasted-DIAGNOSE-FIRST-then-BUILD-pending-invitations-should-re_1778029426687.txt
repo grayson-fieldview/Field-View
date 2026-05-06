@@ -1,0 +1,101 @@
+DIAGNOSE-FIRST then BUILD: pending invitations should reserve seats.
+
+PROBLEM: Today, seat count only reflects ACCEPTED users. Admin can send 
+unlimited pending invites regardless of seat availability. If multiple 
+pending invites accept and total exceeds seat count, account is in a 
+broken state (more active users than billed seats).
+
+EXPECTED: When admin sends an invite, that invite should consume a seat 
+slot immediately. The seat is released only when:
+- Invite is canceled by admin
+- Invite expires (current expiry rules apply)
+- Invite is declined
+
+When an invite is ACCEPTED, no seat-count change — it just transitions 
+from "pending" to "active" within the same already-reserved slot.
+
+PHASE 1 — INVESTIGATE (read-only):
+
+1. CURRENT SEAT-COUNT LOGIC
+   - Where is the "1 of 3 seats used" number computed? (likely 
+     server-side in a billing/seats helper, or computed in a route 
+     handler)
+   - Show the exact formula today (e.g. SELECT COUNT(*) FROM users 
+     WHERE accountId = X)
+   - Where does that count get returned to the frontend?
+
+2. INVITE LIFECYCLE
+   - Schema: where are pending invitations stored? (likely an 
+     invitations table) — show the table definition
+   - Send invite endpoint: where, what does it do?
+   - Accept invite endpoint: where, what does it do?
+   - Cancel invite (admin clicks X): which endpoint? what happens to 
+     the row?
+   - Expiry: how is it enforced? (cron job? lazy check on 
+     fetch? expiry column with current_timestamp comparison?)
+   - Resend invite: separate endpoint or same as send? Does it create 
+     a new row or update existing?
+
+3. EXISTING ENFORCEMENT
+   - Is there ANY current capacity check on invite send? Or is it 
+     unlimited?
+   - On invite accept: does it check seats? What happens if accepted 
+     when over capacity?
+
+4. UI WIRING
+   - The "1 of 3 seats used - 2 available" widget — where does it pull 
+     data from?
+   - The Invite User button — does it surface availability info, or 
+     just open a form?
+
+5. EDGE CASES TO MAP
+   - What happens to the 4 currently-pending invites after this 
+     change ships? (Migration/backfill: should they all retroactively 
+     count as consumed seats? If yes, accounts may immediately be 
+     over capacity — handle gracefully.)
+   - If admin downgrades seat count via Stripe (e.g. 3 seats → 1), 
+     what happens to existing accepted+pending? (existing behavior — 
+     don't modify, just flag if the existing logic is unhandled)
+
+PHASE 2 — DESIGN PROPOSAL (after investigation, before code):
+
+Propose:
+- New formula: usedSeats = COUNT(active users) + COUNT(non-expired 
+  pending invites)
+- Send invite endpoint: pre-check if usedSeats >= totalSeats → return 
+  409 with { error: "no_seats_available", message, seatsAvailable: 0, 
+  suggestion: "Purchase additional seats to invite more team members" }
+- Accept invite endpoint: no seat-count change (already reserved); 
+  just transition status
+- Cancel invite endpoint: removes the row → seat freed automatically 
+  via the new formula
+- Expire-invite logic: if pending invite past expiry, NOT counted in 
+  used seats (lazy check at query time, or background job — pick what 
+  the codebase already does)
+- UI updates:
+  · Seats widget: "X of Y used (A active, B pending)" with breakdown
+  · Invite User modal/button: disabled with tooltip if at capacity, 
+    or show "Add seats first" CTA linking to billing
+  · Frontend handles 409 gracefully (toast with the suggestion text)
+
+Migration: existing 4-pending-invite scenario in Grayson's account
+  · After ship, the seat count for his account jumps from 1 to 5
+  · 5 > 3 = over capacity
+  · Don't auto-cancel pending invites
+  · Don't auto-revoke acceptances
+  · Just display "5 of 3 used (over capacity)" — admin sees it, can 
+    cancel pending invites OR purchase more seats
+  · Grace state: invites can still be accepted (don't break inflight 
+    flows for invitees), but new invites blocked until back at/under 
+    capacity
+
+PHASE 3 — STOP AND OUTPUT:
+- File paths for everything that'd change (server + client)
+- Schema migration: yes/no? (probably no — same tables, different 
+  query logic)
+- Sizing estimate
+- Any concerns about the migration scenario (over-capacity accounts 
+  on day-one of this change)
+- Clear architectural decisions you need confirmed before building
+
+Standing by for review of diagnose before approving build.
