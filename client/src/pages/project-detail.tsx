@@ -84,6 +84,7 @@ import { LayoutTemplate } from "lucide-react";
 import { AddressAutocomplete } from "@/components/address-autocomplete";
 import type { Project, Media, Comment, Task, Checklist, ChecklistItem, Report, ChecklistTemplate, ChecklistTemplateItem, ReportTemplate, MediaAnnotation, AnnotationStroke } from "@shared/schema";
 import { AnnotationOverlay } from "@/lib/annotation-svg";
+import { UploadPhotosDialog } from "@/components/upload-photos-dialog";
 
 type ChecklistWithDetails = Checklist & {
   assignedTo?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null };
@@ -340,11 +341,10 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const [comparePhotos, setComparePhotos] = useState<[number | null, number | null]>([null, null]);
   const [showCompareDialog, setShowCompareDialog] = useState(false);
   const [photoSize, setPhotoSize] = useState<"small" | "medium" | "large">("medium");
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const isMobile = useIsMobile();
-  const [stagedFiles, setStagedFiles] = useState<File[]>([]);
-  const [stagedPreviews, setStagedPreviews] = useState<string[]>([]);
+  const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
+  const [pendingCameraFiles, setPendingCameraFiles] = useState<File[] | null>(null);
 
   const { data: projectAnnotations = [] } = useQuery<MediaAnnotation[]>({
     queryKey: ["/api/projects", id, "annotations"],
@@ -366,88 +366,6 @@ export default function ProjectDetailPage({ id }: { id: string }) {
 
   const { data: reportTemplates } = useQuery<ReportTemplate[]>({
     queryKey: ["/api/report-templates"],
-  });
-
-  const handleFilesSelected = useCallback((files: FileList | null) => {
-    if (!files || files.length === 0) return;
-    const newFiles = Array.from(files);
-    setStagedFiles((prev) => [...prev, ...newFiles]);
-    const newPreviews = newFiles.map((f) => URL.createObjectURL(f));
-    setStagedPreviews((prev) => [...prev, ...newPreviews]);
-  }, []);
-
-  const removeStagedFile = useCallback((index: number) => {
-    setStagedPreviews((prev) => {
-      URL.revokeObjectURL(prev[index]);
-      return prev.filter((_, i) => i !== index);
-    });
-    setStagedFiles((prev) => prev.filter((_, i) => i !== index));
-  }, []);
-
-  const clearStaged = useCallback(() => {
-    stagedPreviews.forEach((url) => URL.revokeObjectURL(url));
-    setStagedFiles([]);
-    setStagedPreviews([]);
-  }, [stagedPreviews]);
-
-  const uploadMedia = useMutation({
-    mutationFn: async (files: File[]) => {
-      const signRes = await fetch(`/api/uploads/sign`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          files: files.map((f) => ({
-            originalName: f.name,
-            mimeType: f.type || "application/octet-stream",
-            fileSize: f.size,
-          })),
-        }),
-      });
-      if (!signRes.ok) throw new Error(await signRes.text());
-      const signed: Array<{ key: string; uploadUrl: string; publicUrl: string }> = await signRes.json();
-
-      await Promise.all(
-        files.map(async (file, i) => {
-          const putRes = await fetch(signed[i].uploadUrl, {
-            method: "PUT",
-            headers: { "Content-Type": file.type || "application/octet-stream" },
-            body: file,
-          });
-          if (!putRes.ok) throw new Error(`Upload failed for ${file.name}`);
-        })
-      );
-
-      const finalizeRes = await fetch(`/api/projects/${id}/media`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          files: files.map((f, i) => ({
-            key: signed[i].key,
-            publicUrl: signed[i].publicUrl,
-            originalName: f.name,
-            mimeType: f.type || "application/octet-stream",
-          })),
-        }),
-      });
-      if (!finalizeRes.ok) throw new Error(await finalizeRes.text());
-      return finalizeRes.json();
-    },
-    onSuccess: () => {
-      clearStaged();
-      queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
-      queryClient.invalidateQueries({ queryKey: ["/api/projects"], exact: true });
-      toast({ title: "Uploaded", description: "Photos added to the project." });
-    },
-    onError: (error: Error) => {
-      if (isUnauthorizedError(error)) {
-        toast({ title: "Unauthorized", description: "Logging in again...", variant: "destructive" });
-        setTimeout(() => { window.location.href = "/login"; }, 500);
-        return;
-      }
-      toast({ title: "Upload failed", description: error.message, variant: "destructive" });
-    },
   });
 
   const setCoverPhoto = useMutation({
@@ -1296,25 +1214,17 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                     </Button>
                   )}
                   <input
-                    ref={fileInputRef}
-                    type="file"
-                    multiple
-                    accept="image/*,video/*"
-                    className="hidden"
-                    onChange={(e) => {
-                      handleFilesSelected(e.target.files);
-                      e.target.value = "";
-                    }}
-                    data-testid="input-file-upload"
-                  />
-                  <input
                     ref={cameraInputRef}
                     type="file"
                     accept="image/*"
                     capture="environment"
                     className="hidden"
                     onChange={(e) => {
-                      handleFilesSelected(e.target.files);
+                      const files = e.target.files;
+                      if (files && files.length > 0) {
+                        setPendingCameraFiles(Array.from(files));
+                        setUploadDialogOpen(true);
+                      }
                       e.target.value = "";
                     }}
                     data-testid="input-camera-capture"
@@ -1331,64 +1241,27 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                   )}
                   <Button
                     variant="outline"
-                    onClick={() => fileInputRef.current?.click()}
+                    onClick={() => setUploadDialogOpen(true)}
                     data-testid="button-add-photos"
                   >
                     <Plus className="h-4 w-4 mr-2" />
                     {isMobile ? "Gallery" : "Add Photos"}
                   </Button>
-                  {stagedFiles.length > 0 && (
-                    <Button
-                      onClick={() => uploadMedia.mutate(stagedFiles)}
-                      disabled={uploadMedia.isPending}
-                      data-testid="button-upload-photos"
-                    >
-                      <Upload className="h-4 w-4 mr-2" />
-                      {uploadMedia.isPending ? "Uploading..." : `Upload ${stagedFiles.length} Photo${stagedFiles.length !== 1 ? "s" : ""}`}
-                    </Button>
-                  )}
                 </div>
               </div>
 
-              {stagedFiles.length > 0 && (
-                <Card className="p-4" data-testid="staged-photos-queue">
-                  <div className="flex items-center justify-between mb-3">
-                    <p className="text-sm font-semibold">{stagedFiles.length} photo{stagedFiles.length !== 1 ? "s" : ""} ready to upload</p>
-                    <Button variant="ghost" size="sm" onClick={clearStaged} data-testid="button-clear-staged">
-                      <X className="h-3.5 w-3.5 mr-1" />
-                      Clear all
-                    </Button>
-                  </div>
-                  <div className="flex gap-2 overflow-x-auto pb-2">
-                    {stagedPreviews.map((preview, i) => (
-                      <div key={i} className="relative shrink-0 group">
-                        <img
-                          src={preview}
-                          alt={stagedFiles[i]?.name || "Photo"}
-                          className="h-20 w-20 object-cover rounded-md border"
-                        />
-                        <button
-                          onClick={() => removeStagedFile(i)}
-                          className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                          data-testid={`button-remove-staged-${i}`}
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </div>
-                    ))}
-                    <button
-                      onClick={() => fileInputRef.current?.click()}
-                      className="h-20 w-20 shrink-0 rounded-md border-2 border-dashed border-muted-foreground/30 flex flex-col items-center justify-center text-muted-foreground hover:border-primary hover:text-primary transition-colors"
-                      data-testid="button-add-more-photos"
-                    >
-                      <Plus className="h-5 w-5" />
-                      <span className="text-[10px] mt-0.5">Add more</span>
-                    </button>
-                  </div>
-                </Card>
-              )}
+              <UploadPhotosDialog
+                projectId={id!}
+                open={uploadDialogOpen}
+                onOpenChange={(o) => {
+                  setUploadDialogOpen(o);
+                  if (!o) setPendingCameraFiles(null);
+                }}
+                initialFiles={pendingCameraFiles}
+                onInitialFilesConsumed={() => setPendingCameraFiles(null)}
+              />
 
-              {projectMedia.length === 0 && stagedFiles.length === 0 ? (
+              {projectMedia.length === 0 ? (
                 <Card className="p-12">
                   <div className="text-center space-y-3">
                     <div className="flex h-12 w-12 items-center justify-center rounded-md bg-muted mx-auto">

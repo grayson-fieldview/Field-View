@@ -14,7 +14,7 @@ Field View employs a modern web application architecture with a clear separation
 - **Technology Stack**: React 18 with TypeScript, styled using Tailwind CSS and shadcn/ui components. `wouter` is used for client-side routing, and `TanStack React Query v5` for state management.
 - **UI/UX**: Features an enterprise-grade design inspired by Procore, utilizing an orange primary color (#F09000), green accents (#267D32), charcoal sidebar (#1E1E1E), and warm cream backgrounds (#F0EDEA). Fonts are Inter (sans-serif) and DM Serif Display (serif for headings).
 - **Key Features**:
-    - **Photo Management**: Advanced annotations, batch uploads, mobile camera support, inline description editing, and account-defined tag management.
+    - **Photo Management**: Advanced annotations, batch uploads via dashed-drop-zone modal (`UploadPhotosDialog`, click-to-pick or drag-drop, per-file status icons, max 20/batch, 50MB images / 500MB video), mobile camera support, inline description editing, and account-defined tag management.
     - **Project Management**: Creation and management of projects with status, address, color, cover photos, and project-specific tags. Includes task management, checklist management with templates, and report generation.
     - **Collaboration**: Supports user roles (Admin, Manager, Standard, Restricted), user invitations, and project assignments.
     - **Analytics**: A comprehensive dashboard with KPIs, various charts (photos by user, over time, by project, task status), a mini-map, activity feed, and time period filtering.
