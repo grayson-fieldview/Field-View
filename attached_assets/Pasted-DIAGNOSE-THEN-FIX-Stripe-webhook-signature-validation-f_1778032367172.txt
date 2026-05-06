@@ -1,0 +1,80 @@
+DIAGNOSE-THEN-FIX: Stripe webhook signature validation failing on Vercel.
+
+CONTEXT: POST /api/stripe/webhook returns 400 with error "No signatures 
+found matching the expected signature for payload." Endpoint URL is 
+correct (app.field-view.com), STRIPE_WEBHOOK_SECRET matches the Stripe 
+endpoint's signing secret, deployment is production (verified in Vercel 
+logs: Deployment ID dpl_9KXoWkK7F3tq4W5zeQf9TT7..., environment: 
+production, branch: main).
+
+Root cause is almost certainly that the webhook handler is receiving a 
+PARSED body (JSON object) instead of the RAW body bytes that Stripe 
+signed. Vercel/@vercel/node auto-parses JSON bodies by default unless 
+explicitly told not to.
+
+PHASE 1 — INVESTIGATE:
+
+1. WEBHOOK ROUTE WIRING
+   - Find POST /api/stripe/webhook handler in server/index.ts (or wherever)
+   - Show how the route is registered:
+     a) What middleware runs before the handler?
+     b) Is there an express.raw() or bodyParser.raw() specifically for 
+        this route?
+     c) Is express.json() / bodyParser.json() running globally before 
+        this route?
+
+2. RAW BODY EXTRACTION
+   - Inside the handler, how is the body accessed?
+     a) req.body as Buffer (correct for raw)
+     b) req.body as parsed JSON object (broken — body has been parsed)
+     c) req.rawBody (some frameworks expose this separately)
+   - Show the exact line that calls stripe.webhooks.constructEvent — 
+     what's the first argument (the payload)?
+
+3. VERCEL CONFIG
+   - api/index.ts (or similar entry point): is there any vercel.json, 
+     export config, or runtime config that affects body parsing for 
+     /api/stripe/webhook specifically?
+   - Does the project use Next.js, plain @vercel/node, or Express on 
+     Vercel? Read package.json + vercel.json + relevant entry files.
+
+PHASE 2 — FIX:
+
+Standard fix pattern for Express on Vercel:
+1. Mount express.raw({ type: 'application/json' }) BEFORE express.json() 
+   for the webhook route specifically:
+   
+   app.post(
+     '/api/stripe/webhook',
+     express.raw({ type: 'application/json' }),
+     webhookHandler
+   );
+   
+   This must be registered BEFORE app.use(express.json()) OR the 
+   express.json() middleware must skip the webhook path (e.g. via 
+   conditional skip).
+
+2. In the handler, ensure constructEvent uses req.body directly (which 
+   will now be a Buffer):
+   
+   const sig = req.headers['stripe-signature'];
+   const event = stripe.webhooks.constructEvent(
+     req.body,      // raw Buffer, not parsed
+     sig,
+     process.env.STRIPE_WEBHOOK_SECRET
+   );
+
+3. If Vercel's @vercel/node is auto-parsing despite Express middleware, 
+   add a vercel.json route config to disable body parsing for this path 
+   specifically, or use req.body as a Buffer reading from the raw stream.
+
+VERIFY:
+- Typecheck baseline (33/33, 0 new)
+- Mentally trace: Stripe sends webhook → Vercel routes to Express → 
+  express.raw middleware captures raw Buffer → handler passes Buffer 
+  to constructEvent → signature validates → handler proceeds normally
+- Other routes (/api/projects, /api/users, etc.) still get parsed 
+  JSON bodies — verify nothing else regresses
+
+OUTPUT: file paths, current code, the exact fix diff, any concerns. 
+NOT committed, NOT pushed. Standing by.
