@@ -36,6 +36,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { ToastAction } from "@/components/ui/toast";
 import { Users, Search, Mail, Calendar, Shield, UserPlus, X, Clock, Loader2, Trash2, Copy, Check, DollarSign } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
@@ -47,6 +48,8 @@ type SeatStatus = {
   used: number;
   total: number;
   available: number;
+  activeUsers: number;
+  pendingInvites: number;
   overCapacity: boolean;
   billingCycle: "monthly" | "annual" | null;
   subscriptionStatus: string | null;
@@ -54,6 +57,17 @@ type SeatStatus = {
   ownerId: string | null;
   trialMaxSeats: number | null;
 };
+
+// apiRequest throws Error("<status>: <body>"). Try to recover the JSON payload.
+function parseApiErrorBody(error: Error): any | null {
+  const m = error.message.match(/^\d+:\s*([\s\S]*)$/);
+  if (!m) return null;
+  try {
+    return JSON.parse(m[1]);
+  } catch {
+    return null;
+  }
+}
 
 type SeatAddConfirmationDialogProps = {
   open: boolean;
@@ -215,6 +229,26 @@ export default function TeamPage() {
       toast({ title: "Invitation sent", description: `Invite link created for ${data.email}` });
     },
     onError: (error: Error) => {
+      const body = parseApiErrorBody(error);
+      if (body?.error === "no_seats_available" || body?.error === "trial_cap_reached") {
+        toast({
+          title: "At capacity",
+          description: body.suggestion || body.message || "Cannot send invitation",
+          variant: "destructive",
+          action: (
+            <ToastAction
+              altText="Open billing settings"
+              onClick={() => setLocation("/settings")}
+              data-testid="toast-action-add-seats"
+            >
+              Add seats
+            </ToastAction>
+          ),
+        });
+        queryClient.invalidateQueries({ queryKey: ["/api/account/seats"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/invitations"] });
+        return;
+      }
       toast({ title: "Failed to send invitation", description: error.message, variant: "destructive" });
     },
   });
@@ -288,6 +322,7 @@ export default function TeamPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/invitations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/account/seats"] });
       toast({ title: "Invitation cancelled" });
     },
   });
@@ -570,6 +605,15 @@ export default function TeamPage() {
                       </div>
                       <div className="flex items-center gap-2 mb-1">
                         <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 ${roleInfo.color}`}>{roleInfo.label}</Badge>
+                        {inv.expiresAt && new Date(inv.expiresAt) < new Date() && (
+                          <Badge
+                            variant="outline"
+                            className="text-[10px] px-1.5 py-0 text-muted-foreground border-muted-foreground/30"
+                            data-testid={`badge-invitation-expired-${inv.id}`}
+                          >
+                            Expired
+                          </Badge>
+                        )}
                       </div>
                       <p className="text-xs text-muted-foreground">
                         Invited by {inv.invitedByFirst} {inv.invitedByLast}

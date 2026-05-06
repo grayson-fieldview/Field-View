@@ -1,0 +1,45 @@
+APPROVED with all defaults. Build the design from your diagnose.
+
+ADDITIONS:
+1. Include the soft-deleted-users fix (isNull(users.deletedAt) in the 
+   new computeSeatUsage helper).
+2. Add the optional "Expired" badge on pending invitation cards in 
+   team.tsx — visible when new Date(inv.expiresAt) < new Date(). Small 
+   muted badge, no button-prominence, just a status cue.
+3. Frontend pre-check on the seat-downgrade path in settings/billing — 
+   if desiredCount < used, show the same error inline before the 
+   server returns 400 (matches the existing seat-add modal pattern). 
+   If implementing this is more than ~10 LoC, skip and rely on server 
+   validation alone — flag it as TECH_DEBT.
+
+PRESERVE:
+- All existing testids
+- POST /api/register and OAuth accept flows untouched (per spec — 
+  don't break invitees mid-flow)
+- The auto-purchase-seat-on-invite dialog (SeatAddConfirmationDialog) 
+  flow when admin clicks Invite at capacity — existing UX, just make 
+  sure it still works after the formula change
+
+NEW UI COPY:
+- Seats widget when over capacity: 
+  "{used} of {total} used ({active} active, {pending} pending)" 
+  with red/amber "Over capacity by {used - total}" badge
+- Tooltip on the pending number: "Pending invites reserve a seat 
+  until accepted, declined, expired, or cancelled"
+- 409 toast on send: use the suggestion field from the response body 
+  with an "Add seats" CTA linking to billing settings
+
+VERIFY:
+- Typecheck baseline (33/33, 0 new)
+- Manually trace: 
+  a) GET /api/account/seats — returns {used, total, available, 
+     activeUsers, pendingInvites, overCapacity}
+  b) POST /api/invitations at capacity — returns 409 with proper 
+     payload shape
+  c) DELETE /api/invitations/:id — seat freed, GET re-reflects
+  d) POST /api/account/seats downgrade below used — 400 with descriptive 
+     message
+  e) Settings page seats widget renders new breakdown
+  f) Team page invite button respects new capacity check on 409
+
+OUTPUT: diff stat, files touched, final diff. NOT committed, NOT pushed.

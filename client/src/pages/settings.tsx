@@ -10,6 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useTheme } from "@/components/theme-provider";
@@ -282,6 +283,8 @@ type SeatUsage = {
   used: number;
   total: number;
   available: number;
+  activeUsers: number;
+  pendingInvites: number;
   overCapacity: boolean;
 };
 
@@ -309,10 +312,28 @@ function SeatCountWidget() {
         <div className="flex items-center gap-3 flex-wrap">
           <p className="text-sm font-medium" data-testid="text-seats-usage">
             {data.used} of {data.total} seats used
+            <span className="text-muted-foreground font-normal">
+              {" "}
+              ({data.activeUsers} active,{" "}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    className="underline decoration-dotted cursor-help"
+                    data-testid="text-seats-pending"
+                  >
+                    {data.pendingInvites} pending
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Pending invites reserve a seat until accepted, declined, expired, or cancelled
+                </TooltipContent>
+              </Tooltip>
+              )
+            </span>
             {data.available > 0 && (
               <span className="text-muted-foreground font-normal">
                 {" "}
-                - {data.available} available
+                — {data.available} available
               </span>
             )}
           </p>

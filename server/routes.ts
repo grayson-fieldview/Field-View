@@ -10,6 +10,7 @@ import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClie
 import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertReportSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertReportTemplateSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, reports, projectAssignments, timeEntries, pendingGeofenceExits } from "@shared/schema";
 import { executeAutoClockOut } from "./lib/timesheets";
 import { users, invitations, accounts } from "@shared/models/auth";
+import { computeSeatUsage } from "./lib/seats";
 import { db } from "./db";
 import { eq, sql, and, or, inArray, count, isNull, desc } from "drizzle-orm";
 import { sanitizeUserForViewer, sanitizeTimeEntryForViewer, isManagerRole } from "./lib/userVisibility";
@@ -1120,11 +1121,8 @@ export async function registerRoutes(
       }
       const row = accountRows[0];
       const total = row.seatCount ?? 3;
-      const usedRows = await db
-        .select({ value: count() })
-        .from(users)
-        .where(eq(users.accountId, accountId));
-      const used = Number(usedRows[0]?.value ?? 0);
+      const usage = await computeSeatUsage(db, accountId);
+      const used = usage.used;
       const available = Math.max(0, total - used);
       const overCapacity = used > total;
 
@@ -1139,6 +1137,8 @@ export async function registerRoutes(
         used,
         total,
         available,
+        activeUsers: usage.activeUsers,
+        pendingInvites: usage.pendingInvites,
         overCapacity,
         billingCycle: row.billingCycle ?? null,
         subscriptionStatus: row.subscriptionStatus ?? null,
@@ -1190,14 +1190,10 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Set up billing before changing seat count." });
       }
 
-      const userCountRows = await db
-        .select({ value: count() })
-        .from(users)
-        .where(eq(users.accountId, accountId));
-      const activeUserCount = Number(userCountRows[0]?.value ?? 0);
-      if (desiredCount < activeUserCount) {
+      const usage = await computeSeatUsage(db, accountId);
+      if (desiredCount < usage.used) {
         return res.status(400).json({
-          message: `Cannot reduce to ${desiredCount} seats — account has ${activeUserCount} active users.`,
+          message: `Cannot reduce to ${desiredCount} seats — account has ${usage.activeUsers} active user(s) and ${usage.pendingInvites} pending invite(s). Cancel pending invites first.`,
         });
       }
 
@@ -1556,24 +1552,100 @@ export async function registerRoutes(
       if (existingUser) {
         return res.status(409).json({ message: "A user with this email already exists" });
       }
-      const [existingInvite] = await db.select().from(invitations).where(
-        and(eq(invitations.email, email.toLowerCase()), eq(invitations.accountId, currentUser.accountId), eq(invitations.status, "pending"))
-      );
-      if (existingInvite) {
-        return res.status(409).json({ message: "An invitation has already been sent to this email" });
-      }
+
       const token = crypto.randomBytes(24).toString("base64url");
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-      const [invitation] = await db.insert(invitations).values({
-        accountId: currentUser.accountId,
-        email: email.toLowerCase(),
-        firstName: trimmedFirst,
-        lastName: trimmedLast,
-        role: role || "standard",
-        token,
-        invitedById: currentUser.id,
-        expiresAt,
-      }).returning();
+
+      // Reserve a seat atomically: lock the account row, recompute usage under
+      // the lock, then dup-check + insert. Prevents two concurrent sends from
+      // both passing the capacity check when only one slot is available.
+      type TxResult =
+        | { kind: "ok"; invitation: typeof invitations.$inferSelect }
+        | { kind: "dup_invite" }
+        | { kind: "trial_cap"; trialMaxSeats: number; used: number }
+        | {
+            kind: "no_seats";
+            used: number;
+            total: number;
+            activeUsers: number;
+            pendingInvites: number;
+          };
+
+      const result = await db.transaction(async (tx): Promise<TxResult> => {
+        const [acct] = await tx
+          .select({
+            seatCount: accounts.seatCount,
+            subscriptionStatus: accounts.subscriptionStatus,
+          })
+          .from(accounts)
+          .where(eq(accounts.id, currentUser.accountId))
+          .for("update")
+          .limit(1);
+        const total = acct?.seatCount ?? 3;
+        const isTrial =
+          acct?.subscriptionStatus === "trialing" ||
+          acct?.subscriptionStatus === "trial";
+        const trialMaxSeats = isTrial ? 10 : null;
+
+        const usage = await computeSeatUsage(tx, currentUser.accountId);
+
+        if (trialMaxSeats != null && usage.used >= trialMaxSeats) {
+          return { kind: "trial_cap", trialMaxSeats, used: usage.used };
+        }
+        if (usage.used >= total) {
+          return {
+            kind: "no_seats",
+            used: usage.used,
+            total,
+            activeUsers: usage.activeUsers,
+            pendingInvites: usage.pendingInvites,
+          };
+        }
+
+        const [existingInvite] = await tx.select().from(invitations).where(
+          and(
+            eq(invitations.email, email.toLowerCase()),
+            eq(invitations.accountId, currentUser.accountId),
+            eq(invitations.status, "pending"),
+          ),
+        );
+        if (existingInvite) return { kind: "dup_invite" };
+
+        const [created] = await tx.insert(invitations).values({
+          accountId: currentUser.accountId,
+          email: email.toLowerCase(),
+          firstName: trimmedFirst,
+          lastName: trimmedLast,
+          role: role || "standard",
+          token,
+          invitedById: currentUser.id,
+          expiresAt,
+        }).returning();
+        return { kind: "ok", invitation: created };
+      });
+
+      if (result.kind === "dup_invite") {
+        return res.status(409).json({ message: "An invitation has already been sent to this email" });
+      }
+      if (result.kind === "trial_cap") {
+        return res.status(409).json({
+          error: "trial_cap_reached",
+          message: `Trial accounts are limited to ${result.trialMaxSeats} seats. Upgrade to add more.`,
+          seatsAvailable: 0,
+          suggestion: "Upgrade your plan to invite more team members",
+        });
+      }
+      if (result.kind === "no_seats") {
+        return res.status(409).json({
+          error: "no_seats_available",
+          message: `Account is at capacity (${result.used} of ${result.total} seats used).`,
+          seatsAvailable: 0,
+          activeUsers: result.activeUsers,
+          pendingInvites: result.pendingInvites,
+          suggestion: "Purchase additional seats to invite more team members",
+        });
+      }
+      const invitation = result.invitation;
 
       const baseUrl = `${req.protocol}://${req.get("host")}`;
       const inviteLink = `${baseUrl}/register?token=${token}`;
