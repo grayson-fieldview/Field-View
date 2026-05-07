@@ -119,43 +119,44 @@ export default function RegisterPage() {
     <div className="min-h-screen flex bg-white dark:bg-gray-950">
       {/* Left brand panel — desktop only */}
       <div
-        className="hidden lg:flex lg:w-2/5 flex-col justify-between p-12 bg-[#F09000]/50"
+        className="hidden lg:flex lg:w-2/5 flex-col p-12 bg-[#F09000]/50"
         data-testid="panel-brand"
       >
-        <div>
-          <div className="flex items-center gap-2" data-testid="brand-logo-row">
-            <img
-              src={faviconImg}
-              alt="Field View"
-              className="h-10 w-10 rounded-md"
-              data-testid="img-brand-logo"
-            />
-            <span className="text-2xl font-bold tracking-tight text-gray-900">
-              Field View
-            </span>
-          </div>
+        <div className="flex items-center gap-2" data-testid="brand-logo-row">
+          <img
+            src={faviconImg}
+            alt="Field View"
+            className="h-10 w-10 rounded-md"
+            data-testid="img-brand-logo"
+          />
+          <span className="text-2xl font-bold tracking-tight text-gray-900">
+            Field View
+          </span>
+        </div>
+
+        <div className="mt-12 flex flex-col gap-10">
           <h1
-            className="mt-10 text-4xl lg:text-5xl font-bold leading-tight text-gray-900"
+            className="text-4xl lg:text-5xl font-bold leading-tight text-gray-900"
             data-testid="text-brand-tagline"
           >
             Trusted by hundreds of contractors across the country.
           </h1>
-        </div>
 
-        <figure
-          className="rotate-1 bg-zinc-900 text-white rounded-2xl shadow-2xl p-5"
-          data-testid="card-testimonial"
-        >
-          <blockquote className="text-sm leading-relaxed">
-            "FieldView has helped our team stay organized across multiple
-            projects, automatically clocks in all of our employees when they
-            get to the job, and has been a big help with the growth of our
-            company."
-          </blockquote>
-          <figcaption className="mt-3 text-xs font-medium text-white/80">
-            — Luke Ousdigian, Palm Beach Painters
-          </figcaption>
-        </figure>
+          <figure
+            className="bg-zinc-900 text-white rounded-2xl shadow-2xl shadow-black/40 p-8"
+            data-testid="card-testimonial"
+          >
+            <blockquote className="text-lg leading-relaxed">
+              "FieldView has helped our team stay organized across multiple
+              projects, automatically clocks in all of our employees when they
+              get to the job, and has been a big help with the growth of our
+              company."
+            </blockquote>
+            <figcaption className="mt-4 text-base font-medium text-white/80">
+              — Luke Ousdigian, Palm Beach Painters
+            </figcaption>
+          </figure>
+        </div>
       </div>
 
       {/* Right form panel */}
