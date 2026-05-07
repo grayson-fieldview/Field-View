@@ -1,0 +1,46 @@
+Remove "Continue with Google" buttons from the web register + login pages. Backend OAuth routes stay intact (dead code, harmless, can clean up later if desired). User research shows zero existing OAuth-only users (verified via SQL) so no migration needed.
+
+SURVEY FIRST. Then apply. Do not start making changes until you've surveyed everything.
+
+SURVEY PHASE:
+
+1. Read client/src/pages/register.tsx — locate:
+   - The "Continue with Google" button JSX block
+   - The "OR" divider JSX between Google and the email form
+   - Any onClick handler / function that triggers Google OAuth (likely redirects to /api/auth/google or similar)
+   - Any imports tied to Google OAuth (icons, helper functions)
+
+2. Find the login page file. Likely at client/src/pages/login.tsx or sign-in.tsx — search if needed. Once found, locate the same four elements (Google button, OR divider, click handler, imports).
+
+3. Search client/src/ for ANY other "Continue with Google" string OR Google OAuth UI surface. Specifically check:
+   - Account settings / profile pages (account linking)
+   - Any settings/security tab where users can link a Google account
+   - Anywhere else "google" appears in a UI context
+   
+   Report what you find.
+
+4. Identify imports that will become unused after the button removals (Google icon, OAuth helpers, etc.).
+
+After the survey, briefly summarize findings and then proceed to changes.
+
+CHANGES PHASE — apply ONLY the following:
+
+For each Google OAuth UI surface found:
+- DELETE the "Continue with Google" button JSX
+- DELETE the "OR" divider JSX (only if it exists solely to separate Google from the email form — preserve any divider that has multiple purposes)
+- DELETE any onClick handler / function used solely by the Google button (function definition + any related state)
+- REMOVE imports that became unused as a result
+
+DO NOT:
+- Modify backend routes (server/**) — leave all OAuth-related backend code intact
+- Modify anything beyond the Google OAuth UI removal scope
+- Add new components, refactor, or "improve" surrounding code
+- Run tests or commands
+- Commit changes — Grayson will review the diff first
+
+OUTPUT:
+- "Survey findings:" what files contain Google OAuth UI + which specific elements
+- Full diffs for each file modified
+- List of imports cleaned up
+- Explicit confirmation that backend routes (server/**) were NOT touched
+- Explicit confirmation that no other UI was modified beyond Google OAuth removal

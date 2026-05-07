@@ -7,7 +7,6 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { Eye, EyeOff, Loader2, AlertTriangle } from "lucide-react";
-import { SiGoogle } from "react-icons/si";
 import { Mail } from "lucide-react";
 import faviconImg from "@assets/Favicon-01_1772067008525.png";
 
@@ -17,23 +16,10 @@ export function SocialAuthButtons({ inviteToken }: { inviteToken?: string | null
   const { data: providers } = useQuery<Providers>({
     queryKey: ["/api/auth/providers"],
   });
-  if (!providers || (!providers.google && !providers.microsoft)) return null;
+  if (!providers || !providers.microsoft) return null;
   const qs = inviteToken ? `?invite=${encodeURIComponent(inviteToken)}` : "";
   return (
     <div className="space-y-2">
-      {providers.google && (
-        <Button
-          asChild
-          variant="outline"
-          className="w-full"
-          data-testid="button-google-auth"
-        >
-          <a href={`/api/auth/google${qs}`}>
-            <SiGoogle className="mr-2 h-4 w-4" />
-            Continue with Google
-          </a>
-        </Button>
-      )}
       {providers.microsoft && (
         <Button
           asChild
