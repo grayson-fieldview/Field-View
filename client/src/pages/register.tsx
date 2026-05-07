@@ -119,48 +119,72 @@ export default function RegisterPage() {
     <div className="min-h-screen flex bg-white dark:bg-gray-950">
       {/* Left brand panel — desktop only */}
       <div
-        className="hidden lg:flex lg:w-1/2 flex-col justify-between p-12 bg-[#F09000] text-white"
+        className="hidden lg:flex lg:w-1/3 flex-col justify-between p-12 bg-[#F09000]/50"
         data-testid="panel-brand"
       >
         <div>
-          <img
-            src={faviconImg}
-            alt="Field View"
-            className="h-14 w-14"
-            style={{ filter: "brightness(0) invert(1)" }}
-            data-testid="img-brand-logo"
-          />
+          <div className="flex items-center gap-2" data-testid="brand-logo-row">
+            <img
+              src={faviconImg}
+              alt="Field View"
+              className="h-10 w-10 rounded-md"
+              data-testid="img-brand-logo"
+            />
+            <span className="text-2xl font-bold tracking-tight text-gray-900">
+              Field View
+            </span>
+          </div>
           <h1
-            className="mt-8 text-3xl font-medium leading-snug max-w-md"
+            className="mt-10 text-4xl lg:text-5xl font-bold leading-tight text-gray-900"
             data-testid="text-brand-tagline"
           >
             Trusted by hundreds of contractors across the country.
           </h1>
         </div>
-        <figure
-          className="bg-white/10 backdrop-blur-sm rounded-xl p-6 max-w-md"
-          data-testid="card-testimonial"
-        >
-          <blockquote
-            className="text-base leading-relaxed text-white"
-            data-testid="text-testimonial-quote"
+
+        {/* Polaroid-pile testimonials */}
+        <div className="relative" data-testid="testimonial-stack">
+          <figure
+            className="relative z-10 rotate-2 ml-2 bg-[#C77000] text-white rounded-2xl shadow-2xl p-5"
+            data-testid="card-testimonial-1"
           >
-            "FieldView has helped our team stay organized across multiple
-            projects, automatically clocks in all of our employees when they
-            get to the job, and has been a big help with the growth of our
-            company."
-          </blockquote>
-          <figcaption
-            className="mt-4 text-sm font-medium text-white/90"
-            data-testid="text-testimonial-attribution"
+            <blockquote className="text-sm leading-relaxed">
+              "FieldView has helped our team stay organized across multiple
+              projects, automatically clocks in all of our employees when they
+              get to the job, and has been a big help with the growth of our
+              company."
+            </blockquote>
+            <figcaption className="mt-3 text-xs font-medium text-white/80">
+              — Luke Ousdigian, Palm Beach Painters
+            </figcaption>
+          </figure>
+          <figure
+            className="relative z-20 -rotate-1 -mt-4 mr-2 bg-[#C77000] text-white rounded-2xl shadow-2xl p-5"
+            data-testid="card-testimonial-2"
           >
-            — Luke Ousdigian, Palm Beach Painters
-          </figcaption>
-        </figure>
+            <blockquote className="text-sm leading-relaxed">
+              "[REPLACE BEFORE PUSH — real customer testimonial #2]"
+            </blockquote>
+            <figcaption className="mt-3 text-xs font-medium text-white/80">
+              — [Customer Name, Company]
+            </figcaption>
+          </figure>
+          <figure
+            className="relative z-30 rotate-1 -mt-3 ml-4 bg-[#C77000] text-white rounded-2xl shadow-2xl p-5"
+            data-testid="card-testimonial-3"
+          >
+            <blockquote className="text-sm leading-relaxed">
+              "[REPLACE BEFORE PUSH — real customer testimonial #3]"
+            </blockquote>
+            <figcaption className="mt-3 text-xs font-medium text-white/80">
+              — [Customer Name, Company]
+            </figcaption>
+          </figure>
+        </div>
       </div>
 
       {/* Right form panel */}
-      <div className="flex flex-col flex-1 items-center justify-center px-4 py-8 sm:px-6 lg:px-12">
+      <div className="flex flex-col flex-1 lg:w-2/3 items-center justify-center px-4 py-8 sm:px-6 lg:px-12">
         <div className="w-full max-w-md">
           <div className="text-center space-y-4 mb-6">
             <div className="flex items-center justify-center gap-2 lg:hidden">

@@ -1,0 +1,79 @@
+Refine client/src/pages/register.tsx — building on the prior Phase 3 work, the brand panel needs softening, marketing-site logo consistency, narrower width, and a more dynamic testimonial layout.
+
+LEFT PANEL — WIDTH
+Change from 50/50 to 1/3 + 2/3 split:
+- Left panel: lg:w-1/3 (was lg:w-1/2)
+- Right panel: lg:w-2/3 (was lg:w-1/2)
+The form container max-w-md still centers; just gets more breathing room around it.
+
+LEFT PANEL — BACKGROUND
+Change from solid orange to 50% transparent orange:
+- Replace bg-[#F09000] with bg-[#F09000]/50
+- The white outer wrapper showing through should produce a soft orange tint rather than a flat orange wall.
+
+LEFT PANEL — LOGO
+DROP the `filter: brightness(0) invert(1)` — it's flattening Favicon-01 to a white square with no visible detail. That's the "logo not showing" issue.
+
+Match the marketing site header (visible at field-view.com / the landing page in this same repo): orange map-pin icon + "Field View" wordmark in dark text, side-by-side.
+
+Search the codebase for an existing logo treatment to reuse before reinventing:
+- Look for Header / Nav / MarketingHeader / SiteHeader components in client/src/components/
+- Check client/src/pages/ for landing.tsx, home.tsx, or marketing pages already rendering the logo
+- Grep attached_assets/ for files matching "logo", "wordmark", "field-view", "fieldview"
+
+If you find an existing Logo component or asset combination already used elsewhere in the codebase, REUSE it exactly. If nothing exists, render Favicon-01 at original colors (no filter) at h-10/w-10 next to a "Field View" text wordmark — text-2xl, font-bold, text-gray-900 — in a horizontal flex row.
+
+LEFT PANEL — TAGLINE
+- Bump font size: text-5xl on lg, text-4xl on md, font-bold
+- Color: text-gray-900 (dark, NOT white — needs to read against the now-soft orange tint)
+- Tighter line-height (leading-tight) since it's display-sized
+- Copy unchanged: "Trusted by hundreds of contractors across the country."
+
+LEFT PANEL — TESTIMONIAL CARDS
+Scale from 1 card to 3, with a tilted/overlapped polaroid-pile feel.
+
+Container: relative, positioned in the bottom of the left panel.
+
+Card styling (all 3 cards):
+- Background: dark orange — try bg-[#C77000] or bg-orange-700 — pick whichever reads richest against the 50% transparent backdrop
+- Text: text-white for quote, text-white/80 for attribution
+- Shadow: shadow-2xl for the "floating" effect
+- Rounded corners: rounded-2xl
+- Padding: p-5 (drop to p-4 if cards feel cramped at the narrower 1/3 width)
+
+Tilt + overlap:
+- Card 1: rotate-2, ml-2  (~2deg right tilt, slight left indent)
+- Card 2: -rotate-1, -mt-4, mr-2  (~1deg left tilt, overlaps top of card 1 by ~16px, slight right indent)
+- Card 3: rotate-1, -mt-3, ml-4  (~1deg right tilt, overlaps top of card 2)
+- Set z-indexes so the stacking order feels natural — agent's call on whether top or bottom card sits frontmost
+- Keep rotations subtle (max 3deg) — past that it looks gimmicky
+
+If the 1/3 width makes cards too tight to read, reduce rotations and overlap and drop padding to p-4. Readability beats visual polish.
+
+CARD CONTENT:
+- Card 1 (REAL — keep):
+  Quote: "FieldView has helped our team stay organized across multiple projects, automatically clocks in all of our employees when they get to the job, and has been a big help with the growth of our company."
+  Attribution: "— Luke Ousdigian, Palm Beach Painters"
+
+- Card 2 (PLACEHOLDER — must be replaced before push):
+  Quote: "[REPLACE BEFORE PUSH — real customer testimonial #2]"
+  Attribution: "— [Customer Name, Company]"
+
+- Card 3 (PLACEHOLDER — must be replaced before push):
+  Quote: "[REPLACE BEFORE PUSH — real customer testimonial #3]"
+  Attribution: "— [Customer Name, Company]"
+
+DO NOT TOUCH
+- The right panel (form, header, button, trial-includes list, sign-in footer) — leave it identical
+- Mobile breakpoint: left panel stays `hidden lg:flex`
+- Form submission logic, recaptcha, error handling — unchanged
+
+VERIFICATION
+- Left panel ~33% of viewport at lg+; right panel ~67%
+- Background visibly softer (light orange tint, not flat)
+- Logo shows the actual brand icon + "Field View" wordmark, NOT a white square
+- Tagline noticeably larger and bolder than before
+- 3 testimonial cards visibly tilted in alternating directions and slightly overlapping, dark orange with shadow
+- Mobile unchanged: single-column form, no left panel
+
+Show me the diff before approving. Don't push.
