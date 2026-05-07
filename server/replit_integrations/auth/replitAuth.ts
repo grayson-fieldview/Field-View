@@ -487,18 +487,24 @@ export async function setupAuth(app: Express) {
         sendSlackNotification(`🎉 New signup: ${user.email} — ${name}`).catch(() => {});
       }
 
-      const verificationToken = crypto.randomBytes(32).toString("hex");
-      await db.insert(emailVerificationTokens).values({
-        userId: user.id,
-        token: verificationToken,
-        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
-      });
+      if (inviteToken) {
+        // Invitees skip /welcome (Step 2) and need verification immediately.
+        const verificationToken = crypto.randomBytes(32).toString("hex");
+        await db.insert(emailVerificationTokens).values({
+          userId: user.id,
+          token: verificationToken,
+          expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+        });
 
-      try {
-        await sendEmailVerificationEmail(user.email!, verificationToken, user.firstName);
-      } catch (emailErr) {
-        console.error("[register] verification email send failed:", emailErr);
+        try {
+          await sendEmailVerificationEmail(user.email!, verificationToken, user.firstName);
+        } catch (emailErr) {
+          console.error("[register] verification email send failed:", emailErr);
+        }
       }
+      // Trial signups: verification email moved to PATCH /api/auth/me on the
+      // profileCompletedAt null→now() transition (Step 2 completion). Sending
+      // here would pull the user to their inbox before they finish onboarding.
 
       return res.status(201).json({
         message: "Please check your email to verify your account.",

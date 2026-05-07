@@ -1,12 +1,14 @@
 import type { Express } from "express";
+import crypto from "crypto";
 import { authStorage } from "./storage";
 import { isAuthenticated } from "./replitAuth";
 import { overlayAccountBillingOnUser } from "../../lib/billing";
 import { sanitizeUserForViewer } from "../../lib/userVisibility";
 import { db } from "../../db";
-import { accounts } from "@shared/models/auth";
+import { accounts, emailVerificationTokens } from "@shared/models/auth";
 import { eq } from "drizzle-orm";
 import { INDUSTRY_VALUES, COMPANY_SIZE_VALUES } from "@shared/constants";
+import { sendEmailVerificationEmail } from "../../services/email";
 
 export function registerAuthRoutes(app: Express): void {
   app.get("/api/auth/user", isAuthenticated, async (req: any, res) => {
@@ -100,6 +102,16 @@ export function registerAuthRoutes(app: Express): void {
         accountUpdate.companySize = companySize;
       }
 
+      // Read the existing user FIRST so we can detect the null→now() transition
+      // on profileCompletedAt — that's the moment a trial signup finishes Step 2
+      // (the /welcome page) and earns their verification email. Subsequent
+      // PATCHes (phone edit, etc.) re-stamp the timestamp but must NOT re-send.
+      const existing = await authStorage.getUser(req.user.id);
+      if (!existing) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      const isFirstCompletion = existing.profileCompletedAt == null;
+
       // Always stamp profileCompletedAt on a successful PATCH so the post-signup
       // /welcome gate releases. Idempotent — re-PATCHing later just refreshes it.
       userUpdate.profileCompletedAt = new Date();
@@ -111,6 +123,25 @@ export function registerAuthRoutes(app: Express): void {
 
       if (Object.keys(accountUpdate).length > 0 && updated.accountId) {
         await db.update(accounts).set(accountUpdate).where(eq(accounts.id, updated.accountId));
+      }
+
+      // First-completion transition → mint verification token + send email.
+      // Mirrors the previous /api/register call site (same args, same 1-hour
+      // expiry, same swallow-and-log error handling). Skipped for users who
+      // are already email-verified (e.g., legacy users PATCHing for the first
+      // time after the column was backfilled).
+      if (isFirstCompletion && !updated.emailVerified && updated.email) {
+        try {
+          const verificationToken = crypto.randomBytes(32).toString("hex");
+          await db.insert(emailVerificationTokens).values({
+            userId: updated.id,
+            token: verificationToken,
+            expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+          });
+          await sendEmailVerificationEmail(updated.email, verificationToken, updated.firstName);
+        } catch (emailErr) {
+          console.error("[auth/me] verification email send failed:", emailErr);
+        }
       }
 
       const { password: _, ...safeUser } = updated;

@@ -1,0 +1,49 @@
+Three refinements to the signup flow:
+
+═════════════════════════════════════
+1) /register STEP 1 COPY (client/src/pages/register.tsx)
+═════════════════════════════════════
+- Header: change "Start your 14-day free trial" → "Welcome! Create an account for your company."
+- Subtitle: KEEP "No credit card required" as-is.
+- Submit button: change "Create Account & Start Trial" → "Get Started"
+- Do NOT touch anything else on this page (form fields, branding panel, trial-includes list, sign-in footer — all unchanged).
+
+═════════════════════════════════════
+2) MOVE EMAIL VERIFICATION TRIGGER
+═════════════════════════════════════
+Currently the verification email fires on /api/register (immediately after Step 1). This breaks the conversion path — users get pulled to their inbox mid-signup before they've even seen Step 2. Move the trigger so verification fires when the user completes Step 2.
+
+Backend changes:
+
+A) server/replit_integrations/auth/replitAuth.ts
+   - Find the existing sendEmailVerificationEmail call in the /api/register handler.
+   - For the trial-signup branch (no inviteToken): REMOVE the call. Add a comment marker like:
+     // Verification email moved to PATCH /api/auth/me on profileCompletedAt transition (Step 2 completion)
+   - For the invitee branch (inviteToken present): KEEP the call as-is. Invitees skip /welcome, so they need verification email sent on signup just like today.
+   - Result: trial signups get NO verification email at /api/register; invitee signups still do.
+
+B) server/replit_integrations/auth/routes.ts — PATCH /api/auth/me handler
+   - Detect the transition where the user is FIRST completing their profile:
+     - Read the user's CURRENT profileCompletedAt before the update
+     - If existing.profileCompletedAt is null AND the update is about to set it to a non-null value → this is the first-completion transition
+   - In that case ONLY, call sendEmailVerificationEmail with the same args / import as the existing call site in replitAuth.ts.
+   - Subsequent PATCHes (e.g., user updates their phone later) must NOT re-send. The transition check guards this.
+
+═════════════════════════════════════
+3) DON'T BREAK
+═════════════════════════════════════
+- email_verification_tokens table + the click-the-link verification flow → unchanged.
+- The resend-verification endpoint (if one exists) → unchanged.
+- The verify-email-by-token endpoint (the GET handler that processes the link click) → unchanged.
+- Stripe / billing / session logic → unchanged.
+
+═════════════════════════════════════
+VERIFICATION
+═════════════════════════════════════
+- /api/register for trial signup: no verification email sent (check logs — no Resend call).
+- /api/register for invitee signup (?token=...): verification email IS sent (matches today's behavior).
+- PATCH /api/auth/me where profileCompletedAt transitions null → now(): verification email IS sent.
+- Subsequent PATCH /api/auth/me where profileCompletedAt is already set: verification email is NOT sent.
+- Typecheck baseline preserved (33 errors).
+
+Show me the diff. Don't push.

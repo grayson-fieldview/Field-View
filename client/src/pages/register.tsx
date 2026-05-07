@@ -180,7 +180,7 @@ export default function RegisterPage() {
             ) : (
               <>
                 <h2 className="text-2xl font-bold text-foreground" data-testid="text-register-title">
-                  Start your 14-day free trial
+                  Welcome! Create an account for your company.
                 </h2>
                 <p className="text-sm text-muted-foreground">No credit card required</p>
               </>
@@ -295,7 +295,7 @@ export default function RegisterPage() {
                   {inviteInfo ? "Joining team..." : "Creating account..."}
                 </>
               ) : (
-                inviteInfo ? "Join Team" : "Create Account & Start Trial"
+                inviteInfo ? "Join Team" : "Get Started"
               )}
             </Button>
           </form>
