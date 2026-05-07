@@ -1,0 +1,43 @@
+Diagnose: SeatAddConfirmationDialog UX gap — currently shows the "$29/mo additional seat" confirmation modal BEFORE checking whether the account has billing set up. After user confirms, server returns 400 "Set up billing before changing seat count" — confusing UX. Need to pre-check billing state and either show a "set up billing first" path OR the $29 confirmation, not both in sequence.
+
+DO NOT make any code changes. Investigation only.
+
+PHASE 1 — Find the dialog and trigger:
+
+1. Search client/src/ for "SeatAddConfirmationDialog" — find the component file. Read it in full (or the key sections — props, state, render, handlers).
+
+2. Find ALL places that render <SeatAddConfirmationDialog />. Likely team management or settings page. Report file paths and 10-15 lines of context around each usage — specifically how the dialog is opened (button click handler, useState, etc.).
+
+3. Identify the parent component that owns the "Add seat" button. What data does it have access to (account state, billing info, seat count)?
+
+PHASE 2 — Find the failing API path:
+
+4. The error message is "Set up billing before changing seat count." — search the codebase for this exact string. Find the server-side handler that returns it. Report file:line + 10 lines of context.
+
+5. What does that handler check to determine "billing not set up"? (Likely accounts.stripe_customer_id IS NULL or stripe_subscription_id IS NULL.) Report the exact check.
+
+PHASE 3 — How to pre-check from the frontend:
+
+6. Is there an existing API endpoint that returns the account's billing state? Search for endpoints under /api/account/* or /api/billing/* that return subscription info. Report URLs and response shapes.
+
+7. Is there an existing React hook / query that fetches account billing state for use in components? (Look for useAccount, useBilling, useSubscription patterns.) Report what's available.
+
+8. Find where users typically GET to the "set up billing" page. Is there an existing route like /billing/setup or /onboarding/billing? Report.
+
+PHASE 4 — Identify the fix:
+
+9. Based on findings, recommend the specific change:
+   - WHAT to check before opening the dialog (which billing state field, which condition)
+   - WHERE to add the check (in the click handler that currently opens the dialog, OR inside SeatAddConfirmationDialog itself in a useEffect)
+   - WHAT to show when billing is missing (a different dialog, a redirect, or an inline message)
+   - WHICH route to send users to for billing setup
+
+OUTPUT a structured report:
+A. "SeatAddConfirmationDialog component" — file:line + key props/state
+B. "Trigger location" — file:line + how it's opened
+C. "Server-side billing check" — file:line + exact condition that fails
+D. "Existing billing-state hook/query" — what's available, response shape
+E. "Recommended fix" — specific files + specific changes (most surgical option)
+F. "Edge cases" — anything that could go wrong
+
+DO NOT write any code. Only diagnose.
