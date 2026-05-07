@@ -416,7 +416,7 @@ export async function setupAuth(app: Express) {
         return res.status(400).json({ message: "You must accept the Terms of Service and Privacy Policy to continue." });
       }
 
-      const { email, password, firstName, lastName, inviteToken } = req.body;
+      const { email, password, firstName, lastName, companyName, inviteToken } = req.body;
 
       if (!email || !password) {
         return res.status(400).json({ message: "Email and password are required" });
@@ -429,6 +429,10 @@ export async function setupAuth(app: Express) {
       const existing = await authStorage.getUserByEmail(email);
       if (existing) {
         return res.status(409).json({ message: "An account with this email already exists" });
+      }
+
+      if (!inviteToken && (!companyName || !companyName.trim())) {
+        return res.status(400).json({ message: "Company name is required" });
       }
 
       const hashedPassword = await bcrypt.hash(password, 12);
@@ -450,8 +454,9 @@ export async function setupAuth(app: Express) {
         role = invitation.role;
         await db.update(invitations).set({ status: "accepted" }).where(eq(invitations.id, invitation.id));
       } else {
-        const accountName = [firstName, lastName].filter(Boolean).join(" ") || email;
-        const [account] = await db.insert(accounts).values({ name: accountName + "'s Team" }).returning();
+        const [account] = await db.insert(accounts).values({
+          name: companyName.trim().slice(0, 200),
+        }).returning();
         accountId = account.id;
         role = "admin";
       }

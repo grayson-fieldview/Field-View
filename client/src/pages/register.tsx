@@ -19,6 +19,7 @@ export default function RegisterPage() {
   const queryClient = useQueryClient();
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
+  const [companyName, setCompanyName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -57,6 +58,9 @@ export default function RegisterPage() {
       if (!termsAccepted) {
         throw new Error("You must agree to the Terms of Service and Privacy Policy to create an account.");
       }
+      if (!inviteInfo && !companyName.trim()) {
+        throw new Error("Company name is required");
+      }
       if (password !== confirmPassword) {
         throw new Error("Passwords do not match");
       }
@@ -82,6 +86,7 @@ export default function RegisterPage() {
           password,
           firstName,
           lastName,
+          companyName: companyName.trim(),
           ...(inviteToken ? { inviteToken } : {}),
           ...(recaptchaToken ? { recaptchaToken } : {}),
           termsAccepted: true,
@@ -184,6 +189,19 @@ export default function RegisterPage() {
                 />
               </div>
             </div>
+            {!inviteInfo && (
+              <div className="space-y-2">
+                <Label htmlFor="companyName">Company Name</Label>
+                <Input
+                  id="companyName"
+                  placeholder="Acme Construction LLC"
+                  value={companyName}
+                  onChange={(e) => setCompanyName(e.target.value)}
+                  required
+                  data-testid="input-company-name"
+                />
+              </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor="email">Work email</Label>
               <Input

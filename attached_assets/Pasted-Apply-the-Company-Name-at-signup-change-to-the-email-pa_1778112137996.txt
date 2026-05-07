@@ -1,0 +1,52 @@
+Apply the "Company Name at signup" change to the email/password path only. The Google OAuth path is intentionally OUT OF SCOPE for this change — it'll be handled in a separate fix later.
+
+Make EXACTLY these two file changes — no others.
+
+EDIT 1 — Frontend form: client/src/pages/register.tsx
+
+1. Add `const [companyName, setCompanyName] = useState("");` near the other useState calls (around line 21).
+
+2. Insert a new Input field block BETWEEN the First/Last name grid (around line 186) and the Work Email field. The field should be:
+   - Label: "Company Name"
+   - id="companyName"
+   - data-testid="input-company-name"
+   - required (HTML attribute)
+   - placeholder="Acme Construction LLC"
+   - value={companyName}, onChange updates companyName state
+   - Wrapped in {!inviteInfo && (...)} so invitees joining via invite link don't see this field
+
+3. Add `companyName: companyName.trim()` to the JSON request body in the mutation (around line 80-88).
+
+4. Add a validation check inside registerMutation.mutationFn (around line 57-65), alongside the existing terms-accepted and password checks:
+if (!inviteInfo && !companyName.trim()) {
+throw new Error("Company name is required");
+}
+
+EDIT 2 — Backend register endpoint: server/replit_integrations/auth/replitAuth.ts (the /api/register handler around lines 403-499)
+
+1. Around line 419 (where firstName, lastName, etc. are destructured from req.body): add `companyName` to the destructured list.
+
+2. After the existing email-already-exists check (around line 432) and BEFORE the bcrypt hash: add a server-side validator that requires companyName for non-invite signups:
+if (!inviteToken && (!companyName || !companyName.trim())) {
+return res.status(400).json({ message: "Company name is required" });
+}
+
+3. Replace lines 453-454 (where the "X's Team" account name is currently generated) with:
+const [account] = await db.insert(accounts).values({
+name: companyName.trim().slice(0, 200)
+}).returning();
+   The .slice(0, 200) caps length defensively (schema has no constraint, but absurdly long input shouldn't be persisted).
+
+DO NOT:
+- Modify the Google OAuth signup path (lines 107-108 in replitAuth.ts) — deferred
+- Modify any seed paths in server/index.ts — internal only
+- Modify email templates in server/services/email.ts — they accept arbitrary strings already
+- Add a new /welcome page or PATCH /api/account endpoint — deferred  
+- Run any tests or commands
+- Commit changes — Grayson will review the diff first
+
+OUTPUT:
+- The diffs for both files
+- Confirmation that ONLY these two files were modified
+- Explicit confirmation that the Google OAuth path (lines 107-108) was NOT touched
+- Explicit confirmation that nothing in server/index.ts was touched
