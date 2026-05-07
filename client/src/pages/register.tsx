@@ -9,7 +9,6 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Eye, EyeOff, Loader2, CheckCircle2, Users } from "lucide-react";
 import { useGoogleReCaptcha } from "react-google-recaptcha-v3";
-import { SocialAuthButtons } from "./login";
 import faviconImg from "@assets/Favicon-01_1772067008525.png";
 
 export default function RegisterPage() {
@@ -117,6 +116,7 @@ export default function RegisterPage() {
 
   const trialFeatures = [
     "Unlimited photo documentation",
+    "Automatic GPS Time Tracking",
     "Project & task management",
     "Team collaboration tools",
     "Shareable photo galleries",
@@ -149,7 +149,7 @@ export default function RegisterPage() {
           ) : (
             <>
               <CardTitle className="text-2xl" data-testid="text-register-title">Start your free trial</CardTitle>
-              <CardDescription>14 days free — add a payment method to get started</CardDescription>
+              <CardDescription>14 days free</CardDescription>
             </>
           )}
         </CardHeader>
@@ -165,7 +165,6 @@ export default function RegisterPage() {
               </div>
             </div>
           )}
-          <SocialAuthButtons inviteToken={inviteToken} />
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">

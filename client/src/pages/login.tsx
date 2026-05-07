@@ -1,49 +1,13 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { Eye, EyeOff, Loader2, AlertTriangle } from "lucide-react";
-import { Mail } from "lucide-react";
 import faviconImg from "@assets/Favicon-01_1772067008525.png";
-
-type Providers = { google: boolean; microsoft: boolean };
-
-export function SocialAuthButtons({ inviteToken }: { inviteToken?: string | null }) {
-  const { data: providers } = useQuery<Providers>({
-    queryKey: ["/api/auth/providers"],
-  });
-  if (!providers || !providers.microsoft) return null;
-  const qs = inviteToken ? `?invite=${encodeURIComponent(inviteToken)}` : "";
-  return (
-    <div className="space-y-2">
-      {providers.microsoft && (
-        <Button
-          asChild
-          variant="outline"
-          className="w-full"
-          data-testid="button-microsoft-auth"
-        >
-          <a href={`/api/auth/microsoft${qs}`}>
-            <Mail className="mr-2 h-4 w-4" />
-            Continue with Microsoft
-          </a>
-        </Button>
-      )}
-      <div className="relative my-2">
-        <div className="absolute inset-0 flex items-center">
-          <span className="w-full border-t border-border" />
-        </div>
-        <div className="relative flex justify-center text-xs uppercase">
-          <span className="bg-card px-2 text-muted-foreground">or</span>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 export default function LoginPage() {
   const [, setLocation] = useLocation();
@@ -192,7 +156,6 @@ export default function LoginPage() {
               </div>
             </div>
           )}
-          <SocialAuthButtons />
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>

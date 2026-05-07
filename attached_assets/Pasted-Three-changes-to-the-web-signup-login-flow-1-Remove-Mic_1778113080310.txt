@@ -1,0 +1,64 @@
+Three changes to the web signup/login flow:
+
+1. Remove Microsoft OAuth button entirely. Since Google was already removed, the OR divider and (likely) the entire SocialAuthButtons component become useless and should also go.
+
+2. In register.tsx, change the tagline from "14 days free — add a payment method to get started" to just "14 days free".
+
+3. In register.tsx, add "Automatic GPS Time Tracking" as the SECOND item in the "Your trial includes:" list (right after "Unlimited photo documentation").
+
+SURVEY FIRST. Then apply.
+
+SURVEY PHASE:
+
+1. Re-read client/src/pages/login.tsx — locate:
+   - The SocialAuthButtons component definition
+   - The Microsoft button JSX inside it
+   - The OR divider JSX
+   - The early-return guard
+   - The Microsoft icon import (likely SiMicrosoft from react-icons/si)
+   - Any handler functions used solely by Microsoft
+   - Whether the LOGIN page itself (separate from the component) renders <SocialAuthButtons />
+
+2. Read client/src/pages/register.tsx — locate:
+   - The import of SocialAuthButtons from "./login"
+   - The <SocialAuthButtons /> JSX usage
+   - The exact text "14 days free — add a payment method to get started"
+   - The "Your trial includes:" list and the JSX pattern of each item
+
+3. Search client/src/ for any OTHER consumers of SocialAuthButtons or any other Microsoft OAuth UI surface.
+
+CHANGES PHASE — apply:
+
+A. Remove Microsoft OAuth from SocialAuthButtons in login.tsx:
+   - Delete the Microsoft button JSX block
+   - Delete the OR divider (no providers left to separate)
+   - Remove the Microsoft icon import
+   - Remove any Microsoft-only handler function
+
+B. Determine SocialAuthButtons fate:
+   - If the component now renders nothing (no Google, no Microsoft, no divider): DELETE the component definition entirely AND delete its export. Then remove all imports/usages of it from login.tsx (the page) and register.tsx.
+   - If for some reason the component still has reason to exist (it shouldn't), report why and leave it.
+
+C. Tagline change in register.tsx:
+   - Find the JSX text: "14 days free — add a payment method to get started"
+   - Replace with: "14 days free"
+
+D. Add to "Your trial includes:" list in register.tsx:
+   - New list item with text: "Automatic GPS Time Tracking"
+   - Position: SECOND (right after "Unlimited photo documentation")
+   - Match the exact JSX/styling pattern of the other list items (icon, classes, etc.)
+
+DO NOT:
+- Modify backend routes (server/**) — leave OAuth backend code intact as dead code
+- Touch any other UI, copy, or feature
+- Change other items in the trial-includes list
+- Run tests or commands
+- Commit changes — Grayson will review the diff first
+
+OUTPUT:
+- Survey findings: what you found in each file
+- Diffs for each modified file
+- List of imports cleaned up
+- Whether SocialAuthButtons was deleted entirely or kept (with reasoning)
+- Explicit confirmation that backend routes (server/**) were NOT touched
+- Explicit confirmation that no other UI was modified beyond the three specified changes
