@@ -1,0 +1,38 @@
+CRITICAL bug: after the new Step 1 signup at /register, users are being redirected to /verify-email (the "Check your email" page) instead of /welcome (Step 2). This blocks the entire new signup flow because:
+
+- Step 1 (/register) creates the user with emailVerified=false AND profileCompletedAt=null
+- The verification email is NOW only sent on /welcome submission (per the recent change)
+- If /verify-email shows before /welcome, there's literally no email yet for the user to click — they're stuck on a page asking them to verify an email that hasn't been sent.
+
+DIAGNOSE THE REDIRECT
+Find what's routing the user to /verify-email after /register. Likely candidates, in priority order:
+1. An email-verification gate in client/src/App.tsx (probably sibling or wrapping the profile-completion gate that was just added — likely runs FIRST and redirects on emailVerified=false)
+2. A redirect in the /register form submit handler in client/src/pages/register.tsx
+3. A check in the auth context, useAuth hook, or a router guard component
+4. A redirect hint in the /api/register server response
+
+Read all of these before changing anything.
+
+REQUIRED GATE ORDER (fix to this)
+1. Auth gate (must be logged in) — first
+2. Profile completion gate (if profileCompletedAt is null → /welcome) — SECOND, must run BEFORE email verification gate
+3. Email verification gate (if emailVerified is false → /verify-email) — THIRD
+4. Subscription gate — fourth
+5. Default destination (/dashboard) — last
+
+The cleanest fix is usually reordering — make the profile-completion check evaluate before the email-verification check in App.tsx. If the email-verification gate is in a separate component or hook, you may need to either reorder them in the JSX tree or add an early-exit condition like "skip verify-email redirect when profileCompletedAt is null" so /welcome takes precedence.
+
+VERIFICATION
+After the fix, the flow should be:
+- Submit /register → land DIRECTLY on /welcome (NOT on /verify-email)
+- Submit /welcome → verification email is sent → land on /verify-email
+- Click email link → emailVerified becomes true → land on /dashboard
+
+Test path before showing me the diff: from a browser tab logged in as a user with profileCompletedAt=null AND emailVerified=false (i.e., grayson@field-view.com after my reset), navigate to / — should land on /welcome, NOT /verify-email.
+
+DO NOT TOUCH
+- The actual /verify-email page (its content is fine, just shouldn't fire prematurely)
+- The verification email sending logic (already correctly moved to /welcome PATCH)
+- The /welcome page or PATCH /api/auth/me handler
+
+Show me the diff. Don't push yet.

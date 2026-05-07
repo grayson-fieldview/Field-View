@@ -506,9 +506,34 @@ export async function setupAuth(app: Express) {
       // profileCompletedAt null→now() transition (Step 2 completion). Sending
       // here would pull the user to their inbox before they finish onboarding.
 
-      return res.status(201).json({
-        message: "Please check your email to verify your account.",
-        email: user.email,
+      // Invitee branch keeps the legacy "create user, return 201, force login"
+      // flow — they were already emailed a verification link above and must
+      // click it before signing in cleanly.
+      if (inviteToken) {
+        return res.status(201).json({
+          message: "Please check your email to verify your account.",
+          email: user.email,
+        });
+      }
+
+      // Trial branch: auto-login so the freshly-created user can reach the
+      // authenticated /welcome (Step 2) page. Without this, AppContent's auth
+      // gate sees !user and bounces them back to /login. Mirrors /api/login's
+      // req.login + req.session.save + safeUser-with-billing pattern exactly.
+      req.login(user, (loginErr) => {
+        if (loginErr) {
+          console.error("[register] auto-login failed:", loginErr);
+          return res.status(500).json({ message: "Registration succeeded but auto-login failed. Please sign in." });
+        }
+        req.session.save(async (saveErr) => {
+          if (saveErr) {
+            console.error("[register] session save failed:", saveErr);
+            return res.status(500).json({ message: "Registration succeeded but session save failed. Please sign in." });
+          }
+          const { password: _pw, ...safeUser } = user as any;
+          const safeUserWithBilling = await overlayAccountBillingOnUser(safeUser, req);
+          return res.status(201).json(safeUserWithBilling);
+        });
       });
     } catch (error) {
       console.error("Registration error:", error);
