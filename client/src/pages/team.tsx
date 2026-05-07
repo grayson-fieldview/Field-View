@@ -53,6 +53,8 @@ type SeatStatus = {
   overCapacity: boolean;
   billingCycle: "monthly" | "annual" | null;
   subscriptionStatus: string | null;
+  stripeCustomerId: string | null;
+  stripeSubscriptionId: string | null;
   ownerName: string | null;
   ownerId: string | null;
   trialMaxSeats: number | null;
@@ -268,6 +270,13 @@ export default function TeamPage() {
       sendInvite.mutate();
     },
     onError: (error: Error) => {
+      const body = parseApiErrorBody(error);
+      if (body?.code === "billing_not_set_up") {
+        queryClient.invalidateQueries({ queryKey: ["/api/account/seats"] });
+        setSeatConfirmOpen(false);
+        showBillingNotSetUpToast();
+        return;
+      }
       if (
         error.message.includes("changed") ||
         error.message.includes("refresh")
@@ -313,7 +322,44 @@ export default function TeamPage() {
       sendInvite.mutate();
       return;
     }
+    const blockedStatuses = ["canceled", "incomplete_expired", "unpaid"];
+    const hasWorkingSubscription =
+      !!seatStatus.stripeCustomerId &&
+      !!seatStatus.stripeSubscriptionId &&
+      !(seatStatus.subscriptionStatus && blockedStatuses.includes(seatStatus.subscriptionStatus));
+    if (!hasWorkingSubscription) {
+      showBillingNotSetUpToast();
+      return;
+    }
     setSeatConfirmOpen(true);
+  };
+
+  const showBillingNotSetUpToast = () => {
+    if (isAdmin) {
+      toast({
+        title: "Set up billing first",
+        description: "Add a payment method to add seats to your account.",
+        variant: "destructive",
+        action: (
+          <ToastAction
+            altText="Set up billing"
+            onClick={() => setLocation("/settings")}
+            data-testid="toast-action-setup-billing"
+          >
+            Set up billing
+          </ToastAction>
+        ),
+      });
+    } else {
+      const ownerName = seatStatus?.ownerName;
+      toast({
+        title: "Billing not set up",
+        description: ownerName
+          ? `Ask ${ownerName} to set up billing for this account.`
+          : "Ask the account owner to set up billing for this account.",
+        variant: "destructive",
+      });
+    }
   };
 
   const cancelInvite = useMutation({

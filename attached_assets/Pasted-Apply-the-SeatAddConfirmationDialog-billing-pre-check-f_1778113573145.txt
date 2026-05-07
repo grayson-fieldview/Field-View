@@ -1,0 +1,64 @@
+Apply the SeatAddConfirmationDialog billing pre-check fix. Bug: frontend opens "$29/mo confirmation" modal before checking if account has billing set up; server then returns 400 after user confirms.
+
+EDITS — apply EXACTLY these:
+
+EDIT 1 — Server: server/routes.ts (GET /api/account/seats handler)
+
+Find the GET /api/account/seats handler (returns the response that powers SeatStatus on the client). Add two fields to the response alongside the existing subscriptionStatus:
+  stripeCustomerId: <from account row>
+  stripeSubscriptionId: <from account row>
+
+Use the same account row that's already loaded in that handler. DO NOT change anything else in the handler — no logic changes, no other field additions, no signature changes.
+
+EDIT 2 — Client: client/src/pages/team.tsx (SeatStatus type around lines 47-59)
+
+Add two fields to the SeatStatus type to match the new server response:
+  stripeCustomerId: string | null;
+  stripeSubscriptionId: string | null;
+
+Both nullable to match the DB schema.
+
+EDIT 3 — Client: client/src/pages/team.tsx (handleSendInvite around lines 292-317)
+
+Add a billing-state pre-check INSIDE the existing `seatStatus.available <= 0` branch, BEFORE the `setSeatConfirmOpen(true)` call. The predicate MUST mirror the server check at server/routes.ts:1185-1207 exactly — same blocked-statuses list, same field requirements:
+
+const blockedStatuses = ["canceled", "incomplete_expired", "unpaid"];
+const hasWorkingSubscription =
+  !!seatStatus.stripeCustomerId &&
+  !!seatStatus.stripeSubscriptionId &&
+  !(seatStatus.subscriptionStatus && blockedStatuses.includes(seatStatus.subscriptionStatus));
+
+If !hasWorkingSubscription, show a role-aware toast and RETURN (do NOT open the modal):
+
+For ADMINS (use existing isAdmin variable in scope):
+  - title: "Set up billing first"
+  - description: "Add a payment method to add seats to your account."
+  - action: ToastAction labeled "Set up billing" → setLocation("/settings")
+  - Match the existing toast() invocation pattern in this file
+
+For MANAGERS (i.e. !isAdmin && isManager):
+  - title: "Billing not set up"  
+  - description: Use the existing subscriptionOwnerCopy pattern to read the owner's name. If owner name available: "Ask {ownerName} to set up billing for this account." If not available: "Ask the account owner to set up billing for this account."
+  - NO action button (managers can't navigate themselves to a fix)
+
+Both branches RETURN after showing the toast — execution stops, modal does NOT open.
+
+EDIT 4 — Client: client/src/pages/team.tsx (addSeat.onError around lines 270-289)
+
+Belt-and-suspenders for race conditions where the pre-check is bypassed. In addSeat.onError, branch on the server error body's `code === "billing_not_set_up"` (use the existing parseApiErrorBody helper already used in the file). When detected, show the same role-aware toast as Edit 3 (extract into a small helper function showBillingNotSetUpToast() if it reduces duplication, but only if the dedup is clearly cleaner — otherwise inline). When the code is anything else, leave the existing error handler behavior unchanged.
+
+DO NOT:
+- Modify SeatAddConfirmationDialog component itself — the modal stays the same, we just stop opening it when billing is missing
+- Modify the server-side billing check at server/routes.ts:1185-1207 — already correct
+- Touch any other handlers, queries, routes, or copy
+- Remove or change the existing trial-cap or no_seats_available logic in handleSendInvite
+- Add new files
+- Run tests or commands
+- Commit changes — Grayson will review the diff first
+
+OUTPUT:
+- Diffs for both files (server/routes.ts and client/src/pages/team.tsx)
+- Confirmation that ONLY these two files were modified
+- Confirmation that SeatAddConfirmationDialog component was NOT modified
+- Confirmation that the client-side blockedStatuses array matches the server-side list exactly: ["canceled", "incomplete_expired", "unpaid"]
+- Explicit description of how admin vs. manager toasts differ
