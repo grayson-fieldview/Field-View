@@ -119,7 +119,7 @@ export default function RegisterPage() {
     <div className="min-h-screen flex bg-white dark:bg-gray-950">
       {/* Left brand panel — desktop only */}
       <div
-        className="hidden lg:flex lg:w-1/3 flex-col justify-between p-12 bg-[#F09000]/50"
+        className="hidden lg:flex lg:w-2/5 flex-col justify-between p-12 bg-[#F09000]/50"
         data-testid="panel-brand"
       >
         <div>
@@ -142,49 +142,24 @@ export default function RegisterPage() {
           </h1>
         </div>
 
-        {/* Polaroid-pile testimonials */}
-        <div className="relative" data-testid="testimonial-stack">
-          <figure
-            className="relative z-10 rotate-2 ml-2 bg-[#C77000] text-white rounded-2xl shadow-2xl p-5"
-            data-testid="card-testimonial-1"
-          >
-            <blockquote className="text-sm leading-relaxed">
-              "FieldView has helped our team stay organized across multiple
-              projects, automatically clocks in all of our employees when they
-              get to the job, and has been a big help with the growth of our
-              company."
-            </blockquote>
-            <figcaption className="mt-3 text-xs font-medium text-white/80">
-              — Luke Ousdigian, Palm Beach Painters
-            </figcaption>
-          </figure>
-          <figure
-            className="relative z-20 -rotate-1 -mt-4 mr-2 bg-[#C77000] text-white rounded-2xl shadow-2xl p-5"
-            data-testid="card-testimonial-2"
-          >
-            <blockquote className="text-sm leading-relaxed">
-              "[REPLACE BEFORE PUSH — real customer testimonial #2]"
-            </blockquote>
-            <figcaption className="mt-3 text-xs font-medium text-white/80">
-              — [Customer Name, Company]
-            </figcaption>
-          </figure>
-          <figure
-            className="relative z-30 rotate-1 -mt-3 ml-4 bg-[#C77000] text-white rounded-2xl shadow-2xl p-5"
-            data-testid="card-testimonial-3"
-          >
-            <blockquote className="text-sm leading-relaxed">
-              "[REPLACE BEFORE PUSH — real customer testimonial #3]"
-            </blockquote>
-            <figcaption className="mt-3 text-xs font-medium text-white/80">
-              — [Customer Name, Company]
-            </figcaption>
-          </figure>
-        </div>
+        <figure
+          className="rotate-1 bg-zinc-900 text-white rounded-2xl shadow-2xl p-5"
+          data-testid="card-testimonial"
+        >
+          <blockquote className="text-sm leading-relaxed">
+            "FieldView has helped our team stay organized across multiple
+            projects, automatically clocks in all of our employees when they
+            get to the job, and has been a big help with the growth of our
+            company."
+          </blockquote>
+          <figcaption className="mt-3 text-xs font-medium text-white/80">
+            — Luke Ousdigian, Palm Beach Painters
+          </figcaption>
+        </figure>
       </div>
 
       {/* Right form panel */}
-      <div className="flex flex-col flex-1 lg:w-2/3 items-center justify-center px-4 py-8 sm:px-6 lg:px-12">
+      <div className="flex flex-col flex-1 lg:w-3/5 items-center justify-center px-4 py-8 sm:px-6 lg:px-12">
         <div className="w-full max-w-md">
           <div className="text-center space-y-4 mb-6">
             <div className="flex items-center justify-center gap-2 lg:hidden">
