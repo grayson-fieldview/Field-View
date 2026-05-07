@@ -1,0 +1,62 @@
+Refactor client/src/pages/register.tsx into a 2-column signup layout. This is Step 1 of a new 2-step signup flow; Step 2 (a /welcome page) will be built next and will collect the remaining profile fields post-signup.
+
+LAYOUT
+- Desktop (lg breakpoint and up): 50/50 split. Left = brand panel. Right = form.
+- Mobile (below lg): hide the left panel entirely, form takes full viewport width.
+- Use `hidden lg:flex` on the left panel.
+
+LEFT PANEL (brand panel)
+- Background: solid brand orange #F09000
+- Generous padding (p-12 or similar)
+- Vertical flex layout with content distributed between top and bottom
+
+  TOP:
+  - Field View logo at attached_assets/Favicon-01_1772067008525.png, ~48-64px tall.
+  - If the logo has dark colors and doesn't read on orange, apply `filter: brightness(0) invert(1)` to make it white. Otherwise display as-is.
+  - Below the logo, tagline in white: "Trusted by hundreds of contractors across the country." — text-2xl or text-3xl, font-medium.
+
+  BOTTOM:
+  - Testimonial card. Subtle background (try bg-white/10 with backdrop-blur, or bg-white/95 with text in the brand orange — pick whatever reads cleanly), rounded corners, padded.
+  - Quote: "FieldView has helped our team stay organized across multiple projects, automatically clocks in all of our employees when they get to the job, and has been a big help with the growth of our company."
+  - Attribution: "— Luke Ousdigian, Palm Beach Painters"
+
+RIGHT PANEL (form)
+- White background, form centered horizontally and vertically, max-w-md container.
+- Keep the existing "Start your 14-day free trial" header + the "trial includes" bullet list.
+- Keep the existing "Already have an account? Sign in" footer link.
+
+FORM FIELD CHANGES (reduced Step 1 set)
+KEEP these 4 inputs only:
+- Company Name (already added recently)
+- Work Email
+- Password (with show/hide toggle — see below)
+- Terms of Service checkbox
+
+REMOVE these inputs entirely:
+- First Name
+- Last Name
+- Confirm Password
+
+The JSON body submitted to /api/register should also drop firstName, lastName, and confirmPassword. The backend already tolerates these missing (firstName/lastName are nullable in the route handler).
+
+Remove any password-confirmation validation logic — there's no second password field to compare against anymore.
+
+PASSWORD FIELD — SHOW/HIDE TOGGLE
+- Single Password field only.
+- Add an eye icon button absolutely positioned inside the right edge of the input (right-3 or so, vertically centered). Use lucide-react: `Eye` when password is hidden, `EyeOff` when visible.
+- Click toggles the input type between "password" and "text".
+- Default state: hidden (type="password").
+- The icon button must be type="button" to prevent it from submitting the form.
+- Make sure padding-right on the input is large enough that text doesn't run under the icon (pr-10 or so).
+
+DO NOT TOUCH
+- The /api/register endpoint URL or method
+- Any reCAPTCHA wiring
+- Form-level error handling and toast logic
+- The Input/Label/Button components in use — just remove the deleted fields
+- Anything related to the (already removed) Google/Microsoft OAuth buttons
+
+VERIFICATION
+After your edit, the form must have exactly 4 inputs: Company Name, Work Email, Password (with eye toggle), Terms checkbox. The orange left panel must only appear at lg and above. On mobile the page should look like a single-column form on a white background. The eye icon must toggle password visibility without submitting the form.
+
+Show me the full diff before approving. Don't push.

@@ -4,7 +4,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Eye, EyeOff, Loader2, CheckCircle2, Users } from "lucide-react";
@@ -16,12 +15,9 @@ export default function RegisterPage() {
   const searchString = useSearch();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [firstName, setFirstName] = useState("");
-  const [lastName, setLastName] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
   const { executeRecaptcha } = useGoogleReCaptcha();
@@ -44,12 +40,6 @@ export default function RegisterPage() {
     if (inviteInfo?.email) {
       setEmail(inviteInfo.email);
     }
-    if (inviteInfo?.firstName) {
-      setFirstName(inviteInfo.firstName);
-    }
-    if (inviteInfo?.lastName) {
-      setLastName(inviteInfo.lastName);
-    }
   }, [inviteInfo]);
 
   const registerMutation = useMutation({
@@ -59,9 +49,6 @@ export default function RegisterPage() {
       }
       if (!inviteInfo && !companyName.trim()) {
         throw new Error("Company name is required");
-      }
-      if (password !== confirmPassword) {
-        throw new Error("Passwords do not match");
       }
       if (password.length < 8) {
         throw new Error("Password must be at least 8 characters");
@@ -83,8 +70,6 @@ export default function RegisterPage() {
         body: JSON.stringify({
           email,
           password,
-          firstName,
-          lastName,
           companyName: companyName.trim(),
           ...(inviteToken ? { inviteToken } : {}),
           ...(recaptchaToken ? { recaptchaToken } : {}),
@@ -131,29 +116,77 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#F0EDEA] dark:bg-gray-950 px-4 py-8">
-      <Card className="w-full max-w-md shadow-lg border-0">
-        <CardHeader className="text-center space-y-4 pb-2">
-          <div className="flex items-center justify-center gap-2">
-            <img src={faviconImg} alt="Field View" className="h-8 w-8" />
-            <span className="text-xl font-bold text-[#1E1E1E] dark:text-white">Field View</span>
+    <div className="min-h-screen flex bg-white dark:bg-gray-950">
+      {/* Left brand panel — desktop only */}
+      <div
+        className="hidden lg:flex lg:w-1/2 flex-col justify-between p-12 bg-[#F09000] text-white"
+        data-testid="panel-brand"
+      >
+        <div>
+          <img
+            src={faviconImg}
+            alt="Field View"
+            className="h-14 w-14"
+            style={{ filter: "brightness(0) invert(1)" }}
+            data-testid="img-brand-logo"
+          />
+          <h1
+            className="mt-8 text-3xl font-medium leading-snug max-w-md"
+            data-testid="text-brand-tagline"
+          >
+            Trusted by hundreds of contractors across the country.
+          </h1>
+        </div>
+        <figure
+          className="bg-white/10 backdrop-blur-sm rounded-xl p-6 max-w-md"
+          data-testid="card-testimonial"
+        >
+          <blockquote
+            className="text-base leading-relaxed text-white"
+            data-testid="text-testimonial-quote"
+          >
+            "FieldView has helped our team stay organized across multiple
+            projects, automatically clocks in all of our employees when they
+            get to the job, and has been a big help with the growth of our
+            company."
+          </blockquote>
+          <figcaption
+            className="mt-4 text-sm font-medium text-white/90"
+            data-testid="text-testimonial-attribution"
+          >
+            — Luke Ousdigian, Palm Beach Painters
+          </figcaption>
+        </figure>
+      </div>
+
+      {/* Right form panel */}
+      <div className="flex flex-col flex-1 items-center justify-center px-4 py-8 sm:px-6 lg:px-12">
+        <div className="w-full max-w-md">
+          <div className="text-center space-y-4 mb-6">
+            <div className="flex items-center justify-center gap-2 lg:hidden">
+              <img src={faviconImg} alt="Field View" className="h-8 w-8" />
+              <span className="text-xl font-bold text-[#1E1E1E] dark:text-white">Field View</span>
+            </div>
+            {inviteInfo ? (
+              <>
+                <h2 className="text-2xl font-bold text-foreground" data-testid="text-register-title">
+                  Join {inviteInfo.accountName}
+                </h2>
+                <p className="text-sm text-muted-foreground">
+                  You've been invited to join as a{" "}
+                  <Badge variant="secondary" className="text-xs">{roleLabels[inviteInfo.role] || inviteInfo.role}</Badge>
+                </p>
+              </>
+            ) : (
+              <>
+                <h2 className="text-2xl font-bold text-foreground" data-testid="text-register-title">
+                  Start your 14-day free trial
+                </h2>
+                <p className="text-sm text-muted-foreground">No credit card required</p>
+              </>
+            )}
           </div>
-          {inviteInfo ? (
-            <>
-              <CardTitle className="text-2xl" data-testid="text-register-title">Join {inviteInfo.accountName}</CardTitle>
-              <CardDescription>
-                You've been invited to join as a{" "}
-                <Badge variant="secondary" className="text-xs">{roleLabels[inviteInfo.role] || inviteInfo.role}</Badge>
-              </CardDescription>
-            </>
-          ) : (
-            <>
-              <CardTitle className="text-2xl" data-testid="text-register-title">Start your free trial</CardTitle>
-              <CardDescription>14 days free</CardDescription>
-            </>
-          )}
-        </CardHeader>
-        <CardContent>
+
           {inviteInfo && (
             <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg flex items-center gap-3">
               <Users className="h-5 w-5 text-blue-600 dark:text-blue-400 shrink-0" />
@@ -165,29 +198,8 @@ export default function RegisterPage() {
               </div>
             </div>
           )}
+
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <Label htmlFor="firstName">First name</Label>
-                <Input
-                  id="firstName"
-                  placeholder="John"
-                  value={firstName}
-                  onChange={(e) => setFirstName(e.target.value)}
-                  data-testid="input-first-name"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="lastName">Last name</Label>
-                <Input
-                  id="lastName"
-                  placeholder="Smith"
-                  value={lastName}
-                  onChange={(e) => setLastName(e.target.value)}
-                  data-testid="input-last-name"
-                />
-              </div>
-            </div>
             {!inviteInfo && (
               <div className="space-y-2">
                 <Label htmlFor="companyName">Company Name</Label>
@@ -226,6 +238,7 @@ export default function RegisterPage() {
                   onChange={(e) => setPassword(e.target.value)}
                   required
                   minLength={8}
+                  className="pr-10"
                   data-testid="input-password"
                 />
                 <button
@@ -237,18 +250,6 @@ export default function RegisterPage() {
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="confirmPassword">Confirm password</Label>
-              <Input
-                id="confirmPassword"
-                type={showPassword ? "text" : "password"}
-                placeholder="Confirm your password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required
-                data-testid="input-confirm-password"
-              />
             </div>
             <label className="flex items-start gap-2 text-sm text-muted-foreground">
               <input
@@ -298,6 +299,7 @@ export default function RegisterPage() {
               )}
             </Button>
           </form>
+
           {!inviteInfo && (
             <div className="mt-5 p-4 bg-[#F0EDEA] dark:bg-gray-900 rounded-lg">
               <p className="text-sm font-medium mb-2 text-foreground">Your trial includes:</p>
@@ -311,14 +313,15 @@ export default function RegisterPage() {
               </ul>
             </div>
           )}
+
           <div className="mt-4 text-center text-sm text-muted-foreground">
             Already have an account?{" "}
             <a href="/login" className="text-[#F09000] hover:underline font-medium" data-testid="link-login">
               Sign in
             </a>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }
