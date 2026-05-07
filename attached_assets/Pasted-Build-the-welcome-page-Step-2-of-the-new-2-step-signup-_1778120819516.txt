@@ -1,0 +1,110 @@
+Build the /welcome page — Step 2 of the new 2-step signup flow.
+
+Context: After a user signs up at /register (Step 1, just Company Name / Email / Password), they should be redirected to /welcome to fill in personal + business details before landing on the dashboard. Schema migration already shipped on prod RDS — users.phone, users.profileCompletedAt, accounts.industry, accounts.company_size all exist.
+
+This task has 3 parts, all in one go.
+
+═════════════════════════════════════
+PART 1 — SHARED CONSTANTS
+═════════════════════════════════════
+Create or update a shared constants file (use the existing convention if there's already one, otherwise create shared/constants/profile.ts) that both frontend and backend can import:
+
+INDUSTRIES = [
+  { value: 'general_contractor', label: 'General Contractor' },
+  { value: 'painting', label: 'Painting' },
+  { value: 'roofing', label: 'Roofing' },
+  { value: 'hvac', label: 'HVAC' },
+  { value: 'plumbing', label: 'Plumbing' },
+  { value: 'electrical', label: 'Electrical' },
+  { value: 'landscaping', label: 'Landscaping' },
+  { value: 'remodeling', label: 'Remodeling / Renovation' },
+  { value: 'concrete_masonry', label: 'Concrete / Masonry' },
+  { value: 'flooring', label: 'Flooring' },
+  { value: 'inspection', label: 'Inspection' },
+  { value: 'restoration', label: 'Restoration' },
+  { value: 'property_management', label: 'Property Management' },
+  { value: 'other', label: 'Other' },
+]
+
+COMPANY_SIZES = [
+  { value: '1-5', label: '1–5 employees' },
+  { value: '6-20', label: '6–20 employees' },
+  { value: '21-50', label: '21–50 employees' },
+  { value: '51-100', label: '51–100 employees' },
+  { value: '100+', label: '100+ employees' },
+]
+
+Export the value arrays for validation use too.
+
+═════════════════════════════════════
+PART 2 — BACKEND
+═════════════════════════════════════
+Find the PATCH /api/auth/me handler (likely server/replit_integrations/auth/routes.ts). Currently it accepts firstName + lastName. Extend it to also accept:
+
+- phone (string, optional) → users.phone — basic validation: if present, length 10-20 chars; lenient, no strict regex
+- industry (string, optional) → accounts.industry — must match one of INDUSTRIES values if present
+- companySize (string, optional) → accounts.company_size — must match one of COMPANY_SIZES values if present
+- All fields optional; only update what's sent.
+
+CRITICAL: industry and companySize are account-level. Only update them if the user has admin/owner role on the account. Non-admins sending these fields: silently ignore (don't 403 — these are extra; don't fail the whole request).
+
+On successful PATCH, set users.profileCompletedAt = now(). This is what the redirect logic in Part 3 keys off.
+
+═════════════════════════════════════
+PART 3 — FRONTEND
+═════════════════════════════════════
+
+A) NEW PAGE: client/src/pages/welcome.tsx
+
+Visual shell: identical structure to register.tsx — same 2/5 + 3/5 split, same soft orange left panel with logo + tagline + Luke testimonial card, same form-centered right panel. Reuse those primitives — don't rebuild. (You can extract the left-panel JSX into a small AuthBrandPanel component in client/src/components/ if you want; not required, just an option.)
+
+Right panel content (replaces the register form):
+- Header: "Tell us about your business"
+- Subtitle: "A few quick details so we can set things up for you"
+- Form fields (in this order):
+  1. First Name — text input
+  2. Last Name — text input
+  3. Phone — tel input with placeholder "(555) 123-4567"
+  4. Industry — select dropdown, options from INDUSTRIES
+  5. Company Size — select dropdown, options from COMPANY_SIZES
+  6. TCPA consent checkbox — copy: "I agree to receive product updates and SMS from Field View at the phone number provided. Message and data rates may apply. Reply STOP to opt out."
+     ⚠️ Flag in your output: this TCPA copy is a PLACEHOLDER pending legal review. Don't ship to paid traffic without legal sign-off.
+- Submit button: "Complete Setup"
+- On submit: PATCH /api/auth/me with the values; on success redirect to the default post-login destination (probably /dashboard — match what the post-login flow uses elsewhere); on error show a toast.
+- The page must require auth — match the pattern used by other authenticated pages in the codebase.
+
+B) ROUTING: client/src/App.tsx
+
+Register the /welcome route, pointing to welcome.tsx, behind the same auth guard as other protected routes.
+
+C) POST-SIGNUP REDIRECT LOGIC
+
+After a successful registration via /api/register OR after a login that lands on a profile with profileCompletedAt = null, the user should be routed to /welcome instead of the default dashboard.
+
+Invitees are exempt: the recent replitAuth.ts change should already set profileCompletedAt = now() when an invitee accepts an invitation. VERIFY this is happening — if not, add it.
+
+Implementation: pick whichever existing pattern fits — auth context post-login hook, a top-level redirect guard, or in the registration response handler. Match how the codebase already handles post-auth routing.
+
+═════════════════════════════════════
+DO NOT TOUCH
+═════════════════════════════════════
+- The /api/register endpoint or register.tsx
+- The login flow itself
+- Any auth middleware / session logic
+- Stripe / billing logic
+
+═════════════════════════════════════
+VERIFICATION
+═════════════════════════════════════
+- Shared constants file exists and is imported by both frontend and backend.
+- PATCH /api/auth/me accepts and persists phone, industry, companySize.
+- profileCompletedAt is set to now() on successful PATCH.
+- Non-admin users who send industry/companySize have those fields silently ignored (no 403, request succeeds).
+- /welcome route registered and behind auth guard.
+- After fresh signup, user lands on /welcome (not /dashboard).
+- After completing /welcome (filling all fields, submitting), user lands on /dashboard.
+- Invitees do NOT route through /welcome.
+- Mobile: left panel hidden, single-column form on white background.
+- Typecheck baseline preserved (still 33 errors).
+
+Show me the full diff before approving. Don't push.

@@ -1,4 +1,4 @@
-import { Switch, Route, Redirect, useSearch } from "wouter";
+import { Switch, Route, Redirect, useSearch, useLocation } from "wouter";
 import { queryClient, apiRequest } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { GoogleReCaptchaProvider } from "react-google-recaptcha-v3";
@@ -16,6 +16,7 @@ import { AlertTriangle } from "lucide-react";
 import NotFound from "@/pages/not-found";
 import LoginPage from "@/pages/login";
 import RegisterPage from "@/pages/register";
+import WelcomePage from "@/pages/welcome";
 import ForgotPasswordPage from "@/pages/forgot-password";
 import ResetPasswordPage from "@/pages/reset-password";
 import CheckEmailPage from "@/pages/check-email";
@@ -163,6 +164,7 @@ function CatchAllRedirect() {
 
 function AppContent() {
   const { user, isLoading } = useAuth();
+  const [location] = useLocation();
 
   if (isLoading) {
     return (
@@ -191,6 +193,15 @@ function AppContent() {
       </Switch>
     );
   }
+
+  // Profile completion gate — fresh trial signups land here before reaching
+  // the dashboard. Invitees have profileCompletedAt set at /api/register time
+  // and skip this entirely.
+  if (!(user as any).profileCompletedAt) {
+    if (location !== "/welcome") return <Redirect to="/welcome" />;
+    return <WelcomePage />;
+  }
+  if (location === "/welcome") return <Redirect to="/" />;
 
   return <SubscriptionGate />;
 }

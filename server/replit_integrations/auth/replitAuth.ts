@@ -477,6 +477,9 @@ export async function setupAuth(app: Express) {
         trialEndsAt: null,
         termsAcceptedAt: new Date(),
         termsVersion: CURRENT_TERMS_VERSION,
+        // Invitees skip the /welcome step (their account is already configured
+        // by the admin who invited them); trial signups must complete it.
+        profileCompletedAt: inviteToken ? new Date() : null,
       });
 
       if (!isCompAccount(user.email)) {
