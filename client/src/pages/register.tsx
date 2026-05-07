@@ -162,7 +162,7 @@ export default function RegisterPage() {
       {/* Right form panel */}
       <div className="flex flex-col flex-1 lg:w-3/5 items-center justify-center px-4 py-8 sm:px-6 lg:px-12">
         <div className="w-full max-w-md">
-          <div className="text-center space-y-4 mb-6">
+          <div className="text-center space-y-2 mb-5">
             <div className="flex items-center justify-center gap-2 lg:hidden">
               <img src={faviconImg} alt="Field View" className="h-8 w-8" />
               <span className="text-xl font-bold text-[#1E1E1E] dark:text-white">Field View</span>
@@ -182,7 +182,6 @@ export default function RegisterPage() {
                 <h2 className="text-2xl font-bold text-foreground" data-testid="text-register-title">
                   Welcome! Create an account for your company.
                 </h2>
-                <p className="text-sm text-muted-foreground">No credit card required</p>
               </>
             )}
           </div>
@@ -199,7 +198,7 @@ export default function RegisterPage() {
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="space-y-3">
             {!inviteInfo && (
               <div className="space-y-2">
                 <Label htmlFor="companyName">Company Name</Label>
@@ -301,9 +300,9 @@ export default function RegisterPage() {
           </form>
 
           {!inviteInfo && (
-            <div className="mt-5 p-4 bg-[#F0EDEA] dark:bg-gray-900 rounded-lg">
+            <div className="mt-4 p-4 bg-[#F0EDEA] dark:bg-gray-900 rounded-lg">
               <p className="text-sm font-medium mb-2 text-foreground">Your trial includes:</p>
-              <ul className="space-y-1.5">
+              <ul className="grid grid-cols-2 gap-x-4 gap-y-1">
                 {trialFeatures.map((feature) => (
                   <li key={feature} className="flex items-center gap-2 text-sm text-muted-foreground">
                     <CheckCircle2 className="h-3.5 w-3.5 text-[#267D32] flex-shrink-0" />
