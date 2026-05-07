@@ -1,0 +1,29 @@
+Bug: GET /api/verify-email returning 400. User clicked the verification link from their email, server returned 400, the verify-success page never rendered.
+
+Vercel log shows: `GET 400 /api/verify-email :: (node:4) [DEP0169] DeprecationWarning: url.parse() behavior is not standard...`
+
+The DEP0169 deprecation warning at the same log line is the strong tell — the handler is likely using legacy url.parse() to extract the token, which may be silently misbehaving on the deployed Node runtime.
+
+DIAGNOSE
+1. Find the /api/verify-email GET handler. Per past sessions it's in server/replit_integrations/auth/replitAuth.ts (around lines 707-720 per the agent's earlier diagnosis), or possibly in server/routes.ts.
+2. Read the handler. Check:
+   - Does it use url.parse()? If yes, that's likely the issue.
+   - Does it use req.query.token, or does it parse the URL manually?
+   - What conditions cause it to return 400 vs 200?
+   - Does it correctly look up the token in email_verification_tokens, mark the user verified, and redirect/render?
+3. Reproduce mentally: what would happen if the user clicked a valid, unexpired link right now?
+
+FIX
+- If url.parse() is used, replace with either req.query.token (if Express middleware exposes it) or new URL(req.url, ...) (modern API). Token extraction must work.
+- Preserve all the existing 400 response paths for genuinely invalid scenarios (missing token, expired token, already-used token, no matching user) — the bug is that valid tokens are also 400ing.
+- Make sure the success path still redirects/renders the verify-success destination after marking the user verified.
+
+DO NOT TOUCH
+- The token-minting side (PATCH /api/auth/me — that's working, you have the email)
+- The email_verification_tokens table schema
+- Any other handler
+
+VERIFICATION
+After the fix, the most recent token in email_verification_tokens for graysongladu+test18@gmail.com should still be valid. Clicking that exact link from the email should return 200/302 and flip users.email_verified to true. If you can verify this without me clicking the link (e.g., construct the URL with the token from the DB and have Replit's preview hit it), even better.
+
+Show me the diff. Don't push yet.

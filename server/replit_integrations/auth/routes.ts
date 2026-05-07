@@ -136,7 +136,7 @@ export function registerAuthRoutes(app: Express): void {
           await db.insert(emailVerificationTokens).values({
             userId: updated.id,
             token: verificationToken,
-            expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
           });
           await sendEmailVerificationEmail(updated.email, verificationToken, updated.firstName);
         } catch (emailErr) {

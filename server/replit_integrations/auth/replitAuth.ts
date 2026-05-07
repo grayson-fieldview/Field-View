@@ -493,7 +493,7 @@ export async function setupAuth(app: Express) {
         await db.insert(emailVerificationTokens).values({
           userId: user.id,
           token: verificationToken,
-          expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
         });
 
         try {
@@ -733,12 +733,56 @@ export async function setupAuth(app: Express) {
   app.get("/api/verify-email", verifyEmailLimiter, async (req, res) => {
     try {
       const token = req.query.token as string;
-      if (!token) return res.status(400).json({ error: "Token required" });
+      if (!token) {
+        console.warn("[verify-email] reject: no_token");
+        return res.status(400).json({ error: "Token required" });
+      }
 
       const [row] = await db.select().from(emailVerificationTokens).where(eq(emailVerificationTokens.token, token));
-      if (!row) return res.status(400).json({ error: "Invalid token" });
-      if (row.usedAt) return res.status(400).json({ error: "Token already used" });
-      if (row.expiresAt < new Date()) return res.status(400).json({ error: "Token expired" });
+      if (!row) {
+        console.warn("[verify-email] reject: token_not_found", { tokenPrefix: token.slice(0, 8) });
+        return res.status(400).json({ error: "Invalid token" });
+      }
+
+      // Look up the user now so we can branch on already-verified state below.
+      const [existingUser] = await db.select().from(users).where(eq(users.id, row.userId));
+
+      // IDEMPOTENCY: email security scanners (Outlook Safe Links, Gmail link
+      // checker, Mimecast, Proofpoint, Barracuda, etc.) GET every link in an
+      // inbound email BEFORE the user sees it. That prefetch hits this
+      // endpoint, marks `used_at`, and flips `email_verified=true`. The user's
+      // actual click then arrives seconds later and used to 400 with "Token
+      // already used" even though they were genuinely verified in the DB.
+      // Treat already-used + verified as success: re-establish the session
+      // (req.login) and respond with the same success shape as the first hit
+      // so the frontend renders the success page.
+      if (row.usedAt) {
+        if (existingUser?.emailVerified) {
+          console.info("[verify-email] idempotent re-hit on used token, user already verified", {
+            userId: row.userId,
+            usedAtAgeMs: Date.now() - row.usedAt.getTime(),
+          });
+          req.login(existingUser, (err) => {
+            if (err) {
+              console.error("[verify-email] idempotent req.login failed:", err);
+              return res.json({ success: true, message: "Email verified successfully" });
+            }
+            const { password: _, ...safeUser } = existingUser;
+            res.json({ success: true, message: "Email verified successfully", user: safeUser });
+          });
+          return;
+        }
+        console.warn("[verify-email] reject: token_used_but_user_not_verified", { userId: row.userId });
+        return res.status(400).json({ error: "Token already used" });
+      }
+
+      if (row.expiresAt < new Date()) {
+        console.warn("[verify-email] reject: token_expired", {
+          userId: row.userId,
+          expiredAgoMs: Date.now() - row.expiresAt.getTime(),
+        });
+        return res.status(400).json({ error: "Token expired" });
+      }
 
       await db.update(users).set({ emailVerified: true }).where(eq(users.id, row.userId));
       await db.update(emailVerificationTokens).set({ usedAt: new Date() }).where(eq(emailVerificationTokens.id, row.id));
@@ -800,7 +844,7 @@ export async function setupAuth(app: Express) {
       await db.insert(emailVerificationTokens).values({
         userId: user.id,
         token,
-        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
       });
 
       try {
