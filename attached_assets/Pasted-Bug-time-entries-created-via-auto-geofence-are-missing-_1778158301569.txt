@@ -1,0 +1,26 @@
+Bug: time entries created via auto-geofence are missing the user's hourly rate, leaving the rate and cost columns empty in /timesheets and breaking the aggregate labor cost calculation. Manual entries appear to have rates correctly. Fix the auto-entry creation so it pulls the same rate that manual entries pull.
+
+DIAGNOSE FIRST — DO NOT WRITE A FIX BEFORE READING THE CODE
+1. Find the time_entries schema (probably shared/models/ or shared/schema.ts). Identify the rate column name (could be `hourly_rate`, `rate`, `pay_rate`, etc.) and how it's typed (decimal? text?).
+2. Find where the user's hourly rate is stored — likely a `hourly_rate` column on users, or possibly on accounts as a default, or on project_assignments per project. Note which one is canonical.
+3. Find the time entry creation paths:
+   - Manual: probably POST /api/time-entries or similar in server/routes.ts
+   - Auto-geofence enter: the geofence enter handler that creates a time entry on entry to a project zone — check server-side cron or webhook handlers, possibly in server/replit_integrations/ or server/routes.ts
+   - Auto-geofence exit: the matching exit handler that closes the entry
+4. For the manual path: identify exactly where and how the rate is populated on the new entry (lookup query + which source).
+5. For the auto path: confirm the rate is NOT being populated and identify exactly where in the auto creation logic to insert the same lookup.
+
+REPORT BACK BEFORE WRITING THE FIX
+After diagnosis, write me a short report with:
+- The schema column name + type
+- The canonical source of the user's rate (users.hourly_rate? accounts.default_rate? per-project assignment?)
+- The exact line in the manual entry creation where rate is set
+- The exact line in the auto entry creation where the equivalent lookup needs to be inserted
+- Whether the rate should also flow into the cost column at creation time, or if cost is computed at read time
+
+Once I see the report, I'll greenlight the fix prompt or adjust scope.
+
+DO NOT YET TOUCH
+- Anything related to clock-out notifications (separate roadmap task)
+- The geofence detection logic itself (it's working correctly)
+- The /timesheets display layer (cost rendering is downstream of this fix)
