@@ -1,0 +1,71 @@
+Diagnose: prepare to redesign the signup page into a 2-step flow with new fields. Step 1 collects Company Name + Work Email + Password + Terms. Step 2 (post-signup, profile-completion) collects First Name + Last Name + Phone + Industry + Company Size + TCPA. Page gets a 2-column layout with a transparent orange left panel containing logo + tagline + testimonial.
+
+DO NOT make any code changes. Investigation only — produce a comprehensive report at the end.
+
+PHASE 1 — Schema state:
+
+1. Read shared/schema.ts and shared/models/auth.ts. Report the current users and accounts table schemas — exact columns, types, nullability.
+
+2. Specifically determine, for the new fields:
+   a. Does users.phone_number or users.phone exist?
+   b. Does accounts.industry exist?
+   c. Does accounts.company_size or accounts.team_size exist?
+   d. Are users.firstName and users.lastName currently nullable in the schema, or required?
+   e. Will the schema accommodate the multi-step flow without changes, or will a migration be needed?
+
+PHASE 2 — Frontend signup component:
+
+3. Re-read client/src/pages/register.tsx in full. Report:
+   - Form library (useState, react-hook-form, etc.)
+   - All form fields currently rendered (in order)
+   - Submit handler logic (what fields POST to /api/register)
+   - Where user lands after successful signup (setLocation target)
+   - Styling library (shadcn/ui? Tailwind directly?) and existing Card/layout primitives in use
+
+4. Search client/src/ for any existing onboarding/welcome/profile-completion pages or wizards. Report anything found — could integrate or we build new.
+
+PHASE 3 — Backend register endpoint:
+
+5. Re-read /api/register handler in server/replit_integrations/auth/replitAuth.ts. Report:
+   - Exact required fields
+   - What happens AFTER user/account creation (auto-login? Verification email? Redirect?)
+   - Whether firstName / lastName could be made optional (or nullable in DB) without breaking other logic
+   
+6. Search for endpoints that could host the "profile completion" Step 2 submission — patterns like PATCH /api/user, PATCH /api/profile, PATCH /api/account. If something close exists, we'd extend it; otherwise we add a new endpoint.
+
+PHASE 4 — Routing and post-signup flow:
+
+7. Read App.tsx (or wherever the route table lives). Where does an authenticated user land after register? Is there a /dashboard or /home as the default? Is there any "incomplete profile → redirect" guard logic?
+
+8. Check shared/schema.ts: is there a users.profile_completed_at or similar timestamp that could gate the Step 2 prompt?
+
+PHASE 5 — Industry / Company Size options:
+
+9. Search the codebase for existing industry or company-size enums/constants. If none, recommend a sensible list for trade contractors (e.g., Painting, Roofing, Landscaping, HVAC, Plumbing, General Contractor, Other) and company-size buckets (1-5, 6-20, 21-50, 51-100, 100+).
+
+PHASE 6 — Brand assets and styling:
+
+10. Find the Field View logo file (likely client/public/ or client/src/assets/). Report exact path.
+
+11. Identify the brand orange — look at tailwind.config.js, CSS variables, or existing branded components for hex codes. We need this for the "transparent orange" left panel.
+
+12. Search for existing testimonial or quote-card components — reuse if available, build if not.
+
+OUTPUT — structured report:
+
+A. "Schema gaps" — bulleted list of columns to add, with proposed types and nullability
+B. "Frontend signup component" — current structure + key file references
+C. "Backend changes needed" — can firstName/lastName be made optional? Where does profile-completion endpoint go?
+D. "Post-signup routing" — where users land + whether we need to gate access on profile completion or just prompt
+E. "Industry / Company Size dropdown values" — recommended option lists
+F. "Brand assets" — logo path + orange hex code/CSS variable
+G. "Recommended implementation phases" — ordered breakdown:
+    1. Schema migration
+    2. Backend changes (register tolerance + new profile-completion endpoint)
+    3. Frontend Step 1 redesign (2-column layout + reduced field set)
+    4. Frontend Step 2 (new component for profile completion)
+    5. Routing integration
+    6. Mobile responsiveness check
+   With rough complexity rating per phase (S/M/L) so we know what we're committing to.
+
+DO NOT write any code. Only diagnose.
