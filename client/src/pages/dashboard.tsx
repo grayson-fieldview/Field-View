@@ -308,7 +308,7 @@ export default function DashboardPage() {
   ];
 
   return (
-    <div className="p-4 sm:p-6 space-y-4 max-w-7xl mx-auto h-[calc(100vh-2rem)] flex flex-col">
+    <div className="p-4 sm:p-6 space-y-4 max-w-7xl mx-auto h-screen flex flex-col">
       <div className="flex flex-wrap items-center justify-between gap-4 shrink-0">
         <div>
           <h1 className="text-2xl font-bold tracking-tight" data-testid="text-dashboard-title">
@@ -446,7 +446,7 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 flex-1 min-h-0">
+      <div className="grid grid-cols-2 grid-rows-2 gap-4 flex-1 min-h-0">
         <Card className="flex flex-col min-h-0">
           <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2 px-4 pt-4 shrink-0">
             <CardTitle className="text-sm font-semibold">Recent Activity</CardTitle>
@@ -625,11 +625,11 @@ export default function DashboardPage() {
           <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2 px-4 pt-4 shrink-0">
             <CardTitle className="text-sm font-semibold">Recent Photos</CardTitle>
           </CardHeader>
-          <CardContent className="px-4 pb-4">
+          <CardContent className="flex-1 min-h-0 px-4 pb-4 overflow-hidden">
             {activityLoading ? (
-              <div className="grid grid-cols-4 gap-1.5">
-                {[1, 2, 3, 4].map((i) => (
-                  <Skeleton key={i} className="aspect-square rounded" />
+              <div className="grid grid-cols-3 grid-rows-2 gap-1.5 h-full min-w-0">
+                {[1, 2, 3, 4, 5, 6].map((i) => (
+                  <Skeleton key={i} className="w-full h-full rounded-md" />
                 ))}
               </div>
             ) : recentPhotos.length === 0 ? (
@@ -638,11 +638,11 @@ export default function DashboardPage() {
                 <p className="text-xs text-muted-foreground">No photos yet</p>
               </div>
             ) : (
-              <div className="grid grid-cols-4 gap-1.5">
-                {recentPhotos.slice(0, 8).map((photo) => (
+              <div className="grid grid-cols-3 grid-rows-2 gap-1.5 h-full min-w-0">
+                {recentPhotos.slice(0, 6).map((photo) => (
                   <div
                     key={photo.id}
-                    className="relative group aspect-square rounded overflow-hidden bg-muted cursor-pointer"
+                    className="relative group w-full h-full rounded-md overflow-hidden bg-muted cursor-pointer"
                     onClick={() => photo.projectId && navigate(`/projects/${photo.projectId}`)}
                     data-testid={`photo-thumb-${photo.id}`}
                   >

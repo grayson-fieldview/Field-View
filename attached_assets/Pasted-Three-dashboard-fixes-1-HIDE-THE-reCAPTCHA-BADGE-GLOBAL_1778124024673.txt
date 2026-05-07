@@ -1,0 +1,54 @@
+Three dashboard fixes:
+
+1) HIDE THE reCAPTCHA BADGE GLOBALLY
+Add this to the global stylesheet (probably client/src/index.css or wherever Tailwind base styles live):
+
+  .grecaptcha-badge {
+    visibility: hidden !important;
+  }
+
+⚠️ FLAG IN OUTPUT: Google's reCAPTCHA terms require a legal disclosure on any page using the captcha when the badge is hidden — "This site is protected by reCAPTCHA and the Google Privacy Policy and Terms of Service apply." That disclosure should be added near the auth forms (login + register) before paid traffic launches. Don't add it tonight, just flag.
+
+2) DASHBOARD LAYOUT — FIT VIEWPORT + EQUAL-HEIGHT 2x2 GRID
+File: client/src/pages/dashboard.tsx (or whatever routes to /dashboard).
+
+Outer container:
+- h-screen flex flex-col so the page fills the viewport
+- Header row (Welcome back + subtitle + New Project button) → flex-shrink-0
+- Stats row (3 stat cards) → flex-shrink-0
+- 4-panel content grid → flex-1 (fills remaining vertical space)
+
+The 4 panels (Recent Activity, Recent Projects, Project Locations, Recent Photos):
+- Currently render in two separate rows with content-determined heights, leaving bottom row shorter than top
+- Change to a 2×2 grid: grid grid-cols-2 grid-rows-2 gap-4 h-full
+- Each panel fills its cell: h-full overflow-hidden flex flex-col
+- Inside each panel: header section flex-shrink-0, content section flex-1 overflow-auto so long lists scroll-within-panel without breaking layout
+
+3) RECENT PHOTOS — FIX OVERFLOW
+Inside the Recent Photos panel:
+- Photos are currently bleeding off the right edge (the rightmost photo is clipped by the parent)
+- Change the photo grid from however-many-cols-it-currently-is to grid-cols-3 grid-rows-2 (6 photos total visible, 3 per row)
+- Add min-w-0 on the grid container to prevent it from blowing out the parent panel
+- Each photo cell: aspect-square w-full overflow-hidden rounded-md
+
+PROJECT LOCATIONS — ENSURE MAP FILLS PANEL
+- The Google Map container inside should be h-full w-full to fill the now-taller panel cell
+- If the map library needs an explicit height (Google Maps does), set height: 100% on the inner div
+
+VIEWPORT TARGETING
+- Optimize for ~870-1000px usable viewport (typical 14" MacBook Pro range with browser chrome)
+- If fitting everything in zero-scroll forces awkward compromises, prioritize: (1) all 4 panels visible, (2) equal heights, (3) no-scroll on the main page
+- Internal scrolling within panels is fine
+
+DO NOT TOUCH
+- Any data fetching (queries, hooks, mutations)
+- The content of each panel (just the layout containers)
+- Sidebar nav, top header, or any other page
+
+VERIFICATION
+- reCAPTCHA badge no longer visible on any page
+- Dashboard fits within a typical Mac viewport without page-level scroll
+- Recent Photos stays inside its panel; no horizontal overflow
+- All 4 panels render in a 2×2 grid with equal cell heights
+
+Show me the diff. Don't push.

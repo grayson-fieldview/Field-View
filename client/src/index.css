@@ -304,3 +304,11 @@
     inset: -1px;
   }
 }
+
+/* Hide reCAPTCHA v3 badge globally. Per Google's reCAPTCHA terms, when the
+   badge is hidden a legal disclosure must be shown on every page that uses
+   the captcha (login + register today). TODO: add disclosure copy near the
+   auth forms before paid traffic launch. */
+.grecaptcha-badge {
+  visibility: hidden !important;
+}
