@@ -1,0 +1,56 @@
+Diagnose: prepare to add a required "Company Name" field to the signup form so customers provide their company name at signup, which becomes accounts.name (replacing the auto-generated "{First Last}'s Team" pattern).
+
+DO NOT make any code changes. Investigation only.
+
+PHASE 1 — Frontend signup form:
+
+1. Find the signup form component. Search files matching: signup, register, sign-up, create-account, start-trial. Most likely under client/src/pages/ or client/src/components/auth/.
+   Report: file path, full file contents OR key sections (form field declarations + submit handler).
+
+2. Identify form state management (useState, react-hook-form, Formik, etc.) and validation schema if any (Zod, Yup, etc.).
+
+3. Identify the API endpoint the form POSTs to. Report URL + request body shape.
+
+4. Field order in the current form — list the exact order of fields displayed.
+
+PHASE 2 — Backend signup endpoint(s):
+
+5. Search server/routes.ts (and any auth route files) for the signup endpoint. Paste the full handler (30-60 lines).
+
+6. Inside that handler, identify:
+   - Where the user record is created (db.insert(users)... or storage.createUser)
+   - Where the account record is created
+   - HOW accounts.name is currently set (search for "'s Team", `${firstName}`, `${user.name}`, helper functions named generateAccountName / createDefaultTeamName / etc.)
+   
+   Quote the exact line(s) that produce "X's Team".
+
+7. Are there OTHER signup flows that also create accounts? Specifically:
+   - Google OAuth callback (search for passport-google or replitAuth or oauth related handlers)
+   - Invitation acceptance (where a new user joins an existing account — different flow, but worth confirming separation)
+   - Admin / programmatic account creation (one-off scripts)
+   
+   For each: file:line + how account name is set in that path.
+
+PHASE 3 — Ripple effects:
+
+8. Search the codebase for ANY parsing or filtering of the "X's Team" string pattern. Looking for code that reads accounts.name and assumes a particular format (display formatting, search filters, email templates). Report any matches.
+
+9. Check shared/schema.ts: does accounts.name have a length constraint? (Company names like "Palm Beach Painters & Pressure Washing LLC" can be ~60 chars.)
+
+10. Check email templates / receipts (server/services/email.ts area): do any of them embed accounts.name? Verify it'll display correctly with a real company name vs. "X's Team".
+
+OUTPUT — structured report:
+
+A. "Signup form" — file path + form library + current field list (in order)
+B. "Signup API endpoint" — file:line + request body shape + handler structure
+C. "Account name generation" — file:line + exact code producing "X's Team"
+D. "Other signup flows that create accounts" — list with file:line + how each sets account name
+E. "Ripple effects" — any code that parses the current name format
+F. "Schema" — accounts.name length constraint (if any)
+G. "Required edits" — specific files + specific changes to:
+   - Add Company Name field to form (where in field order)
+   - Add companyName to API request body type / validation
+   - Use companyName as accounts.name in handler
+   - Handle Google OAuth path (prompt post-signup? Default to placeholder + force edit on first login?)
+
+DO NOT write any code. Only diagnose.
