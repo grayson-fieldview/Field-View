@@ -22,6 +22,8 @@ export const accounts = pgTable("accounts", {
   seatCount: integer("seat_count").default(3),
   billingCycle: varchar("billing_cycle"),
   subscriptionLapsedAt: timestamp("subscription_lapsed_at"),
+  industry: varchar("industry"),
+  companySize: varchar("company_size"),
   deletedAt: timestamp("deleted_at"),
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => [
@@ -50,6 +52,8 @@ export const users = pgTable("users", {
   timesheetEnabled: boolean("timesheet_enabled").notNull().default(false),
   autoTrackingEnabled: boolean("auto_tracking_enabled").notNull().default(true),
   hourlyRateCents: integer("hourly_rate_cents"),
+  phone: varchar("phone"),
+  profileCompletedAt: timestamp("profile_completed_at"),
   deletedAt: timestamp("deleted_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
