@@ -17,6 +17,7 @@ function makeLimiter({ keyPrefix, points, durationSeconds, message, logLabel }: 
     storeClient: pool,
     storeType: "pg",
     tableName: "auth_rate_limits",
+    tableCreated: true,  // table is pre-created on RDS; skip library's init check
     keyPrefix,
     points,
     duration: durationSeconds,
