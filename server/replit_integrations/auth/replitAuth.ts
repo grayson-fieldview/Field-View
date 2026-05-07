@@ -416,7 +416,7 @@ export async function setupAuth(app: Express) {
         return res.status(400).json({ message: "You must accept the Terms of Service and Privacy Policy to continue." });
       }
 
-      const { email, password, firstName, lastName, companyName, inviteToken } = req.body;
+      const { email, password, companyName, inviteToken } = req.body;
 
       if (!email || !password) {
         return res.status(400).json({ message: "Email and password are required" });
@@ -439,6 +439,8 @@ export async function setupAuth(app: Express) {
 
       let accountId: string;
       let role: string;
+      let firstName: string | null = null;
+      let lastName: string | null = null;
 
       if (inviteToken) {
         const [invitation] = await db.select().from(invitations).where(
@@ -452,6 +454,8 @@ export async function setupAuth(app: Express) {
         }
         accountId = invitation.accountId;
         role = invitation.role;
+        firstName = invitation.firstName ?? null;
+        lastName = invitation.lastName ?? null;
         await db.update(invitations).set({ status: "accepted" }).where(eq(invitations.id, invitation.id));
       } else {
         const [account] = await db.insert(accounts).values({
@@ -464,8 +468,8 @@ export async function setupAuth(app: Express) {
       const user = await authStorage.upsertUser({
         email,
         password: hashedPassword,
-        firstName: firstName || null,
-        lastName: lastName || null,
+        firstName,
+        lastName,
         role,
         accountId,
         emailVerified: false,
