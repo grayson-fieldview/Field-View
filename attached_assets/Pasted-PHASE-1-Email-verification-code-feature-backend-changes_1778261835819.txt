@@ -1,0 +1,123 @@
+PHASE 1 — Email verification code feature, backend changes
+
+Goal: Replace link-based email verification with 6-digit numeric code-only flow. All infrastructure exists (Resend, rate limiters, page shells, idempotent token validation pattern); we're swapping token format and validation endpoint shape.
+
+DESIGN DECISIONS (locked):
+- 6-digit numeric code (cryptographically random, padded with leading zeros)
+- 15-min code expiration
+- 5 max wrong attempts before code is invalidated; user must resend
+- CODE ONLY — kill the link path entirely
+- 60s resend cooldown is already enforced by resendVerificationLimiter — leave it
+- Funnel: register → welcome → verify-email → dashboard
+
+DO NOT commit, push, or run the migration. Write all code, then stop and show diffs.
+
+============================================================
+TASK 1 — Schema migration script
+============================================================
+
+Write a new migration script at: script/migrations/migrate_email_verification_codes.ts
+
+Use the template at script/migrations/migrate_session22_timesheets.ts. Required practices (per the hard rule):
+- Wrap DDL in db.transaction() for atomic rollback
+- Env guard: throw unless DATABASE_URL contains "rds.amazonaws.com" or "neon.tech"
+- Require ALLOW_PROD_MIGRATION=yes env var for RDS migrations
+- Entry-point guard prevents dynamic-import auto-execution
+- Log host (no password) and mode before any DB call
+- IF NOT EXISTS guards on every DDL for re-run safety
+
+Schema changes to users table:
+- ADD COLUMN IF NOT EXISTS verification_code VARCHAR(6)
+- ADD COLUMN IF NOT EXISTS verification_code_expires_at TIMESTAMP
+- ADD COLUMN IF NOT EXISTS verification_code_attempts INTEGER DEFAULT 0 NOT NULL
+
+Do NOT drop the existing verification_token column. Leave it for now — flag for separate cleanup commit later.
+
+Add the same three columns to the users table declaration in shared/schema.ts.
+
+============================================================
+TASK 2 — Code generation
+============================================================
+
+Replace crypto.randomBytes(32).toString("hex") in:
+- server/replit_integrations/auth/replitAuth.ts:492 (initial signup verification)
+- server/replit_integrations/auth/routes.ts:135 (email change verification)
+
+With:
+    const code = crypto.randomInt(0, 1000000).toString().padStart(6, "0");
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+
+Then: store code in user.verification_code, store expiresAt in user.verification_code_expires_at, reset user.verification_code_attempts to 0. Do NOT also write to verification_token (that column is dormant from now on).
+
+============================================================
+TASK 3 — New verify endpoint
+============================================================
+
+Add new endpoint at the same location as the existing verify-email endpoint in server/replit_integrations/auth/replitAuth.ts:
+
+    app.post("/api/verify-email-code", verifyEmailLimiter, async (req, res) => { ... })
+
+Request body: { email: string, code: string }
+
+Logic (in this order):
+1. Validate body shape; 400 if missing/malformed
+2. Look up user by email (case-insensitive — existing utility likely exists, find and use it)
+3. If user not found → 404 (don't leak whether user exists, but for verify flow it's OK since user just registered)
+4. If user.email_verified === true → 200 { already_verified: true } (idempotent — same pattern as existing GET endpoint)
+5. If user.verification_code is null → 410 { error: "no_active_code", message: "No active verification code. Request a new one." }
+6. If user.verification_code_attempts >= 5 → invalidate code (set verification_code = null), return 429 { error: "too_many_attempts", message: "Too many wrong attempts. Request a new code." }
+7. If user.verification_code_expires_at < new Date() → 410 { error: "code_expired", message: "Code expired. Request a new code." }
+8. If submitted code !== user.verification_code → increment user.verification_code_attempts, return 401 { error: "invalid_code", remaining_attempts: 5 - new_attempts }
+9. On success: set email_verified = true, set verification_code = null, set verification_code_attempts = 0, return 200 { verified: true }
+
+Use the same logging style as the existing verify endpoint (console.warn/info with structured data — see lines 737, 743, 761, 775, 780 for examples).
+
+============================================================
+TASK 4 — Remove GET /api/verify-email endpoint
+============================================================
+
+Delete the entire GET /api/verify-email handler (server/replit_integrations/auth/replitAuth.ts:733 through whatever its closing brace is). The link path is dead.
+
+If you're nervous about removing it entirely, replace the handler body with a 410 Gone response that returns { error: "deprecated", message: "Verification is now done by entering a 6-digit code at /verify-email." }. My preference: just delete it.
+
+============================================================
+TASK 5 — Update email template
+============================================================
+
+In server/services/email.ts, update sendEmailVerificationEmail():
+
+- Change function signature: instead of (to, verificationToken, firstName), take (to, code, firstName)
+- Update subject line to: `Your Field View verification code: ${code}`
+- Update HTML body to display the code prominently:
+    - Large monospace font (e.g., 32px or 40px font-size, font-family monospace)
+    - Centered, padded
+    - Letter-spacing of ~4–8px so digits are easy to read
+    - Surrounding copy: "Enter this code to verify your email address. The code expires in 15 minutes."
+- Update plain-text body similarly
+- Delete the verifyUrl construction and the "click here to verify" link from both HTML and text bodies
+
+============================================================
+TASK 6 — Update /api/resend-verification
+============================================================
+
+In server/replit_integrations/auth/replitAuth.ts:814:
+- Generate fresh 6-digit code (do not reuse the old one)
+- Reset verification_code_attempts to 0
+- Reset verification_code_expires_at to now + 15 min
+- Call updated sendEmailVerificationEmail with the new code
+- Keep the existing resendVerificationLimiter rate limit on the endpoint
+
+============================================================
+VERIFICATION (run after edits, paste output)
+============================================================
+
+1. `grep -rn "crypto.randomBytes(32).toString" server/ --include="*.ts"` — must return 0 results
+2. `grep -c "verification_code" shared/schema.ts` — must return at least 3
+3. `grep -rn "verify-email-code" server/ --include="*.ts"` — must return at least 1 (the new POST endpoint)
+4. `grep -rn 'app.get.*api/verify-email"' server/ --include="*.ts"` — must return 0 (the old GET endpoint is gone)
+5. `grep -rn "verifyUrl" server/services/email.ts` — must return 0 (the link-building code is gone)
+6. Show me the migration script in full
+7. Show me diffs for: shared/schema.ts, server/replit_integrations/auth/replitAuth.ts, server/replit_integrations/auth/routes.ts, server/services/email.ts
+8. `git diff --stat` — should show 4–5 files modified + 1 new migration file
+
+DO NOT commit, push, or run the migration. I'll review everything manually before we move to deploy.
