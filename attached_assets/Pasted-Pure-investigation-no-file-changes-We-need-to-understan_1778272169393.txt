@@ -1,0 +1,61 @@
+Pure investigation — no file changes. We need to understand the current state of project create/update endpoints on the server. Mobile currently has no POST /api/projects in its api.ts and creates projects only locally in AsyncStorage. We need to know whether the server endpoints exist and just aren't being called from mobile, OR they don't exist at all.
+
+REPORT THESE 6 FINDINGS:
+
+Finding 1 — Existing POST /api/projects handler
+Search the server code:
+  grep -rn "post.*\/api\/projects\|app\.post.*projects\|router\.post.*projects" server/ --include="*.ts" 2>/dev/null
+
+If a handler exists, show:
+- The full handler code
+- The middleware applied (auth, rate limiting, validation)
+- The request body shape (what fields it accepts)
+- The response shape (what it returns)
+
+If no handler exists, state explicitly "NO POST /api/projects handler exists."
+
+Finding 2 — Existing PATCH/PUT /api/projects/:id handler
+Same search for PATCH and PUT methods on /api/projects/:id:
+  grep -rn "patch.*\/api\/projects\|put.*\/api\/projects\|app\.patch.*projects\|app\.put.*projects" server/ --include="*.ts" 2>/dev/null
+
+Show handler code, middleware, body shape, response. Or state "NO PATCH/PUT handler exists."
+
+Finding 3 — projects table schema
+Show the full Drizzle schema declaration for the projects table. We need to see:
+- All columns and their types
+- Required vs nullable fields
+- Foreign keys (account_id? user_id?)
+- Indexes
+- Whether latitude/longitude are real columns (per memory they should be)
+
+  grep -A 50 "export const projects = pgTable" shared/schema.ts shared/models/*.ts 2>/dev/null
+
+Finding 4 — Authorization model for projects
+Find how projects are scoped to accounts/users:
+  grep -rn "accountId.*project\|project.*accountId\|userId.*project" server/ --include="*.ts" | head -20
+
+Confirm:
+- Are projects scoped to accountId (one project belongs to one account/company)?
+- Or scoped to userId (one project belongs to one user)?
+- What auth check should the new POST endpoint apply? (e.g. "user must belong to an active account to create a project")
+- Does account billing affect project creation? (e.g. seat-based limits, project count limits)
+
+Finding 5 — Storage methods
+Find the storage layer methods that already exist for projects:
+  grep -rn "createProject\|updateProject\|insertProject" server/ --include="*.ts" 2>/dev/null | grep -v node_modules | head -20
+
+Report:
+- Whether storage.createProject() or similar exists
+- Whether it would need to be added or already does the work
+
+Finding 6 — Current GET /api/projects handler shape
+Show the existing GET /api/projects handler. We need to see:
+- What it returns (BackendProject shape per mobile's api.ts:280)
+- What auth/scoping it applies (so the new POST applies the same)
+
+OUTPUT:
+- 6 findings with code excerpts
+- Final summary: "POST /api/projects [EXISTS / DOES NOT EXIST]" + "PATCH /api/projects/:id [EXISTS / DOES NOT EXIST]"
+- A proposed implementation plan with explicit decision points
+
+DO NOT modify any files. Investigation only.
