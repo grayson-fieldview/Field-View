@@ -15,6 +15,7 @@ const connectionConfig: pg.PoolConfig = {
   max: process.env.VERCEL ? 1 : 10,
   idleTimeoutMillis: 10000,
   connectionTimeoutMillis: 5000,
+  statement_timeout: 10000,
   keepAlive: true,
   keepAliveInitialDelayMillis: 10000,
 };

@@ -99,3 +99,41 @@ export const verifyEmailLimiter = makeLimiter({
   message: "Too many verification attempts. Please try again in 15 minutes.",
   logLabel: "verify-email",
 });
+
+const loginAccountRateLimiter = new RateLimiterPostgres({
+  storeClient: pool,
+  storeType: "pg",
+  tableName: "auth_rate_limits",
+  tableCreated: true,
+  keyPrefix: "rl_login_acct",
+  points: 7,
+  duration: 15 * 60,
+});
+
+export const loginAccountLimiter = {
+  limiter: loginAccountRateLimiter,
+
+  normalizeKey(req: Request): string {
+    return (req.body?.email || "").trim().toLowerCase() || "unknown";
+  },
+
+  async isLocked(key: string): Promise<{ locked: boolean; retryAfterSeconds: number }> {
+    try {
+      const res = await loginAccountRateLimiter.get(key);
+      if (res && res.consumedPoints >= 7 && res.msBeforeNext > 0) {
+        return { locked: true, retryAfterSeconds: Math.ceil(res.msBeforeNext / 1000) };
+      }
+    } catch {}
+    return { locked: false, retryAfterSeconds: 0 };
+  },
+
+  async consumeOnFail(key: string): Promise<void> {
+    try {
+      await loginAccountRateLimiter.consume(key, 1);
+    } catch (err) {
+      if (err instanceof RateLimiterRes) {
+        console.warn(`[rate-limit] login-account locked for ${key} — retry in ${Math.ceil(err.msBeforeNext / 1000)}s`);
+      }
+    }
+  },
+};

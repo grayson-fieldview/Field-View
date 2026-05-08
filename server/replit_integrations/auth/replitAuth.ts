@@ -23,6 +23,7 @@ import {
   resetPasswordLimiter,
   resendVerificationLimiter,
   verifyEmailLimiter,
+  loginAccountLimiter,
 } from "../../middleware/rate-limit";
 import { Sentry } from "../../lib/sentry";
 import { sendSlackNotification, isCompAccount } from "../../lib/slack";
@@ -538,10 +539,22 @@ export async function setupAuth(app: Express) {
     }
   });
 
-  app.post("/api/login", loginLimiter, (req, res, next) => {
+  app.post("/api/login", loginLimiter, async (req, res, next) => {
+    const acctKey = loginAccountLimiter.normalizeKey(req);
+    const lockState = await loginAccountLimiter.isLocked(acctKey);
+    if (lockState.locked) {
+      res.setHeader("Retry-After", String(lockState.retryAfterSeconds));
+      return res.status(429).json({
+        error: "account_locked",
+        message: "Too many failed login attempts. Try again in " + lockState.retryAfterSeconds + " seconds or reset your password.",
+        retry_after_seconds: lockState.retryAfterSeconds,
+      });
+    }
+
     passport.authenticate("local", (err: any, user: any, info: any) => {
       if (err) return next(err);
       if (!user) {
+        loginAccountLimiter.consumeOnFail(acctKey);
         return res.status(401).json({ message: info?.message || "Invalid email or password" });
       }
       req.login(user, (err) => {

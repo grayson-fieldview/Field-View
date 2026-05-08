@@ -1,0 +1,76 @@
+Implement the per-account login lockout per the previous investigation. All design decisions from Section 5/decision points are LOCKED:
+
+- Threshold: 7 failed attempts → 15-minute lockout
+- keyPrefix: "rl_login_acct"
+- Consume timing: POST-FAIL ONLY (only count wrong passwords, not successful logins)
+- Pre-check on lockout BEFORE the password attempt: if already locked, return 429 immediately
+- Lockout response: 429 with specific message + retry_after_seconds + suggest forgot-password
+- Email normalization: lowercase + trim before keying the limiter
+- ALSO: add statement_timeout: 10000 to server/db.ts pool config (unrelated safety net, ships in same commit)
+
+The auth_rate_limits table already supports multiple keyPrefix values, no schema migration needed.
+
+CHANGES:
+
+A. server/middleware/rate-limit.ts
+   The current makeLimiter factory hardcodes req.ip as the key (line 28). To support per-account limiting, we need a variant that takes a key function. Choose one approach:
+   
+   Option 1: Extend makeLimiter to accept an optional `key: (req) => string` parameter, defaulting to req.ip.
+   Option 2: Add a sibling factory makeAccountLimiter that does the same thing but with the key function required.
+   
+   Either is fine — pick whichever produces the cleaner diff. Add the new export:
+   
+   export const loginAccountLimiter = make[Account]Limiter({
+     keyPrefix: "rl_login_acct",
+     points: 7,
+     durationSeconds: 15 * 60,
+     message: "Too many failed login attempts for this account. Try again in 15 minutes or reset your password.",
+     logLabel: "login-account",
+     key: (req) => (req.body?.email || "").trim().toLowerCase() || "unknown",
+   });
+   
+   The "unknown" fallback prevents an empty/missing email from creating a single shared bucket. We don't want every email-less request sharing one limiter.
+
+B. server/replit_integrations/auth/replitAuth.ts
+   Modify the /api/login flow. Two new steps:
+   
+   1. PRE-CHECK: Before passport.authenticate runs, call loginAccountLimiter's underlying RateLimiterPostgres .get(normalizedEmail) to check if the account is already locked. If get() returns a result with consumedPoints >= 7 AND msBeforeNext > 0, return 429 immediately:
+      {
+        error: "account_locked",
+        message: "Too many failed login attempts. Try again in X minutes or reset your password.",
+        retry_after_seconds: Math.ceil(msBeforeNext / 1000)
+      }
+      Do NOT run passport.authenticate. Do NOT run any other auth logic.
+   
+   2. POST-FAIL: Inside the LocalStrategy callback, after each logFail() call (currently 3 sites: user_not_found at line ~241, invalid_password at line ~256, soft-deleted at line ~271 — verify exact lines), consume 1 point from loginAccountLimiter for the normalized email. Do this before calling done(null, false, ...) so the consume happens regardless of how the strategy returns.
+   
+   3. SUCCESS PATH: On successful login, do NOT consume. The successful done(null, activeUser) path remains untouched.
+   
+   Implementation note: loginAccountLimiter is currently typed as a RequestHandler (Express middleware). To call .get() and .consume() directly from inside the LocalStrategy callback, we need access to the underlying RateLimiterPostgres instance, not just the middleware wrapper.
+   
+   Cleanest approach: refactor makeLimiter (or makeAccountLimiter) to return BOTH the middleware AND the underlying limiter, e.g.:
+     export const loginAccountLimiter = makeAccountLimiter({...});  // returns { middleware, limiter }
+   Then call loginAccountLimiter.limiter.get(key) and loginAccountLimiter.limiter.consume(key) directly.
+   
+   Alternatively, expose just the limiter (no middleware wrapper) since we're not using this one as Express middleware. That's cleaner for this case.
+
+C. server/db.ts
+   Add statement_timeout: 10000 to connectionConfig.  This sets a 10-second cap on any single SQL statement, preventing runaway queries from holding the single Vercel pool connection indefinitely. Cosmetic placement: between connectionTimeoutMillis and keepAlive in the config object, keeping config properties grouped logically (timeouts together, then keepalive).
+
+VERIFICATION (run after edits, paste output):
+
+1. grep -c "loginAccountLimiter" server/ -r --include="*.ts" — must return at least 3 (definition + import + usage in replitAuth.ts)
+2. grep -c "rl_login_acct" server/middleware/rate-limit.ts — must return 1 (the keyPrefix)
+3. grep -c "statement_timeout" server/db.ts — must return 1
+4. grep -c "account_locked" server/replit_integrations/auth/replitAuth.ts — must return at least 1 (the new 429 response)
+5. Show the diff for all three files
+6. Run `npx tsc --noEmit` (or whatever the typecheck command is) — must show 0 new TypeScript errors
+
+DO NOT commit or push. I'll review and push manually.
+
+EDGE CASES TO HANDLE EXPLICITLY:
+
+- What if req.body.email is missing entirely? The key function should return "unknown" so missing-email requests share one bucket (and trip lockout fast — they're attacks). Confirm this is the behavior.
+- What if email contains uppercase? Normalize to lowercase BEFORE consuming. The actual auth still uses the raw email (consistent with existing case-sensitive behavior, which is logged as TECH_DEBT). Only the rate limiter key is normalized.
+- What if the same email tries to log in legitimately AFTER a successful login but BEFORE the post-fail counter resets? The successful login does NOT consume, so the legit user's 7-budget is still intact. Verify this in the implementation.
+- The pre-check using .get() is non-blocking (it doesn't consume). It just reads the current state. Confirm the implementation uses .get() not .consume() for the pre-check.
