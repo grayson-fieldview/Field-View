@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, Mail } from "lucide-react";
-import faviconImg from "@assets/Favicon-01_1772067008525.png";
+import faviconImg from "@assets/Favicon-01-brand_1778259672.png";
 
 const RESEND_COOLDOWN_SECONDS = 60;
 

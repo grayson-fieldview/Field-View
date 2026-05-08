@@ -13,7 +13,7 @@ import {
   Plus,
   CreditCard,
 } from "lucide-react";
-import faviconImg from "@assets/Favicon-01_1772067008525.png";
+import faviconImg from "@assets/Favicon-01-brand_1778259672.png";
 
 export default function SubscribePage() {
   const { user, logout } = useAuth();

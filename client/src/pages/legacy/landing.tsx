@@ -44,7 +44,7 @@ import {
   Truck,
   Construction,
 } from "lucide-react";
-import faviconImg from "@assets/Favicon-01_1772067008525.png";
+import faviconImg from "@assets/Favicon-01-brand_1778259672.png";
 import painterImg from "@assets/stock_images/painter_working.jpg";
 import plumberImg from "@assets/stock_images/plumber_working.jpg";
 import electricianImg from "@assets/stock_images/electrician_working_1.jpg";
