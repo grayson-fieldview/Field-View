@@ -1,0 +1,65 @@
+Goal: Redesign the signup page to mirror CompanyCam's signup layout (companycam.com/signup) with Field View copy and brand colors. Preserve all existing form submission logic, validation, error handling, loading states, and Stripe/auth wiring — this is a visual restructure only.
+
+BRAND COLORS (use exactly these hex values throughout):
+- Brand orange (primary): #ef9003
+- Brand orange hover: #d57d02
+- Peach panel background: #FCDDB8
+- Yellow accent: #FACC15
+
+STEP 1 — Find the file
+Locate the signup route component. Likely at one of:
+  - client/src/pages/signup.tsx
+  - client/src/pages/Signup.tsx
+  - client/src/routes/signup.tsx
+Tell me the file path before you start editing so I can confirm.
+
+STEP 2 — Layout (mirror CompanyCam structure)
+- Page background: white
+- Two-column layout: LEFT panel ~42% of viewport width, RIGHT panel fills remainder
+- The page container has padding (p-3 sm:p-4) so both panels are slightly inset from the screen edges
+- LEFT panel is a single solid colored block with rounded-3xl corners on all sides
+- RIGHT panel is plain white
+- At md breakpoint and below, stack vertically: left panel on top with reduced height, form below
+
+STEP 3 — LEFT panel content (top to bottom, justify-between)
+Background color: #FCDDB8 (warm peach). Solid color, NO gradients, NO decorative circles, NO background patterns. Internal padding: p-8 sm:p-10 lg:p-14.
+
+(a) Logo at top-left — use the existing <Logo /> or equivalent component already imported elsewhere in the codebase (find it). Do NOT substitute a different icon.
+
+(b) Headline + subheadline — vertically positioned in the upper-middle of the panel:
+    Headline (two lines, font-extrabold, text-5xl sm:text-6xl lg:text-7xl, leading-[0.95], tracking-tight, text-slate-900):
+        "Get Your Crew on"
+        "the same page."   ← this second line ONLY in color #FACC15
+    Subheadline (mt-6, text-base lg:text-xl, font-medium, text-slate-800, max-w-xl, leading-relaxed):
+        "Track jobs, photos, and crew hours all in one place — built for trades teams who'd rather be on the jobsite than in the back office."
+
+(c) Testimonial card pinned at the bottom of the panel:
+    - Solid white background, rounded-2xl, p-6 lg:p-7, shadow-xl, max-w-md
+    - 5 star icons at the top (lucide-react Star, w-5 h-5, color AND fill #ef9003)
+    - Quote text (text-slate-800, text-[15px], leading-relaxed, mb-5):
+        "FieldView has helped our team stay organized across multiple projects, automatically clocks our crew in when they hit the job, and has been a big help with the growth of our company."
+    - Author block: 40px circle avatar with white "L" on #ef9003 background + name "Luke O." (font-bold, text-sm, text-slate-900) + role "Owner · Palm Beach Painters" (text-xs, text-slate-600, font-medium)
+
+STEP 4 — RIGHT panel content
+- Top-right corner of the right panel: text "Already a customer? Sign in" — "Sign in" is a link in #ef9003, font-bold; routes to existing /login or /signin route. Keep right-aligned, padding from edge.
+- Form is vertically and horizontally centered in the remaining space, max-w-md
+- Heading: "Welcome! Create an account for your company." — text-2xl sm:text-3xl, font-extrabold, text-slate-900, tracking-tight, mb-6
+- DO NOT include any subline like "14 days, full access" or any "Your trial includes" benefits list. The testimonial on the left does the conversion lifting.
+- Three fields, each with a label above (text-sm, font-bold, text-slate-800, mb-1.5):
+    1. Company Name — text input, placeholder "Acme Construction"
+    2. Work Email — email input, placeholder "you@company.com"
+    3. Password — password input with show/hide eye toggle (lucide-react Eye/EyeOff), placeholder matching existing requirement
+- Field styling: w-full, px-4 py-3, rounded-xl, border-2 border-slate-200, focus:border-[#ef9003], focus:outline-none, placeholder:text-slate-400. Use existing <Input /> component from the codebase if one exists — only override className, do not replace the component.
+- Terms checkbox: existing <Checkbox /> if available, accent color #ef9003, with label "I agree to the [Terms of Service] and [Privacy Policy]" — both links in #ef9003, font-bold. Wire to existing terms-acceptance state.
+- Get Started button: full width, py-3.5, rounded-xl, bg-[#ef9003] hover:bg-[#d57d02] text-white font-bold, shadow-md, lucide ArrowRight icon at the right. Disabled state when form invalid (existing validation logic). Use existing <Button /> if available.
+
+STEP 5 — Preserve existing logic
+- Do NOT change the form submission handler, the route, the redirect after success, the auth/Stripe integration, or any error/loading state UI
+- Do NOT remove reCAPTCHA, Google OAuth button (if present), or any other existing functionality
+- If reCAPTCHA or Google OAuth was rendered before, render them in the same logical positions in the new layout (above or below the form fields as appropriate — use your judgment)
+
+STEP 6 — Show me before applying
+- Show the file path you'll modify
+- Show the diff before committing
+- Tell me what existing components you used (Logo, Input, Button, Checkbox) so I can verify
+- Do NOT push to GitHub. I'll review and push manually.
