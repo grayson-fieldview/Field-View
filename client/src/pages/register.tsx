@@ -310,7 +310,7 @@ export default function RegisterPage() {
       <div className="grid grid-cols-1 md:grid-cols-[40%_1fr] gap-3 sm:gap-4 min-h-[calc(100vh-1.5rem)] sm:min-h-[calc(100vh-2rem)]">
         {/* Left peach panel */}
         <div
-          className="bg-[#FCDDB8] rounded-3xl p-8 sm:p-10 lg:p-14 flex flex-col justify-between min-h-[400px] md:min-h-0"
+          className="bg-[#fceed8] rounded-3xl p-8 sm:p-10 lg:p-14 flex flex-col justify-between min-h-[400px] md:min-h-0"
           data-testid="panel-brand"
         >
           {/* Logo */}
