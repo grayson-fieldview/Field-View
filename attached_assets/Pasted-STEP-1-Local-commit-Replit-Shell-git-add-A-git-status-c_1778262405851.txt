@@ -1,0 +1,54 @@
+STEP 1 — Local commit (Replit Shell)
+git add -A
+git status   # confirm 5 files (4 modified + 1 new migration)
+git commit -m "Email verification: switch to 6-digit code-only flow
+
+Backend Phase 1. Adds 4 columns (verification_code, expires_at, attempts, sent_at)
+to users. New POST /api/verify-email-code; old GET /api/verify-email returns 410.
+Email template displays code prominently; no link. Resend cooldown enforced via
+verification_code_sent_at column. email_verification_tokens table left dormant
+for rollback safety; cleanup deferred."
+
+# DO NOT push yet — migration runs first
+
+STEP 2 — Test migration on Neon dev (sanity, ~30s)
+DATABASE_URL=<neon dev URL> npx tsx script/migrations/migrate_email_verification_codes.ts
+# should succeed; verify columns exist via Neon console or TablePlus
+
+STEP 3 — Snapshot prod RDS
+AWS Console → RDS → fieldview-user-database → Actions → Take snapshot
+Name: pre-email-code-migration-2026-05-08
+Wait for "Available" status (~3-5 min)
+
+STEP 4 — Whitelist Replit IP in RDS security group
+Get Replit IP: in Replit Shell, run `curl -s ifconfig.me`
+AWS Console → RDS security group → Inbound rules → Add rule: PostgreSQL, source = <that IP>/32
+
+STEP 5 — Run migration on prod
+ALLOW_PROD_MIGRATION=yes DATABASE_URL=<prod RDS URL> npx tsx script/migrations/migrate_email_verification_codes.ts
+
+Watch the output for:
+  - Host log line shows rds.amazonaws.com (NOT neon.tech)
+  - "ALLOW_PROD_MIGRATION=yes" confirmed
+  - Transaction commits without error
+  - Post-migration verification query confirms 4 columns exist
+
+STEP 6 — Verify schema in TablePlus
+SELECT column_name, data_type, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_name = 'users' AND column_name LIKE 'verification_code%'
+ORDER BY ordinal_position;
+
+Should return 4 rows: verification_code (varchar), verification_code_expires_at (timestamp), verification_code_attempts (integer, default 0), verification_code_sent_at (timestamp).
+
+STEP 7 — Push application code
+git push origin main
+# Vercel auto-deploys; watch the deploy reach "Ready"
+
+STEP 8 — Remove Replit IP from security group
+AWS Console → RDS security group → remove the rule from STEP 4
+
+STEP 9 — Smoke test on prod
+Register a test account → check email arrives with 6-digit code prominently displayed → confirm GET /api/verify-email returns 410 with the deprecation message → confirm POST /api/verify-email-code with the right code marks the account verified.
+
+(Frontend code-entry UI doesn't exist yet — the smoke test is via curl or Postman until Phase 2 ships.)
