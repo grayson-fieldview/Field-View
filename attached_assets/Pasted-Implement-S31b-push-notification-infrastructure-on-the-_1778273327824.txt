@@ -1,0 +1,116 @@
+Implement S31b push notification infrastructure on the server side. All design decisions are LOCKED:
+
+- Add expo_push_token VARCHAR(255) NULL column to users table
+- New endpoint POST /api/users/push-token + DELETE /api/users/push-token
+- New server/lib/push.ts module using expo-server-sdk
+- Wire push send into the existing exit cron at server/routes.ts:2399 — OUTSIDE the transaction, fire-and-forget
+- Auto-clear token on DeviceNotRegistered errors
+- Single device per user (multi-device deferred)
+
+Notification copy:
+- Title: "Clocked out" (lowercase 'o', matches existing fireClockInReceipt's "Clocked in")
+- Body: `${projectName} · ${formatTime(clockOutTime)}` where formatTime matches the format already used by mobile's fireClockInReceipt for clock-in receipts (e.g., "3:15 PM")
+
+CHANGES (in this exact order):
+
+A. Create migration script: script/migrations/migrate_session32b_push_token.ts
+   Follow the EXACT template of script/migrations/migrate_session22_timesheets.ts. Include:
+   - Env guard: throw unless DATABASE_URL contains rds.amazonaws.com or neon.tech
+   - For RDS, additionally require process.env.ALLOW_PROD_MIGRATION === "yes"
+   - Log host (no password) and mode before any DB call
+   - Wrap DDL in db.transaction()
+   - Use IF NOT EXISTS on the ALTER TABLE
+   - Include a verification query against information_schema.columns that throws if expo_push_token is missing post-migration
+   - Entry-point guard: ESM-style if (import.meta.url === `file://${process.argv[1]}`)
+   
+   The single DDL:
+     ALTER TABLE users ADD COLUMN IF NOT EXISTS expo_push_token varchar(255)
+
+B. Update shared/models/auth.ts users table declaration — add the column:
+     expoPushToken: varchar("expo_push_token", { length: 255 }),
+   Place it logically (near other user device/session-related fields if any, otherwise at the end before deletedAt).
+
+C. Install expo-server-sdk via the project's package manager:
+   - Verify whether the project uses npm or pnpm (check for package-lock.json vs pnpm-lock.yaml)
+   - Install expo-server-sdk as a regular dependency
+
+D. Create server/lib/push.ts with the sendPushNotification function exactly as the diagnostic specified:
+   - Single export: async sendPushNotification(opts: { userId: string; title: string; body: string; data?: Record<string, any> }): Promise<void>
+   - Looks up user.expoPushToken via Drizzle
+   - Silent no-op if token missing
+   - Validates token format with Expo.isExpoPushToken; on invalid format, clears the token and returns
+   - Sends via expo.sendPushNotificationsAsync
+   - On ticket status === "error" with details.error === "DeviceNotRegistered", clears the token
+   - Logs all errors but never throws (push failure must be invisible to callers)
+   - If Sentry is available in this codebase, capture exceptions to Sentry; if not, just console.error
+
+E. Add new endpoints to server/routes.ts (find a logical placement near other /api/users routes — probably near PATCH /api/users/me/preferences):
+
+   app.post("/api/users/push-token", isAuthenticated, async (req: any, res) => {
+     const schema = z.object({
+       token: z.string().regex(/^ExponentPushToken\[.+\]$/, "Invalid Expo push token format")
+     });
+     const parsed = schema.safeParse(req.body ?? {});
+     if (!parsed.success) {
+       return res.status(400).json({ message: parsed.error.issues[0]?.message ?? "Invalid token" });
+     }
+     await db.update(users)
+       .set({ expoPushToken: parsed.data.token })
+       .where(eq(users.id, req.user.id));
+     res.status(204).send();
+   });
+
+   app.delete("/api/users/push-token", isAuthenticated, async (req: any, res) => {
+     await db.update(users)
+       .set({ expoPushToken: null })
+       .where(eq(users.id, req.user.id));
+     res.status(204).send();
+   });
+
+F. Modify the exit cron handler at server/routes.ts (around line 2352-2410). Inside the per-row processing loop:
+
+   Inside the existing db.transaction (where executeAutoClockOut runs), capture project name AND clock-out timestamp in scoped variables:
+   
+     let pushNotificationParams: { userId: string; projectName: string; clockOutAt: Date } | null = null;
+     // ... existing code that processes the row inside the transaction ...
+     await executeAutoClockOut({ timeEntryId, userId }, tx);
+     const [proj] = await tx.select({ name: projects.name })
+       .from(projects).where(eq(projects.id, pending.projectId)).limit(1);
+     pushNotificationParams = {
+       userId: pending.userId,
+       projectName: proj?.name ?? "your job site",
+       clockOutAt: new Date(),
+     };
+     // ... rest of transaction ...
+   
+   AFTER the transaction commits (outside the db.transaction block, before the next iteration's row processing):
+   
+     if (pushNotificationParams) {
+       const formatTime = (d: Date) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+       sendPushNotification({
+         userId: pushNotificationParams.userId,
+         title: "Clocked out",
+         body: `${pushNotificationParams.projectName} · ${formatTime(pushNotificationParams.clockOutAt)}`,
+         data: {
+           type: "clock_out_receipt",
+           timeEntryId: pending.timeEntryId,
+           projectId: pending.projectId,
+           clockOutAt: pushNotificationParams.clockOutAt.toISOString(),
+         },
+       }).catch(err => console.error("[cron] push failed:", err));
+     }
+   
+   IMPORTANT: do NOT modify the CRON_SECRET auth check at the top. Do NOT change the response format. Do NOT change error handling for the storage/transaction failures.
+
+VERIFICATION (run after edits):
+
+1. cat script/migrations/migrate_session32b_push_token.ts | head -30 — show it has the env guards
+2. grep -c "expoPushToken" shared/models/auth.ts — must return ≥ 1
+3. grep -c "expo-server-sdk" package.json — must return 1
+4. grep -c "sendPushNotification" server/lib/push.ts — must return ≥ 2 (export + internal use)
+5. grep -c "/api/users/push-token" server/routes.ts — must return ≥ 2 (POST + DELETE)
+6. grep -c "sendPushNotification" server/routes.ts — must return ≥ 1 (cron integration)
+7. Run TypeScript compile (whatever the project uses) — must show 0 NEW errors vs the current baseline
+8. Show the diff for all 5 modified/new files
+
+DO NOT run the migration yet (that's a separate step requiring the hard-rule sequence with prod RDS access). DO NOT commit, do NOT push. I'll review diffs and run the migration manually following the production sequence.

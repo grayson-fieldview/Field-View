@@ -20,6 +20,7 @@ import { sendInvitationEmail, sendAccountDeletionEmail } from "./services/email"
 import { toCsv } from "./lib/csv";
 import bcrypt from "bcryptjs";
 import { Sentry } from "./lib/sentry";
+import { sendPushNotification } from "./lib/push";
 
 async function verifyProjectAccess(projectId: number, accountId: string): Promise<boolean> {
   const project = await storage.getProject(projectId);
@@ -2003,6 +2004,31 @@ export async function registerRoutes(
     autoTrackingEnabled: z.boolean().optional(),
   }).strict();
 
+  // POST /api/users/push-token — register/update an Expo push token for the
+  // authenticated user. Token is validated against Expo's `ExponentPushToken[..]`
+  // format. Single device per user (multi-device deferred). DELETE counterpart
+  // below clears the token (called by mobile on logout).
+  app.post("/api/users/push-token", isAuthenticated, async (req: any, res) => {
+    const schema = z.object({
+      token: z.string().regex(/^ExponentPushToken\[.+\]$/, "Invalid Expo push token format"),
+    });
+    const parsed = schema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ message: parsed.error.issues[0]?.message ?? "Invalid token" });
+    }
+    await db.update(users)
+      .set({ expoPushToken: parsed.data.token })
+      .where(eq(users.id, req.user.id));
+    res.status(204).send();
+  });
+
+  app.delete("/api/users/push-token", isAuthenticated, async (req: any, res) => {
+    await db.update(users)
+      .set({ expoPushToken: null })
+      .where(eq(users.id, req.user.id));
+    res.status(204).send();
+  });
+
   app.patch("/api/users/me/preferences", isAuthenticated, async (req: any, res) => {
     try {
       const currentUser = req.user;
@@ -2367,6 +2393,10 @@ export async function registerRoutes(
       let errored = 0;
 
       for (const pending of due) {
+        // S32b: captured inside the tx, sent AFTER commit. Push send must
+        // never roll back a successful clock-out, so it lives outside the
+        // transaction and is fire-and-forget.
+        let pushNotificationParams: { userId: string; projectName: string; clockOutAt: Date } | null = null;
         try {
           // Per-row transaction: defensive re-check + entry update + pending mark in one atom.
           await db.transaction(async (tx) => {
@@ -2400,11 +2430,38 @@ export async function registerRoutes(
               { timeEntryId: entryNow.id, userId: pending.userId },
               tx,
             );
+            const [proj] = await tx.select({ name: projects.name })
+              .from(projects).where(eq(projects.id, pending.projectId)).limit(1);
+            pushNotificationParams = {
+              userId: pending.userId,
+              projectName: proj?.name ?? "your job site",
+              clockOutAt: now,
+            };
             await tx.update(pendingGeofenceExits)
               .set({ status: "fired", firedAt: now, updatedAt: now })
               .where(eq(pendingGeofenceExits.id, pending.id));
             fired++;
           });
+
+          // Post-commit: fire-and-forget push receipt. Mirrors mobile's
+          // fireClockInReceipt format ("3:15 PM"). Failure here MUST NOT
+          // affect the cron loop or counters — clock-out has already been
+          // committed atomically above.
+          if (pushNotificationParams) {
+            const params = pushNotificationParams as { userId: string; projectName: string; clockOutAt: Date };
+            const formatTime = (d: Date) => d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+            sendPushNotification({
+              userId: params.userId,
+              title: "Clocked out",
+              body: `${params.projectName} · ${formatTime(params.clockOutAt)}`,
+              data: {
+                type: "clock_out_receipt",
+                timeEntryId: pending.timeEntryId,
+                projectId: pending.projectId,
+                clockOutAt: params.clockOutAt.toISOString(),
+              },
+            }).catch(err => console.error("[cron] push failed:", err));
+          }
         } catch (rowErr: any) {
           console.error(`[cron] row ${pending.id} failed:`, rowErr);
           Sentry.captureException(rowErr);

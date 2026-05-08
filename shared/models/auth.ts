@@ -58,6 +58,7 @@ export const users = pgTable("users", {
   verificationCodeExpiresAt: timestamp("verification_code_expires_at"),
   verificationCodeAttempts: integer("verification_code_attempts").notNull().default(0),
   verificationCodeSentAt: timestamp("verification_code_sent_at"),
+  expoPushToken: varchar("expo_push_token", { length: 255 }),
   deletedAt: timestamp("deleted_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
