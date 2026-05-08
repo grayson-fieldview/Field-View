@@ -1,0 +1,52 @@
+Pure investigation — no file changes. We're building S31b: push notification infrastructure to send clock-out notifications when the auto-exit cron fires. Need to understand the server-side state.
+
+REPORT THESE 6 FINDINGS:
+
+Finding 1 — Exit detection cron
+Per memory, mobile fires POST /api/geofence/exit-detected, server holds exit for 5 minutes (debounce), then a cron processes it and clocks out the user. Find:
+  grep -rn "exit-detected\|process-pending-exits\|exit.*debounce\|geofence.*exit" server/ --include="*.ts" 2>/dev/null | head -30
+
+Show:
+- The route handler for POST /api/geofence/exit-detected
+- The cron that processes pending exits (likely /api/cron/process-pending-exits per the Vercel logs we've seen earlier today)
+- The exact line in the cron where the user is actually clocked out
+- The data available at that point (user, project, exit timestamp, etc.)
+
+Finding 2 — Existing push token state
+Search the entire server for any existing push token infrastructure:
+  grep -rn "ExponentPushToken\|expo.*push\|push.*token\|expo-server-sdk" server/ shared/ --include="*.ts" --include="*.json" 2>/dev/null
+  grep -rn "expo-server-sdk" package.json
+
+Confirm: zero existing infrastructure. We're building from scratch.
+
+Finding 3 — Users table schema
+Show the users table schema. We'll need to add a column for storing the user's Expo push token. Specifically:
+- Is there already a column we can reuse (notificationToken, deviceToken, pushToken, etc.)?
+- If not, we'll add expo_push_token VARCHAR(255) nullable
+
+This will require a prod RDS migration following the hard-rule sequence (migration BEFORE Vercel deploy).
+
+Finding 4 — Existing user PATCH endpoint
+Find PATCH /api/users/me or similar:
+  grep -rn "patch.*\/api\/users\|app\.patch.*users\|users.*patch" server/ --include="*.ts" 2>/dev/null | head -20
+
+We need to know whether to extend an existing endpoint or add a new one (POST /api/users/push-token) for token registration.
+
+Finding 5 — Cron infrastructure
+Show how the existing cron is wired (vercel.json schedule? an Express handler? a separate worker?):
+- The cron path
+- The schedule frequency
+- Any auth/secret check (the cron should not be callable by external users)
+
+Finding 6 — Migration script template
+Per memory, prod RDS migrations follow a strict sequence: snapshot → whitelist Replit IP → migrate → verify → THEN Vercel deploy → remove IP from security group.
+
+Show one of the recent migration scripts as a template (per memory: script/migrations/migrate_session22_timesheets.ts). Confirm:
+- Wraps DDL in db.transaction() for atomic rollback
+- Env guard requiring rds.amazonaws.com or neon.tech in URL
+- Entry-point guard preventing dynamic-import auto-execution
+- Uses IF NOT EXISTS guards on every DDL
+
+We'll need a new migration script following the same template for the push token column.
+
+OUTPUT: 6 findings with code excerpts + an implementation plan covering: (1) DB migration for the push token column, (2) new POST /api/users/push-token endpoint to register tokens, (3) push send function using expo-server-sdk, (4) wiring the exit cron to call the push send. DO NOT modify any files.
