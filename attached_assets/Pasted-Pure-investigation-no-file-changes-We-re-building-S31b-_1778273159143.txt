@@ -1,0 +1,69 @@
+Pure investigation — no file changes. We're building S31b: push notification infrastructure to send clock-out notifications when the auto-exit cron fires. Need to understand the server-side state.
+
+REPORT THESE 6 FINDINGS:
+
+Finding 1 — Exit detection cron
+Per memory, mobile fires POST /api/geofence/exit-detected, server holds exit for 5 minutes (debounce), then a cron processes it and clocks out the user. Find:
+  grep -rn "exit-detected\|process-pending-exits\|pending.*exit\|geofence.*exit" server/ --include="*.ts" 2>/dev/null | head -30
+
+Show:
+- The route handler for POST /api/geofence/exit-detected (where the pending exit is created)
+- The cron that processes pending exits (likely /api/cron/process-pending-exits per the Vercel logs we've been seeing all day)
+- The exact lines in the cron where the user is actually clocked out (the timesheet update)
+- The full data context available at that point (user object, project object, exit timestamp, time entry)
+
+We need to know what's in scope when we want to fire a push notification — the cron has to have access to the user record (with push token) and the project (for the notification title).
+
+Finding 2 — Existing push token state on server
+Search for any existing push token infrastructure:
+  grep -rn "ExponentPushToken\|expo.*push\|push.*token\|expo-server-sdk\|expoPushToken" server/ shared/ --include="*.ts" 2>/dev/null
+  grep "expo-server-sdk" package.json
+
+Confirm: zero existing infrastructure. We're building from scratch.
+
+Finding 3 — Users table schema
+Show the users table schema in shared/schema.ts (or wherever it lives — likely shared/models/auth.ts):
+  grep -A 80 "export const users = pgTable" shared/schema.ts shared/models/auth.ts 2>/dev/null | head -100
+
+Confirm:
+- No existing column for push token (notificationToken, deviceToken, pushToken, expoPushToken, etc.)
+- We'll be adding expo_push_token VARCHAR(255) nullable
+
+Finding 4 — Existing user PATCH endpoint
+Find PATCH /api/users/me, /api/users/me/preferences, or any user-mutation endpoints:
+  grep -rn "patch.*\/api\/users\|app\.patch.*users" server/ --include="*.ts" 2>/dev/null | head -20
+
+We have two design options for token registration:
+- Add a new dedicated endpoint POST /api/users/push-token
+- Extend the existing PATCH /api/users/me/preferences to accept a push token
+
+Show the existing preferences endpoint code (validation schema, allowlist of fields). We need to choose based on what's cleaner — surface the recommendation.
+
+Finding 5 — Cron infrastructure
+Show how the existing process-pending-exits cron is wired:
+  cat vercel.json
+  grep -rn "process-pending-exits" server/ --include="*.ts" 2>/dev/null | head -10
+
+Confirm:
+- The cron path (likely server/routes/cron.ts or similar)
+- The schedule frequency from vercel.json
+- The auth/secret check protecting the endpoint (CRON_SECRET env var? signed request? IP check?)
+- We need to NOT break the auth check when we modify the cron handler
+
+Finding 6 — Migration script template
+Per memory, prod RDS migrations follow a strict sequence: snapshot → whitelist Replit IP → migrate → verify → THEN Vercel deploy → remove IP from security group.
+
+Show the full source of the most recent migration script (per memory: script/migrations/migrate_session22_timesheets.ts). Confirm it has:
+- db.transaction() wrapping all DDL for atomic rollback
+- Env guard requiring rds.amazonaws.com or neon.tech in URL, plus ALLOW_PROD_MIGRATION=yes for RDS
+- Entry-point guard (require.main === module check) to prevent dynamic-import auto-execution
+- IF NOT EXISTS guards on every DDL for re-run safety
+- Logs host (no password) and mode before DB call
+
+We'll need a new migration script following the same template for the push token column.
+
+OUTPUT:
+- 6 findings with code excerpts
+- An implementation plan covering: (1) DB migration for the push token column following the exact template, (2) chosen approach for the token registration endpoint (new vs extend) with rationale, (3) push send module structure (services/push.ts using expo-server-sdk), (4) integration point in the exit cron where push send is called, (5) any concerns about deploy sequence (the hard rule says migration BEFORE deploy)
+
+DO NOT modify any files.
