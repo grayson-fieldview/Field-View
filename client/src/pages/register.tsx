@@ -87,14 +87,18 @@ export default function RegisterPage() {
       // they were emailed a verification link and must click it before
       // signing in cleanly). Send them to the "Check your email" landing.
       if (inviteToken) {
-        setLocation(`/check-email?email=${encodeURIComponent(data.email || email)}`);
+        toast({
+          title: "Check your email",
+          description: "We sent a 6-digit verification code. Sign in to verify your account.",
+        });
+        setLocation("/login");
         return;
       }
       // Trial branch: backend auto-logged the user in and returned the full
       // user object. Seed the auth cache so AppContent's gates evaluate
       // immediately without a flash of /login, then route to /welcome (Step 2).
       // The verification email will fire from PATCH /api/auth/me on welcome
-      // submit — sending them to /check-email here would be a dead-end page
+      // submit — they haven't filled their profile yet so no verification email
       // (no email exists yet to "check").
       queryClient.setQueryData(["/api/auth/user"], data);
       queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });

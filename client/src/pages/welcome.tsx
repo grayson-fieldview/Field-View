@@ -56,7 +56,7 @@ export default function WelcomePage() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/auth/user"] });
-      setLocation("/");
+      setLocation("/verify-email");
     },
     onError: (err: Error) => {
       toast({

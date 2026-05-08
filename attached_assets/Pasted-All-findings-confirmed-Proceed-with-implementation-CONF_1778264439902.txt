@@ -1,0 +1,92 @@
+All findings confirmed. Proceed with implementation.
+
+CONFIRMED DECISIONS:
+1. Remove login block at server/replit_integrations/auth/replitAuth.ts:270-273. Unverified users CAN now authenticate. The AppContent emailVerified gate becomes the single source of truth for forcing them to /verify-email.
+2. Move /verify-email route from top-level Switch into AppContent so it has access to useAuth() context.
+3. Insert emailVerified gate in AppContent between profileCompletedAt check and SubscriptionGate. Logic:
+   - if (!user) → unauthenticated routes
+   - if (!profileCompletedAt) → /welcome
+   - if (!emailVerified) → /verify-email   ← NEW
+   - if (emailVerified && location === "/verify-email") → redirect to "/"   ← prevents verified users revisiting the page
+   - → SubscriptionGate
+4. Invitee register redirect (register.tsx:90): change from setLocation('/check-email?email=...') to setLocation('/login') with a toast "Check your email for a 6-digit verification code, then sign in." Trial branch (line 101) stays at /welcome.
+5. Welcome submit (welcome.tsx:59): change setLocation("/") to setLocation("/verify-email").
+6. Delete login.tsx unverified-email banner and setUnverifiedEmail state (lines 126-155 + related state). Dead code under new pattern.
+7. Delete check-email.tsx and remove all imports/route references.
+
+NOW WRITE THE CODE.
+
+A. Rewrite client/src/pages/verify-email.tsx (full rewrite, nothing reusable):
+
+Visual style: match register.tsx layout. Two-column with peach #fceed8 left panel (rounded-3xl, p-3 sm:p-4 outer padding, p-8 sm:p-10 lg:p-14 inner). Left panel content top-to-bottom:
+- Logo at top: existing faviconImg from "@assets/Favicon-01-brand_1778259672.png" + "Field View" text inline
+- Headline: "Almost there." text-5xl sm:text-6xl lg:text-7xl font-extrabold leading-[0.95] tracking-tight text-slate-900
+- Subheadline: "One quick step to verify it's really you." mt-6 text-base lg:text-xl font-medium text-slate-800 max-w-xl leading-relaxed
+- Testimonial card pinned bottom-left: same as register.tsx (white bg, rounded-2xl, p-5, shadow-md, max-w-sm, 5 stars in #f09004, Luke Ousdigian quote, LO avatar)
+
+Right panel (white): centered max-w-md form
+- Heading: "Enter your verification code" text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight mb-2
+- Subheading: "We sent a 6-digit code to {user.email}" text-slate-600 text-sm mb-8
+- 6 input boxes for code entry:
+  - Layout: flex gap-2 or gap-3, justify-center
+  - Each input: w-12 h-14 (or similar), text-2xl text-center font-bold, rounded-xl border-2 border-slate-300, focus:border-[#f09004], outline-none
+  - Implementation: array of 6 useRef<HTMLInputElement>, each <input maxLength={1} inputMode="numeric" pattern="[0-9]*">
+  - onChange: write digit to state array; if digit entered and not last box, focus next box
+  - onKeyDown: if Backspace and current empty, focus previous and clear it; if Backspace and current has value, clear current
+  - onPaste: take pasted text, extract first 6 digits, distribute across boxes, focus last filled box; auto-submit if all 6 filled
+  - When all 6 boxes filled, auto-submit
+- Loading state during submit: disable inputs, show spinner inside or below
+- Error state below the inputs (text-red-600 text-sm):
+  - 401 invalid_code: "Wrong code. {remaining_attempts} {remaining_attempts === 1 ? "attempt" : "attempts"} left." Clear inputs, focus first.
+  - 410 code_expired or no_active_code: "That code expired. Tap Resend below for a new one."
+  - 429 too_many_attempts: "Too many wrong attempts. Tap Resend below to start over."
+  - Network/generic: "Something went wrong. Try again."
+- Resend button below inputs:
+  - Default: "Didn't get it? Resend code" — text-[#f09004] font-bold, button styled subtly (no full button background)
+  - During cooldown: "Resend in {seconds}s" — disabled, text-slate-400
+  - On click: POST /api/resend-verification, on success show "Sent! Check your email." for 3 seconds, start 60s countdown
+  - On 429 from server (cooldown not expired server-side): use server's retry_after_seconds for countdown
+- Logout link at bottom of form: "Wrong account? Sign out" — text-sm text-slate-500, on click hits existing logout flow and redirects to /login
+
+Auth: this page is rendered inside AppContent (after the move), so useAuth() returns the authenticated user object. Use user.email for the POST body. After successful verification (200 with verified: true), invalidateQueries(["/api/auth/user"]) to refresh the user object, then setLocation("/subscribe").
+
+B. Update client/src/pages/welcome.tsx line 59: setLocation("/verify-email")
+
+C. Update client/src/App.tsx:
+- Remove import CheckEmailPage at line 22
+- Remove <Route path="/check-email" ...> at line 189
+- Remove <Route path="/verify-email" ...> at line 221 (the top-level one)
+- Inside AppContent, after the !profileCompletedAt block, add:
+  - if (!user.emailVerified && location !== "/verify-email") → redirect to /verify-email
+  - if (user.emailVerified && location === "/verify-email") → redirect to /
+  - Render <Route path="/verify-email" component={VerifyEmailPage} /> in the inner Switch so the page is reachable when the gate forces it
+- Add import for the new VerifyEmailPage at the top
+
+D. Update client/src/pages/register.tsx line 90: change invitee redirect to setLocation('/login') and add a toast "Check your email for a 6-digit verification code, then sign in."
+
+E. Update client/src/pages/login.tsx:
+- Delete the email_not_verified branch handling (lines 126-155 or wherever the banner UI lives)
+- Delete the setUnverifiedEmail state and any related useState
+- Login error handling collapses to: invalid creds → show error message; everything else → generic error
+
+F. Update server/replit_integrations/auth/replitAuth.ts: remove the login block at lines 270-273 (the if (!activeUser.emailVerified) reject). Unverified users can now authenticate.
+
+G. Delete client/src/pages/check-email.tsx entirely.
+
+VERIFICATION (run after edits, paste output):
+
+1. grep -rn "check-email" client/src/ --include="*.tsx" --include="*.ts" — must return 0
+2. ls client/src/pages/check-email.tsx 2>&1 — must show "No such file or directory"
+3. grep -c "verify-email-code" client/src/pages/verify-email.tsx — must return at least 1
+4. grep -c 'setLocation("/verify-email")' client/src/pages/welcome.tsx — must return 1
+5. grep -c "email_not_verified" client/src/pages/login.tsx — must return 0 (banner gone)
+6. grep -c "email_not_verified" server/replit_integrations/auth/replitAuth.ts — must return 0 (login block gone)
+7. grep -c "emailVerified" client/src/App.tsx — must return at least 2 (the two new gate conditions)
+8. git diff --stat — should show ~6-7 modified files + 1 deleted file (check-email.tsx)
+
+Show me:
+- Full diff for verify-email.tsx (it's a rewrite, the whole new file)
+- Diffs for App.tsx, welcome.tsx, register.tsx, login.tsx, replitAuth.ts
+- Confirmation that check-email.tsx is deleted
+
+DO NOT commit, push, or run dev server. I'll review and push manually.

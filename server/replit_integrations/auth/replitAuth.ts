@@ -267,10 +267,6 @@ export async function setupAuth(app: Express) {
             return done(null, false, { message: "Account no longer exists" });
           }
           const activeUser = restoreResult.user;
-          if (activeUser.authProvider === "local" && !activeUser.emailVerified) {
-            logFail("email_not_verified");
-            return done(null, false, { message: "email_not_verified" });
-          }
           return done(null, activeUser);
         } catch (error) {
           return done(error);
@@ -546,9 +542,6 @@ export async function setupAuth(app: Express) {
     passport.authenticate("local", (err: any, user: any, info: any) => {
       if (err) return next(err);
       if (!user) {
-        if (info?.message === "email_not_verified") {
-          return res.status(403).json({ error: "email_not_verified", email: req.body.email });
-        }
         return res.status(401).json({ message: info?.message || "Invalid email or password" });
       }
       req.login(user, (err) => {

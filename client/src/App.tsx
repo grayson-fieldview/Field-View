@@ -19,7 +19,6 @@ import RegisterPage from "@/pages/register";
 import WelcomePage from "@/pages/welcome";
 import ForgotPasswordPage from "@/pages/forgot-password";
 import ResetPasswordPage from "@/pages/reset-password";
-import CheckEmailPage from "@/pages/check-email";
 import VerifyEmailPage from "@/pages/verify-email";
 import SubscribePage from "@/pages/subscribe";
 import DashboardPage from "@/pages/dashboard";
@@ -186,7 +185,6 @@ function AppContent() {
         <Route path="/register" component={RegisterPage} />
         <Route path="/forgot-password" component={ForgotPasswordPage} />
         <Route path="/reset-password" component={ResetPasswordPage} />
-        <Route path="/check-email" component={CheckEmailPage} />
         <Route>
           <CatchAllRedirect />
         </Route>
@@ -203,6 +201,12 @@ function AppContent() {
   }
   if (location === "/welcome") return <Redirect to="/" />;
 
+  if (!(user as any).emailVerified) {
+    if (location !== "/verify-email") return <Redirect to="/verify-email" />;
+    return <VerifyEmailPage />;
+  }
+  if ((user as any).emailVerified && location === "/verify-email") return <Redirect to="/" />;
+
   return <SubscriptionGate />;
 }
 
@@ -218,7 +222,6 @@ function App() {
             <Route path="/gallery/:token">
               {(params) => <GalleryPage token={params.token} />}
             </Route>
-            <Route path="/verify-email" component={VerifyEmailPage} />
             <Route>
               <AppContent />
             </Route>

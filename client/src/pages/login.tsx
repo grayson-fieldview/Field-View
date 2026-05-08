@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Eye, EyeOff, Loader2, AlertTriangle } from "lucide-react";
+import { Eye, EyeOff, Loader2 } from "lucide-react";
 import faviconImg from "@assets/Favicon-01-brand_1778259672.png";
 
 export default function LoginPage() {
@@ -16,9 +16,7 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [unverifiedEmail, setUnverifiedEmail] = useState<string | null>(null);
 
-  // Surface OAuth callback errors via toast and clean up the URL
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const err = params.get("error");
@@ -47,59 +45,17 @@ export default function LoginPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        if (res.status === 403 && data.error === "email_not_verified") {
-          const err: any = new Error("email_not_verified");
-          err.code = "email_not_verified";
-          err.email = data.email || email;
-          throw err;
-        }
         throw new Error(data.message || "Login failed");
       }
       return data;
     },
     onSuccess: (data) => {
-      setUnverifiedEmail(null);
       queryClient.setQueryData(["/api/auth/user"], data);
       setLocation("/");
     },
-    onError: (error: any) => {
-      if (error.code === "email_not_verified") {
-        setUnverifiedEmail(error.email);
-        return;
-      }
-      setUnverifiedEmail(null);
+    onError: (error: Error) => {
       toast({
         title: "Login failed",
-        description: error.message,
-        variant: "destructive",
-      });
-    },
-  });
-
-  const resendMutation = useMutation({
-    mutationFn: async () => {
-      const res = await fetch("/api/resend-verification", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: unverifiedEmail }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        const err: any = new Error(data.error || data.message || "Request failed");
-        err.status = res.status;
-        throw err;
-      }
-      return data;
-    },
-    onSuccess: (data) => {
-      toast({
-        title: "Verification email sent",
-        description: data.message || "Check your inbox for the verification link.",
-      });
-    },
-    onError: (error: any) => {
-      toast({
-        title: error.status === 429 ? "Too many requests" : "Couldn't resend email",
         description: error.message,
         variant: "destructive",
       });
@@ -123,39 +79,6 @@ export default function LoginPage() {
           <CardDescription>Sign in to your account to continue</CardDescription>
         </CardHeader>
         <CardContent>
-          {unverifiedEmail && (
-            <div
-              className="mb-4 p-3 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700"
-              data-testid="banner-email-not-verified"
-            >
-              <div className="flex items-start gap-2">
-                <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
-                <div className="text-sm text-amber-900 dark:text-amber-200">
-                  <p className="font-medium mb-1">Your email isn't verified yet</p>
-                  <p className="text-xs mb-2">
-                    Check your inbox for the verification link sent to <strong>{unverifiedEmail}</strong> — or click below to resend.
-                  </p>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => resendMutation.mutate()}
-                    disabled={resendMutation.isPending}
-                    data-testid="button-resend-verification"
-                  >
-                    {resendMutation.isPending ? (
-                      <>
-                        <Loader2 className="mr-2 h-3 w-3 animate-spin" />
-                        Sending...
-                      </>
-                    ) : (
-                      "Resend verification email"
-                    )}
-                  </Button>
-                </div>
-              </div>
-            </div>
-          )}
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
