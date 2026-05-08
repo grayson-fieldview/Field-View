@@ -1,0 +1,54 @@
+Add a "logged in as / sign out" affordance to the three funnel-gated pages so users with stale sessions can switch accounts without manually clearing cookies.
+
+DIAGNOSE FIRST — don't write code yet. Investigate and report:
+
+1. Open client/src/pages/welcome.tsx and report:
+   - Whether there's currently any visible logout/sign-out element on the page
+   - Whether the layout has a top-right area (the right-side panel where the form lives), and what's currently there
+
+2. Open client/src/pages/verify-email.tsx and report:
+   - Whether the "Wrong account? Sign out" link from Phase 2 spec is actually rendered
+   - If yes, where it is (top-right? bottom of form?)
+   - If no, what got built instead
+
+3. Find client/src/pages/subscribe.tsx (or whatever the trial/billing post-welcome page is). Report:
+   - Whether there's currently a logout affordance
+   - Layout structure (does it have a logo? a top-right corner?)
+
+4. Find the existing logout pattern in the codebase. Search for the logout endpoint call:
+   grep -rn "logout\|signout" client/src/ --include="*.ts" --include="*.tsx" | head -20
+   
+   Report:
+   - Which API endpoint is called (likely POST /api/logout)
+   - The standard pattern for triggering logout (a hook? a fetch call? a mutation?)
+   - Where to redirect after logout (likely /login)
+
+5. Find the user object available via useAuth() in funnel pages. Confirm user.email is accessible to display in the affordance.
+
+6. Check whether AppContent renders these pages with any wrapping layout component, OR whether each page renders its own header/logo/etc independently. We need to know whether to add the affordance to a shared layout or to each page individually.
+
+After all 6 findings, STOP and wait for confirmation before writing code. If you find architectural complexity (shared header component would be cleaner but means refactoring), surface it as a decision point.
+
+Once confirmed, the implementation will be:
+
+A. Add a small top-right element to /welcome, /verify-email, /subscribe that shows:
+   "Logged in as {user.email}" (text-sm, text-slate-600)
+   followed by:
+   "Sign out" — link styled in #f09004 (brand orange), font-medium, hover:underline
+   
+   On click of "Sign out": call the existing logout endpoint, then redirect to /login.
+
+B. Position the element absolute or via flex in the top-right corner of the right-panel (since the left-panel is the peach branding side). Should be inline with where /register has its "Already a customer? Sign in" link — same vertical position, mirroring the same pattern.
+
+C. If verify-email already has the affordance (per Phase 2 spec), check that it's positioned consistently with the other two pages and adjust if needed.
+
+D. Use the existing logout mutation pattern from elsewhere in the codebase — don't invent a new one. Reuse whatever login.tsx / register.tsx use for sign-out.
+
+VERIFICATION (after edits):
+1. grep -c "Sign out\|Logout\|signOut" client/src/pages/welcome.tsx — must return ≥ 1
+2. grep -c "Sign out\|Logout\|signOut" client/src/pages/verify-email.tsx — must return ≥ 1
+3. grep -c "Sign out\|Logout\|signOut" client/src/pages/subscribe.tsx — must return ≥ 1
+4. Show me the diff for all three files
+5. Run npx tsc --noEmit — 0 new TypeScript errors
+
+DO NOT commit or push. I'll review and ship manually.
