@@ -65,39 +65,35 @@ export async function sendPasswordResetEmail(to: string, resetToken: string): Pr
   console.log("[email] Password reset email sent:", data?.id);
 }
 
-export async function sendEmailVerificationEmail(to: string, verificationToken: string, firstName?: string | null): Promise<void> {
+export async function sendEmailVerificationEmail(to: string, code: string, firstName?: string | null): Promise<void> {
   if (!resend) {
     console.warn("[email] Skipping send — Resend not configured");
     return;
   }
 
-  const verifyUrl = `${PUBLIC_APP_URL}/verify-email?token=${verificationToken}`;
   const greeting = firstName ? `Hi ${firstName},` : "Welcome to Field View!";
 
   const { data, error } = await resend.emails.send({
     from: FROM,
     replyTo: REPLY_TO,
     to,
-    subject: "Verify your email for Field View",
+    subject: `Your Field View verification code: ${code}`,
     html: `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 560px; margin: 0 auto; padding: 40px 20px; color: #111;">
         <h1 style="font-size: 24px; margin-bottom: 16px;">Verify your email</h1>
         <p style="font-size: 16px; line-height: 1.5; margin-bottom: 24px;">
-          ${greeting} Please confirm your email address to finish setting up your Field View account.
+          ${greeting} Enter the code below to verify your email address and finish setting up your Field View account.
         </p>
-        <p style="margin-bottom: 24px;">
-          <a href="${verifyUrl}" style="background: #f97316; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
-            Verify email
-          </a>
-        </p>
-        <p style="font-size: 14px; color: #666; line-height: 1.5; margin-bottom: 8px;">
-          Or copy this link into your browser:
-        </p>
-        <p style="font-size: 13px; color: #666; word-break: break-all; margin-bottom: 24px;">
-          ${verifyUrl}
+        <div style="text-align: center; margin: 32px 0;">
+          <span style="font-family: 'SF Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace; font-size: 40px; font-weight: 700; letter-spacing: 8px; color: #111; background: #f5f5f5; padding: 16px 32px; border-radius: 8px; display: inline-block;">
+            ${code}
+          </span>
+        </div>
+        <p style="font-size: 14px; color: #666; line-height: 1.5; text-align: center; margin-bottom: 24px;">
+          This code expires in 15 minutes.
         </p>
         <p style="font-size: 14px; color: #666; line-height: 1.5;">
-          This link will expire in 1 hour. If you didn't sign up for Field View, you can safely ignore this email.
+          If you didn't sign up for Field View, you can safely ignore this email.
         </p>
         <hr style="border: none; border-top: 1px solid #eee; margin: 32px 0;">
         <p style="font-size: 12px; color: #999;">
@@ -105,7 +101,7 @@ export async function sendEmailVerificationEmail(to: string, verificationToken: 
         </p>
       </div>
     `,
-    text: `Verify your email for Field View\n\n${greeting} Please confirm your email address to finish setting up your Field View account:\n\n${verifyUrl}\n\nThis link will expire in 1 hour. If you didn't sign up, you can safely ignore this email.\n\n— Field View`,
+    text: `Verify your email for Field View\n\n${greeting}\n\nYour verification code is: ${code}\n\nEnter this code to verify your email address. The code expires in 15 minutes.\n\nIf you didn't sign up for Field View, you can safely ignore this email.\n\n— Field View`,
   });
 
   if (error) {

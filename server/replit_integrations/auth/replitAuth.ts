@@ -10,8 +10,8 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { authStorage } from "./storage";
 import { db, pool } from "../../db";
-import { eq, and, isNull, isNotNull, gt } from "drizzle-orm";
-import { passwordResetTokens, emailVerificationTokens, users, accounts, invitations, type User } from "@shared/models/auth";
+import { eq, and, isNull, isNotNull } from "drizzle-orm";
+import { passwordResetTokens, users, accounts, invitations, type User } from "@shared/models/auth";
 import { sendPasswordResetEmail, sendEmailVerificationEmail, sendWelcomeEmail, sendAccountRestoredEmail } from "../../services/email";
 import { getAccountBilling, overlayAccountBillingOnUser, computeAccessLevel } from "../../lib/billing";
 import { verifyRecaptchaToken } from "../../services/recaptcha";
@@ -488,16 +488,17 @@ export async function setupAuth(app: Express) {
       }
 
       if (inviteToken) {
-        // Invitees skip /welcome (Step 2) and need verification immediately.
-        const verificationToken = crypto.randomBytes(32).toString("hex");
-        await db.insert(emailVerificationTokens).values({
-          userId: user.id,
-          token: verificationToken,
-          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-        });
+        const code = crypto.randomInt(0, 1000000).toString().padStart(6, "0");
+        const codeExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
+        await db.update(users).set({
+          verificationCode: code,
+          verificationCodeExpiresAt: codeExpiresAt,
+          verificationCodeAttempts: 0,
+          verificationCodeSentAt: new Date(),
+        }).where(eq(users.id, user.id));
 
         try {
-          await sendEmailVerificationEmail(user.email!, verificationToken, user.firstName);
+          await sendEmailVerificationEmail(user.email!, code, user.firstName);
         } catch (emailErr) {
           console.error("[register] verification email send failed:", emailErr);
         }
@@ -730,83 +731,81 @@ export async function setupAuth(app: Express) {
     }
   });
 
-  app.get("/api/verify-email", verifyEmailLimiter, async (req, res) => {
+  app.get("/api/verify-email", verifyEmailLimiter, async (_req, res) => {
+    return res.status(410).json({
+      error: "deprecated",
+      message: "Verification has been updated — please return to the app and request a new code.",
+    });
+  });
+
+  app.post("/api/verify-email-code", verifyEmailLimiter, async (req, res) => {
     try {
-      const token = req.query.token as string;
-      if (!token) {
-        console.warn("[verify-email] reject: no_token");
-        return res.status(400).json({ error: "Token required" });
+      const { email, code } = req.body;
+      if (!email || typeof email !== "string" || !code || typeof code !== "string") {
+        return res.status(400).json({ error: "bad_request", message: "Email and code are required." });
       }
 
-      const [row] = await db.select().from(emailVerificationTokens).where(eq(emailVerificationTokens.token, token));
-      if (!row) {
-        console.warn("[verify-email] reject: token_not_found", { tokenPrefix: token.slice(0, 8) });
-        return res.status(400).json({ error: "Invalid token" });
+      const user = await authStorage.getUserByEmail(email);
+      if (!user) {
+        return res.status(404).json({ error: "user_not_found", message: "No account found for this email." });
       }
 
-      // Look up the user now so we can branch on already-verified state below.
-      const [existingUser] = await db.select().from(users).where(eq(users.id, row.userId));
-
-      // IDEMPOTENCY: email security scanners (Outlook Safe Links, Gmail link
-      // checker, Mimecast, Proofpoint, Barracuda, etc.) GET every link in an
-      // inbound email BEFORE the user sees it. That prefetch hits this
-      // endpoint, marks `used_at`, and flips `email_verified=true`. The user's
-      // actual click then arrives seconds later and used to 400 with "Token
-      // already used" even though they were genuinely verified in the DB.
-      // Treat already-used + verified as success: re-establish the session
-      // (req.login) and respond with the same success shape as the first hit
-      // so the frontend renders the success page.
-      if (row.usedAt) {
-        if (existingUser?.emailVerified) {
-          console.info("[verify-email] idempotent re-hit on used token, user already verified", {
-            userId: row.userId,
-            usedAtAgeMs: Date.now() - row.usedAt.getTime(),
-          });
-          req.login(existingUser, (err) => {
-            if (err) {
-              console.error("[verify-email] idempotent req.login failed:", err);
-              return res.json({ success: true, message: "Email verified successfully" });
-            }
-            const { password: _, ...safeUser } = existingUser;
-            res.json({ success: true, message: "Email verified successfully", user: safeUser });
-          });
-          return;
-        }
-        console.warn("[verify-email] reject: token_used_but_user_not_verified", { userId: row.userId });
-        return res.status(400).json({ error: "Token already used" });
+      if (user.emailVerified) {
+        return res.status(200).json({ already_verified: true });
       }
 
-      if (row.expiresAt < new Date()) {
-        console.warn("[verify-email] reject: token_expired", {
-          userId: row.userId,
-          expiredAgoMs: Date.now() - row.expiresAt.getTime(),
+      if (!user.verificationCode) {
+        return res.status(410).json({ error: "no_active_code", message: "No active verification code. Request a new one." });
+      }
+
+      if ((user.verificationCodeAttempts ?? 0) >= 5) {
+        await db.update(users).set({ verificationCode: null }).where(eq(users.id, user.id));
+        console.warn("[verify-email-code] too_many_attempts, code invalidated", { userId: user.id });
+        return res.status(429).json({ error: "too_many_attempts", message: "Too many wrong attempts. Request a new code." });
+      }
+
+      if (user.verificationCodeExpiresAt && user.verificationCodeExpiresAt < new Date()) {
+        console.warn("[verify-email-code] code_expired", {
+          userId: user.id,
+          expiredAgoMs: Date.now() - user.verificationCodeExpiresAt.getTime(),
         });
-        return res.status(400).json({ error: "Token expired" });
+        return res.status(410).json({ error: "code_expired", message: "Code expired. Request a new code." });
       }
 
-      await db.update(users).set({ emailVerified: true }).where(eq(users.id, row.userId));
-      await db.update(emailVerificationTokens).set({ usedAt: new Date() }).where(eq(emailVerificationTokens.id, row.id));
-
-      const [verifiedUser] = await db.select().from(users).where(eq(users.id, row.userId));
-      if (!verifiedUser) {
-        return res.json({ success: true, message: "Email verified successfully" });
+      if (code !== user.verificationCode) {
+        const newAttempts = (user.verificationCodeAttempts ?? 0) + 1;
+        await db.update(users).set({ verificationCodeAttempts: newAttempts }).where(eq(users.id, user.id));
+        console.warn("[verify-email-code] invalid_code", { userId: user.id, attempts: newAttempts });
+        return res.status(401).json({ error: "invalid_code", remaining_attempts: 5 - newAttempts });
       }
 
-      // Fire-and-forget welcome email — never block verification on send failure
-      sendWelcomeEmail(verifiedUser.email!, verifiedUser.firstName).catch((err) => {
-        console.error("[verify-email] welcome email send failed:", err);
+      await db.update(users).set({
+        emailVerified: true,
+        verificationCode: null,
+        verificationCodeAttempts: 0,
+      }).where(eq(users.id, user.id));
+
+      console.info("[verify-email-code] verified", { userId: user.id, email: user.email });
+
+      sendWelcomeEmail(user.email!, user.firstName).catch((err) => {
+        console.error("[verify-email-code] welcome email send failed:", err);
       });
+
+      const [verifiedUser] = await db.select().from(users).where(eq(users.id, user.id));
+      if (!verifiedUser) {
+        return res.json({ verified: true });
+      }
 
       req.login(verifiedUser, (err) => {
         if (err) {
-          console.error("[verify-email] req.login failed:", err);
-          return res.json({ success: true, message: "Email verified successfully" });
+          console.error("[verify-email-code] req.login failed:", err);
+          return res.json({ verified: true });
         }
         const { password: _, ...safeUser } = verifiedUser;
-        res.json({ success: true, message: "Email verified successfully", user: safeUser });
+        res.json({ verified: true, user: safeUser });
       });
     } catch (error) {
-      console.error("Verify email error:", error);
+      console.error("Verify email code error:", error);
       res.status(500).json({ error: "Verification failed" });
     }
   });
@@ -819,41 +818,36 @@ export async function setupAuth(app: Express) {
       const [user] = await db.select().from(users).where(eq(users.email, email));
 
       if (!user || user.emailVerified) {
-        return res.json({ message: "If an unverified account exists, a new verification email has been sent." });
+        return res.json({ message: "If an unverified account exists, a new verification code has been sent." });
       }
 
-      const [recentToken] = await db.select().from(emailVerificationTokens)
-        .where(and(
-          eq(emailVerificationTokens.userId, user.id),
-          isNull(emailVerificationTokens.usedAt),
-          gt(emailVerificationTokens.createdAt, new Date(Date.now() - 60 * 1000))
-        ))
-        .limit(1);
-      if (recentToken) {
-        return res.status(429).json({ error: "Please wait a moment before requesting another verification email." });
+      if (user.verificationCodeSentAt) {
+        const elapsed = Date.now() - user.verificationCodeSentAt.getTime();
+        const remaining = Math.ceil((60_000 - elapsed) / 1000);
+        if (remaining > 0) {
+          return res.status(429).json({
+            error: "Please wait before requesting another code.",
+            retry_after_seconds: remaining,
+          });
+        }
       }
 
-      await db.update(emailVerificationTokens)
-        .set({ usedAt: new Date() })
-        .where(and(
-          eq(emailVerificationTokens.userId, user.id),
-          isNull(emailVerificationTokens.usedAt)
-        ));
-
-      const token = crypto.randomBytes(32).toString("hex");
-      await db.insert(emailVerificationTokens).values({
-        userId: user.id,
-        token,
-        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-      });
+      const code = crypto.randomInt(0, 1000000).toString().padStart(6, "0");
+      const codeExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
+      await db.update(users).set({
+        verificationCode: code,
+        verificationCodeExpiresAt: codeExpiresAt,
+        verificationCodeAttempts: 0,
+        verificationCodeSentAt: new Date(),
+      }).where(eq(users.id, user.id));
 
       try {
-        await sendEmailVerificationEmail(user.email!, token, user.firstName);
+        await sendEmailVerificationEmail(user.email!, code, user.firstName);
       } catch (err) {
         console.error("[resend-verification] email send failed:", err);
       }
 
-      res.json({ message: "If an unverified account exists, a new verification email has been sent." });
+      res.json({ message: "If an unverified account exists, a new verification code has been sent." });
     } catch (error) {
       console.error("Resend verification error:", error);
       res.status(500).json({ error: "Request failed" });

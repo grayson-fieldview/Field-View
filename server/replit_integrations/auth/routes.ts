@@ -5,7 +5,7 @@ import { isAuthenticated } from "./replitAuth";
 import { overlayAccountBillingOnUser } from "../../lib/billing";
 import { sanitizeUserForViewer } from "../../lib/userVisibility";
 import { db } from "../../db";
-import { accounts, emailVerificationTokens } from "@shared/models/auth";
+import { accounts, users } from "@shared/models/auth";
 import { eq } from "drizzle-orm";
 import { INDUSTRY_VALUES, COMPANY_SIZE_VALUES } from "@shared/constants";
 import { sendEmailVerificationEmail } from "../../services/email";
@@ -132,13 +132,15 @@ export function registerAuthRoutes(app: Express): void {
       // time after the column was backfilled).
       if (isFirstCompletion && !updated.emailVerified && updated.email) {
         try {
-          const verificationToken = crypto.randomBytes(32).toString("hex");
-          await db.insert(emailVerificationTokens).values({
-            userId: updated.id,
-            token: verificationToken,
-            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-          });
-          await sendEmailVerificationEmail(updated.email, verificationToken, updated.firstName);
+          const code = crypto.randomInt(0, 1000000).toString().padStart(6, "0");
+          const codeExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
+          await db.update(users).set({
+            verificationCode: code,
+            verificationCodeExpiresAt: codeExpiresAt,
+            verificationCodeAttempts: 0,
+            verificationCodeSentAt: new Date(),
+          }).where(eq(users.id, updated.id));
+          await sendEmailVerificationEmail(updated.email, code, updated.firstName);
         } catch (emailErr) {
           console.error("[auth/me] verification email send failed:", emailErr);
         }
