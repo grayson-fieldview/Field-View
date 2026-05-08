@@ -1,0 +1,43 @@
+Execute approach A1 (HSL hue-shift) to recolor the logo. The naive pixel-replace candidate showed visible AA banding as expected — switching to a hue rotation that moves both solid-orange pixels and anti-aliased boundary pixels in lockstep.
+
+STEP 1 — Cleanup
+Delete the previous failed candidate at attached_assets/Favicon-01-brand_1778259414.png. We don't need a side-by-side reference; the diagnostic numbers from that file are already in the report.
+
+STEP 2 — HSL hue-shift recolor
+Source: attached_assets/Favicon-01_1772067008525.png
+Target hue rotation: +5.6° (mapping #F57C00 → #F09000)
+Use ImageMagick. The exact incantation depends on ImageMagick version and how it interprets the -modulate hue parameter. Use whatever produces an actual +5.6° HSL hue rotation — verify by sampling solid-orange pixels in the output and confirming they're (240, 144, 0) ± 1 per channel.
+
+If -modulate doesn't produce precise enough results (off by more than ±2 per channel from target), fall back to a pixel-by-pixel HSL conversion in Python with colorsys.rgb_to_hls / hls_to_rgb — manually rotate hue by 5.6/360 = 0.01556 radians equivalent, preserve saturation and lightness, write back. Skip pixels where saturation < 0.05 (essentially-white pixels — leave them untouched so the white icon stays pure white).
+
+Output filename: attached_assets/Favicon-01-brand_<unix_timestamp>.png. Do NOT overwrite the original.
+
+STEP 3 — Verify solid orange
+Sample the same 4 patches as before: (50,50), (500,50), (50,500), (500,500), each 60×60. Confirm dominant orange is now (240, 144, 0) ± 1 per channel.
+
+STEP 4 — Verify AA edges (THE CRITICAL CHECK)
+Sample the same 6 boundary AA pixels you flagged in the previous report (the ~50/50, ~75/25, ~88/12 blend pixels at the icon edges). For each:
+- Original old-orange-blend value (from previous report): (X, Y, Z)
+- Compute the EXPECTED new-orange-blend value: take α from the original blend, then α·white + (1-α)·new_orange
+- Sample the actual pixel in the new PNG
+- Report delta from expected
+
+For the worst-case ~50/50 blend pixel (originally (250, 190, 128)), expected with new orange: 0.5·(255,255,255) + 0.5·(240,144,0) = (247.5, 199.5, 127.5). The actual pixel should land within ±2 per channel of (248, 200, 128).
+
+If any boundary pixel deviates more than ±3 per channel from its expected blend, A1 is insufficient. STOP and flag — we'll fall back to A3 (per-pixel re-blend math). Do NOT update imports if any AA pixel fails.
+
+STEP 5 — If both verifications pass, update imports
+Update the import in:
+- client/src/pages/register.tsx (line 11)
+- The profile completion page file (welcome.tsx, or whatever the previous redesign actually edited)
+to reference the new filename.
+
+STEP 6 — Report
+Show me:
+- New file path
+- Step 3 sample numbers
+- Step 4 boundary AA sample numbers + computed expected values + per-pixel deltas
+- Whether you proceeded to step 5 or stopped
+- If you proceeded, the diff for the import changes (should be 2 line changes across 2 files)
+
+DO NOT commit or push. I'll review and push manually.
