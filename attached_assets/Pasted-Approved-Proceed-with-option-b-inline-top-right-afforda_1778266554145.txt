@@ -1,0 +1,43 @@
+Approved. Proceed with option (b) — inline top-right affordance on welcome.tsx and verify-email.tsx. subscribe.tsx is already correct, do not modify it.
+
+CHANGES:
+
+A. client/src/pages/welcome.tsx
+   Add a top-right element inside the right panel, BEFORE the "Take a second to finish up your profile" heading. Mirror the position and styling of register.tsx's "Already a customer? Sign in" link (find that file's pattern and match it).
+   
+   Content:
+       <span className="text-sm text-slate-600">
+         Logged in as {user.email}
+         {" · "}
+         <button onClick={() => logout()} className="font-bold text-[#f09004] hover:underline">
+           Sign out
+         </button>
+       </span>
+   
+   Position: right-aligned at the top of the right panel content area. Use flex justify-end on a wrapping div.
+   
+   Use existing useAuth() hook for both `user` and `logout`. Don't introduce a new pattern.
+
+B. client/src/pages/verify-email.tsx
+   ADD a matching top-right element in the same position. Use the same JSX block as welcome.tsx so the affordance is visually identical across both pages.
+   
+   KEEP the existing "Wrong account? Sign out" link at the bottom of the form. Do not remove it. Both can coexist.
+
+C. client/src/pages/subscribe.tsx
+   DO NOT MODIFY. Already has the affordance.
+
+CONSTRAINTS:
+- Do NOT extract a shared component. Inline duplicated JSX across the two pages is fine for two instances. We can refactor later if it spreads further.
+- Do NOT modify the form, the layout, the testimonial card, the headline, or any other content.
+- Do NOT change the existing logout flow — call logout() from useAuth() exactly as the existing usages in verify-email.tsx do.
+
+VERIFICATION (after edits):
+1. grep -c "Sign out" client/src/pages/welcome.tsx — must return ≥ 1
+2. grep -c "Sign out" client/src/pages/verify-email.tsx — must return ≥ 2 (new top-right + existing bottom)
+3. grep -c "Logged in as" client/src/pages/welcome.tsx — must return 1
+4. grep -c "Logged in as" client/src/pages/verify-email.tsx — must return 1
+5. Show me the diff for both files
+6. git diff --stat — should show exactly 2 files changed
+7. npx tsc --noEmit — 0 new TypeScript errors
+
+DO NOT commit or push. I'll review and ship manually.

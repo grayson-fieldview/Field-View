@@ -27,7 +27,7 @@ const FIELD_CLASS =
 
 export default function WelcomePage() {
   const [, setLocation] = useLocation();
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const { toast } = useToast();
   const qc = useQueryClient();
 
@@ -142,8 +142,22 @@ export default function WelcomePage() {
         </div>
 
         {/* Right form panel */}
-        <div className="flex items-center justify-center px-4 py-8 sm:px-6 lg:px-12">
+        <div className="flex items-center justify-center px-4 py-8 sm:px-6 lg:px-12 relative">
           <div className="w-full max-w-md">
+            <div className="flex justify-end mb-4" data-testid="row-logged-in-as">
+              <span className="text-sm text-slate-600 dark:text-slate-400">
+                Logged in as {(user as any)?.email}
+                {" · "}
+                <button
+                  type="button"
+                  onClick={() => logout()}
+                  className="font-bold text-[#f09004] hover:underline"
+                  data-testid="button-sign-out-welcome"
+                >
+                  Sign out
+                </button>
+              </span>
+            </div>
             <h2
               className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white text-center mb-6"
               data-testid="text-welcome-title"

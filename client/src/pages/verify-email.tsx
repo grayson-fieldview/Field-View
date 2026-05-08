@@ -205,8 +205,22 @@ export default function VerifyEmailPage() {
           </figure>
         </div>
 
-        <div className="flex items-center justify-center px-4 py-8 sm:px-6 lg:px-12">
+        <div className="flex items-center justify-center px-4 py-8 sm:px-6 lg:px-12 relative">
           <div className="w-full max-w-md">
+            <div className="flex justify-end mb-4" data-testid="row-logged-in-as">
+              <span className="text-sm text-slate-600 dark:text-slate-400">
+                Logged in as {(user as any)?.email}
+                {" · "}
+                <button
+                  type="button"
+                  onClick={() => logout()}
+                  className="font-bold text-[#f09004] hover:underline"
+                  data-testid="button-sign-out-verify"
+                >
+                  Sign out
+                </button>
+              </span>
+            </div>
             <h2
               className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight mb-2"
               data-testid="text-verify-title"
