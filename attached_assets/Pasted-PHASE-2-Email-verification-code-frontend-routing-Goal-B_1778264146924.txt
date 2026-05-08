@@ -1,0 +1,90 @@
+PHASE 2 — Email verification code, frontend + routing
+
+Goal: Build the code-entry UI and hard-gate the funnel so unverified users can't progress past /verify-email. Phase 1 backend (POST /api/verify-email-code, POST /api/resend-verification, schema columns on users table) is already shipped and verified working in production.
+
+DESIGN DECISIONS (locked):
+- 6 input boxes for code entry, auto-advance, paste handling, backspace handling
+- Auto-submit when 6th digit entered (don't make user click a button)
+- Resend button with 60s cooldown (visible countdown timer)
+- HARD GATE: unverified users forced to /verify-email; cannot navigate to /welcome (post-completion), /subscribe, /dashboard, or any other authenticated route
+- Logout button is visible on /verify-email so users aren't trapped
+- Funnel: register → welcome → verify-email → subscribe → dashboard
+- /check-email.tsx is redundant under code-only flow — DELETE it (the file currently uses the brand-corrected logo, so we'll need to remove that import too)
+
+DIAGNOSE FIRST — DO NOT EDIT YET. Run these queries and report findings:
+
+1. Open client/src/pages/verify-email.tsx and report:
+   - Current implementation (link-token reading from URL? state shape? how does it submit today?)
+   - What hooks / context / state managers it uses
+   - What it imports
+
+2. Open client/src/pages/welcome.tsx and find the form-submit handler:
+   - Where does it redirect after successful profile completion? (Look for navigate(...), router.push(...), window.location, or response.redirect handling)
+   - This is what we need to change from /subscribe (or wherever) to /verify-email
+
+3. Find the global routing / auth-guard pattern. Common locations:
+   - client/src/App.tsx
+   - client/src/router.tsx
+   - client/src/components/ProtectedRoute.tsx
+   - client/src/hooks/useAuth.ts
+   Report: how is "is user authenticated" currently determined on the frontend? Is there a useUser/useAuth hook that returns the user object? Does that user object include emailVerified / email_verified? If not, we need to extend the user shape or call an endpoint.
+
+4. Find where /api/auth/me or similar "current user" endpoint is defined on the backend, and confirm it returns the emailVerified field. If it doesn't, we'll need to include it.
+
+5. Open client/src/pages/check-email.tsx and report what it currently does — confirm it's safe to delete (no other code references / imports it).
+
+6. Search for routes referenced by string: grep -rn "/welcome\|/verify-email\|/subscribe\|/check-email" client/src/ --include="*.tsx" --include="*.ts"
+   Report all matches so we know every redirect that might need updating.
+
+After all 6 findings, STOP and wait for my confirmation before writing any code. If you discover a fundamental conflict with the spec (e.g., the user object doesn't expose emailVerified and there's no clean way to check from frontend), surface it and propose options.
+
+Once confirmed, the implementation work will be:
+
+A. Rewrite client/src/pages/verify-email.tsx:
+   - Strip out token-from-URL logic entirely
+   - 6-input-box code entry (recommended pattern: array of 6 refs, each <input maxLength={1}>, onChange triggers focus on next, onPaste fills all 6 from clipboard, onKeyDown handles Backspace to delete and focus previous)
+   - On 6th digit: auto-submit POST /api/verify-email-code with { email: user.email, code: assembledCode }
+   - Loading state during submit (disable inputs, show spinner)
+   - Error states with clear messaging:
+     - 401 invalid_code: "Wrong code. {remaining_attempts} attempts left." Clear inputs, focus first.
+     - 410 code_expired or no_active_code: "Code expired. Hit Resend to get a new one."
+     - 429 too_many_attempts: "Too many wrong attempts. Hit Resend to start over."
+     - Generic network error: "Something went wrong. Try again."
+   - Success: redirect to /subscribe (the trial/billing step, since funnel is verify-email → subscribe → dashboard)
+   - Resend button:
+     - Disabled with countdown text "Resend in 53s" while cooldown active
+     - On click: POST /api/resend-verification, show "Sent! Check your email." for 3 seconds
+     - On 429 from resend (cooldown not expired server-side): show server's retry-after countdown
+   - Email display: "We sent a code to {user.email}" with a "Wrong email? Sign out" link
+   - Logout button visible (use existing logout pattern from elsewhere in the codebase)
+   - Match the visual style of the redesigned register page: peach left panel with "Almost there!" or similar headline + Luke testimonial card, white right panel with the code-entry form. Use #fceed8 peach, #f09004 brand orange, brand-corrected logo from attached_assets/Favicon-01-brand_1778259672.png. Reuse the testimonial card structure from register.tsx.
+
+B. Update client/src/pages/welcome.tsx form-submit handler:
+   - After successful profile completion API call, redirect to /verify-email (NOT /subscribe)
+
+C. Add hard-gate routing:
+   - In whatever component wraps authenticated routes (likely a ProtectedRoute or route guard), check user.emailVerified
+   - If user is logged in AND user.emailVerified === false AND current route is NOT /verify-email AND NOT /logout, redirect to /verify-email
+   - This prevents bookmark/refresh access to /subscribe, /dashboard, /welcome, etc.
+   - The existing register/welcome flow MUST still work — i.e., the redirect cascade should be: register → welcome (allowed pre-verify because they need to fill profile first) → /verify-email → /subscribe → /dashboard. Welcome can be reached pre-verify if they haven't filled profile yet, but post-welcome any non-/verify-email route bounces back to /verify-email.
+
+   Implementation question: do we need a separate flag for "profile completed" vs "email verified"? I.e., the gate logic is:
+     - if !profileCompletedAt → /welcome
+     - else if !emailVerified → /verify-email
+     - else → wherever they were trying to go
+   Confirm during diagnose that the user object exposes profileCompletedAt and emailVerified.
+
+D. Delete client/src/pages/check-email.tsx and remove all references to it (router, imports).
+
+E. Update any router config (App.tsx, router.tsx, etc.) to remove the /check-email route entirely.
+
+VERIFICATION (run after edits):
+1. grep -rn "check-email" client/src/ --include="*.tsx" --include="*.ts" — must return 0 (page deleted, no stragglers)
+2. grep -c "verify-email-code" client/src/pages/verify-email.tsx — must return at least 1 (confirms new endpoint is being called)
+3. grep -c "navigate.*verify-email\|push.*verify-email\|redirect.*verify-email" client/src/pages/welcome.tsx — must return at least 1 (confirms welcome redirects to verify-email)
+4. ls client/src/pages/check-email.tsx 2>&1 — must show "No such file or directory"
+5. git diff --stat — should show ~3-5 modified files + 1 deleted file (check-email.tsx) + verify-email.tsx heavily modified
+6. Show me the diffs for verify-email.tsx, welcome.tsx, and any router/auth-guard file modified
+7. Run the dev server and confirm no TypeScript compile errors
+
+DO NOT commit or push. I'll review and push manually.
