@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Eye, EyeOff, Loader2, CheckCircle2, Users } from "lucide-react";
+import { Eye, EyeOff, Loader2, CheckCircle2, Users, Star } from "lucide-react";
 import { useGoogleReCaptcha } from "react-google-recaptcha-v3";
 import faviconImg from "@assets/Favicon-01_1772067008525.png";
 
@@ -130,78 +130,70 @@ export default function RegisterPage() {
     restricted: "Restricted",
   };
 
-  return (
-    <div className="min-h-screen flex bg-white dark:bg-gray-950">
-      {/* Left brand panel — desktop only */}
-      <div
-        className="hidden lg:flex lg:w-2/5 flex-col p-12 bg-[#F09000]/50"
-        data-testid="panel-brand"
-      >
-        <div className="flex items-center gap-2" data-testid="brand-logo-row">
-          <img
-            src={faviconImg}
-            alt="Field View"
-            className="h-10 w-10 rounded-md"
-            data-testid="img-brand-logo"
-          />
-          <span className="text-2xl font-bold tracking-tight text-gray-900">
-            Field View
-          </span>
-        </div>
-
-        <div className="mt-12 flex flex-col gap-10">
-          <h1
-            className="text-4xl lg:text-5xl font-bold leading-tight text-gray-900"
-            data-testid="text-brand-tagline"
-          >
-            Trusted by hundreds of contractors across the country.
-          </h1>
-
-          <figure
-            className="bg-zinc-900 text-white rounded-2xl shadow-2xl shadow-black/40 p-8"
-            data-testid="card-testimonial"
-          >
-            <blockquote className="text-lg leading-relaxed">
-              "FieldView has helped our team stay organized across multiple
-              projects, automatically clocks in all of our employees when they
-              get to the job, and has been a big help with the growth of our
-              company."
-            </blockquote>
-            <figcaption className="mt-4 text-base font-medium text-white/80">
-              — Luke Ousdigian, Palm Beach Painters
-            </figcaption>
-          </figure>
-        </div>
-      </div>
-
-      {/* Right form panel */}
-      <div className="flex flex-col flex-1 lg:w-3/5 items-center justify-center px-4 py-8 sm:px-6 lg:px-12">
-        <div className="w-full max-w-md">
-          <div className="text-center space-y-2 mb-5">
-            <div className="flex items-center justify-center gap-2 lg:hidden">
-              <img src={faviconImg} alt="Field View" className="h-8 w-8" />
-              <span className="text-xl font-bold text-[#1E1E1E] dark:text-white">Field View</span>
-            </div>
-            {inviteInfo ? (
-              <>
-                <h2 className="text-2xl font-bold text-foreground" data-testid="text-register-title">
-                  Join {inviteInfo.accountName}
-                </h2>
-                <p className="text-sm text-muted-foreground">
-                  You've been invited to join as a{" "}
-                  <Badge variant="secondary" className="text-xs">{roleLabels[inviteInfo.role] || inviteInfo.role}</Badge>
-                </p>
-              </>
-            ) : (
-              <>
-                <h2 className="text-2xl font-bold text-foreground" data-testid="text-register-title">
-                  Welcome! Create an account for your company.
-                </h2>
-              </>
-            )}
+  // Invitee branch — preserved as-is from the previous design. Only the trial
+  // branch (below) gets the CompanyCam-style two-panel redesign.
+  if (inviteInfo) {
+    return (
+      <div className="min-h-screen flex bg-white dark:bg-gray-950">
+        {/* Left brand panel — desktop only */}
+        <div
+          className="hidden lg:flex lg:w-2/5 flex-col p-12 bg-[#F09000]/50"
+          data-testid="panel-brand"
+        >
+          <div className="flex items-center gap-2" data-testid="brand-logo-row">
+            <img
+              src={faviconImg}
+              alt="Field View"
+              className="h-10 w-10 rounded-md"
+              data-testid="img-brand-logo"
+            />
+            <span className="text-2xl font-bold tracking-tight text-gray-900">
+              Field View
+            </span>
           </div>
 
-          {inviteInfo && (
+          <div className="mt-12 flex flex-col gap-10">
+            <h1
+              className="text-4xl lg:text-5xl font-bold leading-tight text-gray-900"
+              data-testid="text-brand-tagline"
+            >
+              Trusted by hundreds of contractors across the country.
+            </h1>
+
+            <figure
+              className="bg-zinc-900 text-white rounded-2xl shadow-2xl shadow-black/40 p-8"
+              data-testid="card-testimonial"
+            >
+              <blockquote className="text-lg leading-relaxed">
+                "FieldView has helped our team stay organized across multiple
+                projects, automatically clocks in all of our employees when they
+                get to the job, and has been a big help with the growth of our
+                company."
+              </blockquote>
+              <figcaption className="mt-4 text-base font-medium text-white/80">
+                — Luke Ousdigian, Palm Beach Painters
+              </figcaption>
+            </figure>
+          </div>
+        </div>
+
+        {/* Right form panel */}
+        <div className="flex flex-col flex-1 lg:w-3/5 items-center justify-center px-4 py-8 sm:px-6 lg:px-12">
+          <div className="w-full max-w-md">
+            <div className="text-center space-y-2 mb-5">
+              <div className="flex items-center justify-center gap-2 lg:hidden">
+                <img src={faviconImg} alt="Field View" className="h-8 w-8" />
+                <span className="text-xl font-bold text-[#1E1E1E] dark:text-white">Field View</span>
+              </div>
+              <h2 className="text-2xl font-bold text-foreground" data-testid="text-register-title">
+                Join {inviteInfo.accountName}
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                You've been invited to join as a{" "}
+                <Badge variant="secondary" className="text-xs">{roleLabels[inviteInfo.role] || inviteInfo.role}</Badge>
+              </p>
+            </div>
+
             <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg flex items-center gap-3">
               <Users className="h-5 w-5 text-blue-600 dark:text-blue-400 shrink-0" />
               <div className="text-sm">
@@ -211,10 +203,175 @@ export default function RegisterPage() {
                 </p>
               </div>
             </div>
-          )}
 
-          <form onSubmit={handleSubmit} className="space-y-3">
-            {!inviteInfo && (
+            <form onSubmit={handleSubmit} className="space-y-3">
+              <div className="space-y-2">
+                <Label htmlFor="email">Work email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="john@company.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  readOnly
+                  className="bg-muted"
+                  data-testid="input-email"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="password">Password</Label>
+                <div className="relative">
+                  <Input
+                    id="password"
+                    type={showPassword ? "text" : "password"}
+                    placeholder="Min. 8 characters"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    minLength={8}
+                    className="pr-10"
+                    data-testid="input-password"
+                  />
+                  <button
+                    type="button"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    onClick={() => setShowPassword(!showPassword)}
+                    data-testid="button-toggle-password"
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
+              <label className="flex items-start gap-2 text-sm text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={termsAccepted}
+                  onChange={(e) => setTermsAccepted(e.target.checked)}
+                  required
+                  className="mt-1 h-4 w-4 rounded border-input accent-[#F09000]"
+                  data-testid="checkbox-terms"
+                />
+                <span>
+                  I agree to the{" "}
+                  <a
+                    href="https://field-view.com/terms"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[#F09000] underline hover:no-underline"
+                    data-testid="link-terms"
+                  >
+                    Terms of Service
+                  </a>{" "}
+                  and{" "}
+                  <a
+                    href="https://field-view.com/privacy"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[#F09000] underline hover:no-underline"
+                    data-testid="link-privacy"
+                  >
+                    Privacy Policy
+                  </a>
+                </span>
+              </label>
+              <Button
+                type="submit"
+                className="w-full bg-[#F09000] hover:bg-[#d98000] text-white"
+                disabled={registerMutation.isPending || !termsAccepted}
+                data-testid="button-register"
+              >
+                {registerMutation.isPending ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Joining team...
+                  </>
+                ) : (
+                  "Join Team"
+                )}
+              </Button>
+            </form>
+
+            <div className="mt-4 text-center text-sm text-muted-foreground">
+              Already have an account?{" "}
+              <a href="/login" className="text-[#F09000] hover:underline font-medium" data-testid="link-login">
+                Sign in
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Trial-signup branch — CompanyCam-style two-panel layout
+  return (
+    <div className="min-h-screen bg-white dark:bg-gray-950 p-3 sm:p-4">
+      <div className="grid grid-cols-1 md:grid-cols-[40%_1fr] gap-3 sm:gap-4 min-h-[calc(100vh-1.5rem)] sm:min-h-[calc(100vh-2rem)]">
+        {/* Left peach panel */}
+        <div
+          className="bg-[#FCDDB8] rounded-3xl p-8 sm:p-10 lg:p-14 flex flex-col justify-between min-h-[400px] md:min-h-0"
+          data-testid="panel-brand"
+        >
+          {/* Logo */}
+          <div className="flex items-center gap-2" data-testid="brand-logo-row">
+            <img
+              src={faviconImg}
+              alt="Field View"
+              className="h-10 w-10 rounded-md"
+              data-testid="img-brand-logo"
+            />
+            <span className="text-2xl font-bold tracking-tight text-slate-900">
+              Field View
+            </span>
+          </div>
+
+          {/* Headline */}
+          <h1
+            className="text-5xl sm:text-6xl lg:text-7xl font-extrabold leading-[0.95] tracking-tight text-slate-900 my-12"
+            data-testid="text-brand-tagline"
+          >
+            Join hundreds of contractors who rely on FieldView
+          </h1>
+
+          {/* Testimonial card */}
+          <figure
+            className="bg-white rounded-2xl shadow-md p-5 max-w-sm"
+            data-testid="card-testimonial"
+          >
+            <div className="flex items-center gap-0.5 mb-3" data-testid="testimonial-stars">
+              {[0, 1, 2, 3, 4].map((i) => (
+                <Star key={i} className="w-3.5 h-3.5" style={{ color: "#F09000", fill: "#F09000" }} />
+              ))}
+            </div>
+            <blockquote className="text-slate-800 text-sm leading-relaxed mb-4">
+              "FieldView keeps the whole crew organized. It clocks everyone in
+              when they hit the job, and the photo logs alone have settled two
+              disputes for us this year."
+            </blockquote>
+            <figcaption className="flex items-center gap-2.5">
+              <div className="h-8 w-8 rounded-full bg-[#F09000] flex items-center justify-center text-white text-xs font-bold">
+                LO
+              </div>
+              <div className="flex flex-col">
+                <span className="text-xs font-bold text-slate-900">Luke Ousdigian</span>
+                <span className="text-[11px] text-slate-600">Owner · Palm Beach Painters</span>
+              </div>
+            </figcaption>
+          </figure>
+        </div>
+
+        {/* Right form panel */}
+        <div className="flex items-center justify-center px-4 py-8 sm:px-6 lg:px-12">
+          <div className="w-full max-w-md">
+            <h2
+              className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white text-center mb-6"
+              data-testid="text-register-title"
+            >
+              Welcome! Create an account for your company.
+            </h2>
+
+            <form onSubmit={handleSubmit} className="space-y-3">
               <div className="space-y-2">
                 <Label htmlFor="companyName">Company Name</Label>
                 <Input
@@ -226,95 +383,91 @@ export default function RegisterPage() {
                   data-testid="input-company-name"
                 />
               </div>
-            )}
-            <div className="space-y-2">
-              <Label htmlFor="email">Work email</Label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="john@company.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                readOnly={!!inviteInfo}
-                className={inviteInfo ? "bg-muted" : ""}
-                data-testid="input-email"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <div className="relative">
+              <div className="space-y-2">
+                <Label htmlFor="email">Work email</Label>
                 <Input
-                  id="password"
-                  type={showPassword ? "text" : "password"}
-                  placeholder="Min. 8 characters"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  id="email"
+                  type="email"
+                  placeholder="john@company.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
                   required
-                  minLength={8}
-                  className="pr-10"
-                  data-testid="input-password"
+                  data-testid="input-email"
                 />
-                <button
-                  type="button"
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                  onClick={() => setShowPassword(!showPassword)}
-                  data-testid="button-toggle-password"
-                >
-                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
               </div>
-            </div>
-            <label className="flex items-start gap-2 text-sm text-muted-foreground">
-              <input
-                type="checkbox"
-                checked={termsAccepted}
-                onChange={(e) => setTermsAccepted(e.target.checked)}
-                required
-                className="mt-1 h-4 w-4 rounded border-input accent-[#F09000]"
-                data-testid="checkbox-terms"
-              />
-              <span>
-                I agree to the{" "}
-                <a
-                  href="https://field-view.com/terms"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-[#F09000] underline hover:no-underline"
-                  data-testid="link-terms"
-                >
-                  Terms of Service
-                </a>{" "}
-                and{" "}
-                <a
-                  href="https://field-view.com/privacy"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-[#F09000] underline hover:no-underline"
-                  data-testid="link-privacy"
-                >
-                  Privacy Policy
-                </a>
-              </span>
-            </label>
-            <Button
-              type="submit"
-              className="w-full bg-[#F09000] hover:bg-[#d98000] text-white"
-              disabled={registerMutation.isPending || !termsAccepted}
-              data-testid="button-register"
-            >
-              {registerMutation.isPending ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {inviteInfo ? "Joining team..." : "Creating account..."}
-                </>
-              ) : (
-                inviteInfo ? "Join Team" : "Get Started"
-              )}
-            </Button>
-          </form>
+              <div className="space-y-2">
+                <Label htmlFor="password">Password</Label>
+                <div className="relative">
+                  <Input
+                    id="password"
+                    type={showPassword ? "text" : "password"}
+                    placeholder="Min. 8 characters"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    minLength={8}
+                    className="pr-10"
+                    data-testid="input-password"
+                  />
+                  <button
+                    type="button"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    onClick={() => setShowPassword(!showPassword)}
+                    data-testid="button-toggle-password"
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
+              <label className="flex items-start gap-2 text-sm text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={termsAccepted}
+                  onChange={(e) => setTermsAccepted(e.target.checked)}
+                  required
+                  className="mt-1 h-4 w-4 rounded border-input accent-[#F09000]"
+                  data-testid="checkbox-terms"
+                />
+                <span>
+                  I agree to the{" "}
+                  <a
+                    href="https://field-view.com/terms"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[#F09000] underline hover:no-underline"
+                    data-testid="link-terms"
+                  >
+                    Terms of Service
+                  </a>{" "}
+                  and{" "}
+                  <a
+                    href="https://field-view.com/privacy"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[#F09000] underline hover:no-underline"
+                    data-testid="link-privacy"
+                  >
+                    Privacy Policy
+                  </a>
+                </span>
+              </label>
+              <Button
+                type="submit"
+                className="w-full bg-[#F09000] hover:bg-[#d98000] text-white"
+                disabled={registerMutation.isPending || !termsAccepted}
+                data-testid="button-register"
+              >
+                {registerMutation.isPending ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Creating account...
+                  </>
+                ) : (
+                  "Get Started"
+                )}
+              </Button>
+            </form>
 
-          {!inviteInfo && (
             <div className="mt-4 p-4 bg-[#F0EDEA] dark:bg-gray-900 rounded-lg">
               <p className="text-sm font-medium mb-2 text-foreground">Your trial includes:</p>
               <ul className="grid grid-cols-2 gap-x-4 gap-y-1">
@@ -326,13 +479,13 @@ export default function RegisterPage() {
                 ))}
               </ul>
             </div>
-          )}
 
-          <div className="mt-4 text-center text-sm text-muted-foreground">
-            Already have an account?{" "}
-            <a href="/login" className="text-[#F09000] hover:underline font-medium" data-testid="link-login">
-              Sign in
-            </a>
+            <div className="mt-4 text-center text-sm text-muted-foreground">
+              Already have an account?{" "}
+              <a href="/login" className="text-[#F09000] hover:underline font-medium" data-testid="link-login">
+                Sign in
+              </a>
+            </div>
           </div>
         </div>
       </div>

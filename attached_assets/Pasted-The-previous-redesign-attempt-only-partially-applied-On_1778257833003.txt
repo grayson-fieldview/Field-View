@@ -1,0 +1,71 @@
+The previous redesign attempt only partially applied. Only color tokens changed (Get Started button, Sign in link, Terms/Privacy links). The layout restructure did NOT land — the file still has the old "Trusted by hundreds of contractors across the country" headline, the old dark testimonial card, and the old edge-to-edge peach panel without rounded corners.
+
+Goal: complete the redesign of the TRIAL-SIGNUP branch in client/src/pages/register.tsx. The invitee branch (when inviteInfo exists) stays untouched — early-return to existing JSX as before.
+
+I'm attaching a screenshot of the target design. This is the ground truth — match it exactly.
+
+BRAND COLORS:
+- #F09000 (codebase brand orange — use existing token if defined in tailwind.config.js)
+- #FCDDB8 (peach panel background)
+
+LAYOUT (trial branch only)
+- Page wrapper: white background, padding p-3 sm:p-4 around the whole container so panels are inset from edges
+- Two-column grid: LEFT ~40% width, RIGHT fills remainder
+- At md breakpoint and below: stack vertically, left on top
+- LEFT panel: solid #FCDDB8 background, rounded-3xl on all corners, internal padding p-8 sm:p-10 lg:p-14, flex column with justify-between
+
+LEFT PANEL CONTENT (top to bottom)
+
+(a) Logo at top-left
+Use the EXISTING faviconImg pattern already in the file (lines ~140-150). Same <img src={faviconImg}> + "Field View" text inline. Do NOT change the logo treatment.
+
+(b) Headline (positioned in upper-middle of panel, after the logo)
+Single block, no subheadline, all text-slate-900, font-extrabold, leading-[0.95], tracking-tight, sized text-5xl sm:text-6xl lg:text-7xl. Wrap naturally on multiple lines:
+    "Join hundreds of contractors who rely on FieldView"
+NO yellow accent. NO highlighted words. NO subheadline below it. Just the headline, all in solid dark color.
+
+(c) Testimonial card pinned at the bottom of the panel
+- White background, rounded-2xl, p-5, shadow-md, max-w-sm
+- Compact size — this is small relative to the headline, NOT a hero element
+- 5 small star icons at top: lucide Star, w-3.5 h-3.5, color and fill #F09000
+- Quote (text-slate-800, text-sm, leading-relaxed, mb-4):
+    "FieldView keeps the whole crew organized. It clocks everyone in when they hit the job, and the photo logs alone have settled two disputes for us this year."
+- Author block (flex row, gap-2.5, items-center):
+    - 32px circle avatar, bg-[#F09000], white "LO" text, text-xs, font-bold
+    - Stacked text: "Luke Ousdigian" (text-xs, font-bold, text-slate-900) + "Owner · Palm Beach Painters" (text-[11px], text-slate-600)
+
+RIGHT PANEL CONTENT
+- Background: white (no panel)
+- Form is vertically and horizontally centered, max-w-md, w-full
+- Heading: "Welcome! Create an account for your company." — text-xl sm:text-2xl, font-bold, text-slate-900, text-center, mb-6
+- Form fields: keep existing Company Name, Work Email, Password fields (preserve all existing wiring, validation, eye-toggle for password)
+- Terms checkbox: keep existing, ensure links use #F09000
+- Get Started button: keep existing styling and behavior (already updated in previous attempt)
+- KEEP the existing "Your trial includes:" benefits list block — do NOT remove it. Position it directly below the Get Started button as it currently is.
+- KEEP the existing "Already have an account? Sign in" link at the bottom of the form, "Sign in" in #F09000
+
+PRESERVE THESE — DO NOT MODIFY
+- All form submission logic, validation, error handling, loading states
+- reCAPTCHA wiring (useGoogleReCaptcha hook)
+- Auth/Stripe integration
+- Route, redirect after success
+- Existing imports: Input, Button, Checkbox, Label from @/components/ui
+- Invitee branch (the early-return when inviteInfo exists) — leave entirely alone
+
+VERIFICATION BEFORE CLAIMING COMPLETION
+
+After editing the file, run these checks and paste the output:
+1. `grep -c "Join hundreds of contractors who rely on FieldView" client/src/pages/register.tsx` — must return 1
+2. `grep -c "Trusted by hundreds of contractors" client/src/pages/register.tsx` — must return 0
+3. `grep -c "FieldView keeps the whole crew organized" client/src/pages/register.tsx` — must return 1
+4. `grep -c "rounded-3xl" client/src/pages/register.tsx` — must return at least 1
+5. `git diff --stat client/src/pages/register.tsx` — show line change count
+
+If any of those checks fail, the edit is incomplete. Do not commit. Re-do the edit until all four pass.
+
+Show me:
+- The diff (`git diff client/src/pages/register.tsx`)
+- The verification output above
+- The full new render of the trial-signup return block (the JSX between `if (inviteInfo) return <existing/>` and the close of the component)
+
+DO NOT commit or push. I'll review and push manually.
