@@ -1,0 +1,77 @@
+THREE-PART EDIT. If you have any in-flight edits from a previous prompt that aren't yet committed, discard them and start fresh with this prompt.
+
+============================================================
+PART 1 — Profile completion page redesign (post-register step)
+============================================================
+
+STEP 1 — Find the file
+Search the codebase for the string "Tell us about your business" or "Complete Setup". The file is likely under client/src/pages/. Tell me the file path before editing so I can confirm.
+
+STEP 2 — Apply the same left-panel structure as client/src/pages/register.tsx (trial branch)
+The left panel must match the trial branch of register.tsx EXACTLY. Look at that JSX and replicate:
+
+- Page wrapper: p-3 sm:p-4 padding, white background
+- Two-column grid: LEFT ~40% width, RIGHT fills remainder
+- LEFT panel: solid #fceed8 background, rounded-3xl on all corners, internal padding p-8 sm:p-10 lg:p-14, flex column with justify-between
+- Stack vertically on md and below
+
+LEFT panel content (identical to register page):
+- Logo top-left: existing faviconImg + "Field View" text inline pattern
+- Headline: "Join hundreds of contractors who rely on FieldView" — text-5xl sm:text-6xl lg:text-7xl, font-extrabold, leading-[0.95], tracking-tight, text-slate-900. NO subheadline, NO yellow accent.
+- Testimonial card pinned at bottom-left: white bg, rounded-2xl, p-5, shadow-md, max-w-sm. 5 small stars (lucide Star, w-3.5 h-3.5, color and fill #F09000). Quote: "FieldView keeps the whole crew organized. It clocks everyone in when they hit the job, and the photo logs alone have settled two disputes for us this year." Avatar: 32px circle, bg-[#F09000], white "LO" text, text-xs font-bold. Author: "Luke Ousdigian" (text-xs font-bold) / "Owner · Palm Beach Painters" (text-[11px] text-slate-600).
+
+If you can extract the left panel into a shared component (e.g., <SignupLeftPanel />) and import it into both pages, do that. If extracting balloons the scope, copy the JSX literally and flag for tech debt.
+
+STEP 3 — Right-panel heading
+Replace "Tell us about your business" with "Take a second to finish up your profile."
+REMOVE the subheading "A few quick details so we can set things up for you" — the new headline alone is sufficient.
+Keep all existing form fields (First name, Last name, Phone, Industry, Company size, marketing consent checkbox, Complete Setup button) and ALL their wiring, validation, and submit handlers exactly as-is.
+
+============================================================
+PART 2 — Input field styling on BOTH pages
+============================================================
+
+On BOTH the register page (trial branch only — leave invitee branch alone) AND the profile-completion page, all input fields, selects, and phone input must use:
+- Background: bg-white (NOT bg-slate-50, bg-gray-50, bg-muted, or any tint)
+- Border: border-2 border-slate-300
+- Focus border: focus:border-[#F09000]
+- No internal fill, no shadow
+
+IMPORTANT: Do NOT modify the shared <Input /> component at client/src/components/ui/input.tsx — that would change inputs across the entire app. Instead, override className on each input usage in the two signup pages.
+
+Apply the same white-background + grey-outline treatment to:
+- All <Input /> usages
+- All <Select /> / dropdown triggers
+- The phone number input
+- Any other form field appearing in those two pages
+
+============================================================
+PART 3 — Remove "Your trial includes" block from register.tsx
+============================================================
+
+In client/src/pages/register.tsx (trial branch only):
+- Delete the entire "Your trial includes:" rendered block (the grey card containing the bullet list of features rendered between the Get Started button and the "Already have an account?" link)
+- Delete the trialFeatures array constant (lines ~117-124, near the top of the file)
+- Delete the CheckCircle2 import from lucide-react IF no other code in the file uses it. If CheckCircle2 is referenced elsewhere in register.tsx, leave the import alone.
+
+After removal, the right panel render order must be: Heading → Company Name field → Work email field → Password field → Terms checkbox → Get Started button → "Already have an account? Sign in" link.
+
+============================================================
+VERIFICATION (run all of these and paste output)
+============================================================
+
+1. `git diff --stat` — should show exactly 2 files changed (register.tsx + the profile page). If 3+ files (especially client/src/components/ui/input.tsx), STOP — out of scope.
+
+2. `grep -c "Your trial includes" client/src/pages/register.tsx` — must return 0
+3. `grep -c "trialFeatures" client/src/pages/register.tsx` — must return 0
+
+4. `grep -c "Take a second to finish up your profile" <profile-page-file>` — must return 1
+5. `grep -c "Tell us about your business" <profile-page-file>` — must return 0
+6. `grep -c "A few quick details so we can set things up for you" <profile-page-file>` — must return 0
+7. `grep -c "#fceed8" <profile-page-file>` — must return at least 1
+8. `grep -c "Luke Ousdigian" <profile-page-file>` — must return 1
+
+9. Show me the file path of the profile page
+10. Show me the full `git diff`
+
+DO NOT commit or push. I'll review and push manually.

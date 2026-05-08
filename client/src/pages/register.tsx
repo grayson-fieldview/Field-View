@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Eye, EyeOff, Loader2, CheckCircle2, Users, Star } from "lucide-react";
+import { Eye, EyeOff, Loader2, Users, Star } from "lucide-react";
 import { useGoogleReCaptcha } from "react-google-recaptcha-v3";
 import faviconImg from "@assets/Favicon-01_1772067008525.png";
 
@@ -113,15 +113,6 @@ export default function RegisterPage() {
     e.preventDefault();
     registerMutation.mutate();
   };
-
-  const trialFeatures = [
-    "Unlimited photo documentation",
-    "Automatic GPS Time Tracking",
-    "Project & task management",
-    "Team collaboration tools",
-    "Shareable photo galleries",
-    "Analytics dashboard",
-  ];
 
   const roleLabels: Record<string, string> = {
     admin: "Admin",
@@ -380,6 +371,7 @@ export default function RegisterPage() {
                   value={companyName}
                   onChange={(e) => setCompanyName(e.target.value)}
                   required
+                  className="bg-white border-2 border-slate-300 focus:border-[#F09000] focus-visible:ring-0 focus-visible:ring-offset-0 shadow-none"
                   data-testid="input-company-name"
                 />
               </div>
@@ -392,6 +384,7 @@ export default function RegisterPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
+                  className="bg-white border-2 border-slate-300 focus:border-[#F09000] focus-visible:ring-0 focus-visible:ring-offset-0 shadow-none"
                   data-testid="input-email"
                 />
               </div>
@@ -406,7 +399,7 @@ export default function RegisterPage() {
                     onChange={(e) => setPassword(e.target.value)}
                     required
                     minLength={8}
-                    className="pr-10"
+                    className="pr-10 bg-white border-2 border-slate-300 focus:border-[#F09000] focus-visible:ring-0 focus-visible:ring-offset-0 shadow-none"
                     data-testid="input-password"
                   />
                   <button
@@ -467,18 +460,6 @@ export default function RegisterPage() {
                 )}
               </Button>
             </form>
-
-            <div className="mt-4 p-4 bg-[#F0EDEA] dark:bg-gray-900 rounded-lg">
-              <p className="text-sm font-medium mb-2 text-foreground">Your trial includes:</p>
-              <ul className="grid grid-cols-2 gap-x-4 gap-y-1">
-                {trialFeatures.map((feature) => (
-                  <li key={feature} className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <CheckCircle2 className="h-3.5 w-3.5 text-[#267D32] flex-shrink-0" />
-                    {feature}
-                  </li>
-                ))}
-              </ul>
-            </div>
 
             <div className="mt-4 text-center text-sm text-muted-foreground">
               Already have an account?{" "}
