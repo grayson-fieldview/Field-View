@@ -1,0 +1,37 @@
+Show me actual code excerpts for these 4 specific concerns. No edits.
+
+1. Cron integration — transaction boundary
+Show the full code from BEFORE the per-row processing transaction starts, through the entire transaction body, through the AFTER-transaction push send. I want to see exactly:
+   - That pushNotificationParams is declared OUTSIDE the transaction (or scoped per-iteration of the row loop, not at function-level where it would leak across rows)
+   - That the projects table lookup (for projectName) runs INSIDE the transaction using `tx`, not the outer `db`
+   - That sendPushNotification is called OUTSIDE the transaction block
+   - That the .catch() on sendPushNotification swallows errors so the cron loop continues
+   - That if the transaction throws/rolls back, pushNotificationParams stays null and no push fires
+   
+   Show the entire row-processing block, top to bottom.
+
+2. Push module — token validation order
+In server/lib/push.ts, show the exact order of:
+   - Token lookup
+   - "no token → return" check
+   - Format validation via Expo.isExpoPushToken
+   - Auto-clear on invalid format
+   - Send call
+   - Ticket error handling
+   
+   I want to verify that an invalid-format token clears immediately without attempting a send (which would 400 from Expo's API and could rate-limit us if it happens at scale).
+
+3. Endpoints — auth check verification
+Show the full code for both POST /api/users/push-token and DELETE /api/users/push-token. Specifically confirm:
+   - isAuthenticated middleware is applied
+   - req.user.id is used for the WHERE clause (not req.body.userId — would be a privilege escalation if so)
+   - Body validation rejects malformed tokens with 400 (not 500)
+   - The DELETE doesn't require a body (just clears the current user's token)
+
+4. Migration script — production safety
+Show the migration script (full source). I want to verify:
+   - DATABASE_URL host check rejects local-dev URLs
+   - ALLOW_PROD_MIGRATION=yes check is present and BEFORE any DB call
+   - The transaction wraps the ALTER TABLE
+   - The post-migration verification query runs AFTER the transaction commits, and throws (non-zero exit) if the column is missing
+   - The entry-point guard prevents accidental execution if this file is imported elsewhere
