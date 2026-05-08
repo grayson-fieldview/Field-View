@@ -1,0 +1,31 @@
+Diagnose-only investigation. Earlier today we shipped a fix for a rate-limiter "Table is not created yet" error (commit 265f76d, tableCreated: true added to RateLimiterPostgres config). Before that fix, prod logs showed two related error patterns:
+  - "Error: timeout exceeded when trying to connect"
+  - "Error: Connection terminated due to connection timeout"
+
+Both come from pg-pool exceeding the configured connectionTimeoutMillis (5000ms in server/db.ts). My hypothesis at the time was that the rate-limiter library's blocking _initTable() call was holding the only connection (max:1 on Vercel) during cold starts, manufacturing these timeout cascades. After the fix, those errors should be gone or near-zero.
+
+GOAL: gather the data we'd need to confirm the issue is resolved or to tune the pool if not. Do NOT modify any files. Pure investigation.
+
+REPORT THESE 5 SECTIONS:
+
+Section 1 — Current server/db.ts pool config
+Output the entire file. Specifically note: pool max size (max:1 on Vercel was the previous setting), connectionTimeoutMillis, idleTimeoutMillis, statement_timeout (if set), keepAlive config, SSL config.
+
+Section 2 — Other pool/client creation sites
+Search for any other places in the server code that create a pg connection or pool outside of server/db.ts:
+  grep -rn "new Pool\|new Client\|createPool" server/ --include="*.ts"
+Each one is a potential source of additional connections pressuring the RDS connection cap. Report all hits with file:line and the relevant config.
+
+Section 3 — RateLimiterPostgres post-fix config
+grep -A 10 "new RateLimiterPostgres" server/middleware/rate-limit.ts
+Confirm tableCreated: true is present. Confirm storeClient still references the shared pool from server/db.ts (so all rate limiters share the single pool, not creating their own connections).
+
+Section 4 — Concurrent DB query patterns
+Search for code that does Promise.all or concurrent DB queries within a single request handler:
+  grep -rn "Promise.all" server/ --include="*.ts" | head -30
+With max:1 pool, intra-Lambda concurrency serializes through a single connection — slow queries can cascade into timeouts on the second concurrent query. Report file:line for each Promise.all, and for the most suspicious 2-3 (ones in route handlers vs background jobs), paste the surrounding 5-10 lines so we can see if the parallel calls are DB queries or something else (HTTP fetches, etc.).
+
+Section 5 — Recommendations
+Based on what you found, what (if anything) should change in code? Don't make changes — just propose options ranked by impact-vs-risk.
+
+DO NOT modify any files.
