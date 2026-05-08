@@ -16,7 +16,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Loader2, Star } from "lucide-react";
 import { INDUSTRIES, COMPANY_SIZES } from "@shared/constants";
-import faviconImg from "@assets/Favicon-01_1772067008525.png";
+import faviconImg from "@assets/Favicon-01-brand_1778259672.png";
 
 // Shared input styling: white background, grey-300 outline, brand-orange focus.
 // Override on each usage so we don't touch the global Input/SelectTrigger

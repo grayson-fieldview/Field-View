@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Eye, EyeOff, Loader2, Users, Star } from "lucide-react";
 import { useGoogleReCaptcha } from "react-google-recaptcha-v3";
-import faviconImg from "@assets/Favicon-01_1772067008525.png";
+import faviconImg from "@assets/Favicon-01-brand_1778259672.png";
 
 export default function RegisterPage() {
   const [, setLocation] = useLocation();
