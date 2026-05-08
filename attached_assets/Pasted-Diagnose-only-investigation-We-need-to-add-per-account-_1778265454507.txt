@@ -1,0 +1,57 @@
+Diagnose-only investigation. We need to add per-account login lockout in addition to the existing IP-based rate limiter. Current loginLimiter (server/middleware/rate-limit.ts) keys on req.ip — an attacker rotating IPs gets unlimited attempts per email. Need a second limiter keyed on email so cross-IP credential stuffing trips lockout per account.
+
+DO NOT modify any files. Investigate and report.
+
+REPORT THESE 5 SECTIONS:
+
+Section 1 — Existing loginLimiter wiring
+Find where loginLimiter is applied:
+  grep -rn "loginLimiter" server/ --include="*.ts"
+
+For each match, show 5 lines of context. We want to know:
+- Where it's imported and applied (which routes)
+- Whether it's middleware (app.post(path, loginLimiter, handler)) or called inline
+- The existing keyPrefix and points/duration values
+
+Section 2 — Login route flow
+Find the actual login handler. Likely server/replit_integrations/auth/replitAuth.ts (passport LocalStrategy) and the /api/login POST route. Report:
+- Where in the request lifecycle the email becomes available (req.body.email vs validated by zod vs lowercased vs raw)
+- The order of operations: rate limiter → body parse → user lookup → password check → session
+- Whether there's any existing per-account state we could use (e.g., user.failed_login_attempts column)
+
+Section 3 — auth_rate_limits table reuse vs new table
+The existing auth_rate_limits table is owned at runtime by rate-limiter-flexible (per shared/schema.ts mirror declaration). Confirm:
+- The table can hold multiple keyPrefix values simultaneously (it should — the library uses keyPrefix to namespace different limiter instances)
+- Existing limiters (loginLimiter, registerLimiter, etc.) coexist in the same table without collision
+
+If the answer is "yes, multiple limiters share one table by keyPrefix," we don't need a new table or a schema migration. If the answer is "no, would need separate table," flag that — it changes the deploy sequence to require another prod migration.
+
+Section 4 — Email normalization at login
+The codebase is currently case-sensitive on email (we logged this as TECH_DEBT earlier today). For the per-account limiter, we want consistent keying — "Grayson@example.com" and "grayson@example.com" must map to the same limiter key, otherwise the lockout is trivially bypassed by case variation.
+
+Confirm:
+- The email used as the limiter key should be lowercased before consume()
+- Optionally trimmed of whitespace
+This is a minor pattern decision — flag what you'd recommend.
+
+Section 5 — Recommendations on threshold
+Industry-standard per-account thresholds:
+- Stripe: 5 wrong attempts → 15-min lockout
+- Gmail: 100 wrong attempts → 24-hour lockout (lenient because they have other signals)
+- AWS: 5 wrong → 1hr lockout, escalating
+
+For a B2B SaaS at paid-launch stage, recommend a threshold and duration. Considerations:
+- Lower threshold = more protection but more legitimate-user lockouts (forgotten password, typos)
+- Higher threshold = less protection but better UX for forgetful users
+- Pair with a clear unlock path (forgot password flow) so locked-out legitimate users have a way out
+
+Section 6 — Verify db.ts has room for one extra config addition
+While we're touching the auth/db config area, the connection timeout investigation surfaced that server/db.ts has no statement_timeout. Adding statement_timeout: 10000 to the pool config is an unrelated low-risk safety net we want to ship in the same deploy as the lockout. Confirm:
+- The current pool config in server/db.ts (paste it)
+- That adding `statement_timeout: 10000` is mechanical (no other changes needed)
+
+OUTPUT FORMAT:
+- Section 1-6 reports as above
+- A proposed implementation plan based on findings, with explicit decision points where you want my input
+
+Do NOT modify any files. Just gather and report.
