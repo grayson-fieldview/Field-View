@@ -1,0 +1,109 @@
+Goal: scope PDF generation for reports. Use @react-pdf/renderer to 
+build a Cover page + body pages with 4 photos per page (2×2 grid, 
+caption h1 + description h2 below each). Header (report name top-left, 
+date top-right) and footer (company name bottom-left, page X/Y center, 
+FieldView logo bottom-right) on every body page. Cover page has no 
+header/footer.
+
+Stream output via Vercel Fluid (confirmed working). Image pipeline: 
+parallel S3 fetch (concurrency cap ~10) → sharp resize to 1600px max 
++ JPEG quality 80 → buffer → embed in react-pdf <Image>. Hard cap of 
+50 photos per report at the endpoint level.
+
+Force-save current draft before generating (auto-save → then generate 
+→ then download). User shouldn't have to manually save first.
+
+Phase 1 only — DIAGNOSE, no code changes. Report findings numbered.
+
+Dependencies / build environment
+1. Confirm @react-pdf/renderer and sharp are NOT installed (per memory). 
+   Show package.json relevant section.
+2. Vercel function memory allocation — show vercel.json and any 
+   memory/maxDuration config for api/index.js. We'll likely need at 
+   least 1024 MB for processing 30-50 images concurrently. Current 
+   allocation?
+3. sharp on Vercel: sharp ships native binaries (libvips). Confirm 
+   Vercel's Node runtime auto-installs the right platform binaries 
+   (linux-x64). Any known caveats from package-lock.json or build 
+   logs? Sometimes `npm rebuild sharp` is needed.
+4. script/build.ts allowlist behavior — sharp and @react-pdf/renderer: 
+   should they be marked external (default) or bundled? Recommend 
+   external for both — sharp's native binaries can't bundle, and 
+   @react-pdf/renderer is large (pdfkit + fontkit + native font deps).
+
+Existing helpers to reuse
+5. server/s3.ts: confirm getObjectStream(key) helper exists and works 
+   (added during photo download work). Show its signature.
+6. extractS3KeyFromUrl helper — show it. We'll use this on each 
+   media.url to get the S3 key for fetching.
+7. presignMediaUrls (used by GET /api/reports/:id) — we don't need 
+   presigning for server-side fetches (server uses getObjectStream 
+   directly). But confirm the path works.
+
+Branding assets
+8. Find the FieldView logo file in the repo. Memory says 
+   attached_assets/Favicon-01-brand_1778259672.png is the canonical 
+   brand asset (the one used by 9 auth pages + sidebar). For PDF 
+   embedding, ideal would be a transparent-background PNG. Show me 
+   what's actually available in attached_assets and client/public.
+9. Account branding fallback: we have accounts.company_logo_url, 
+   companyLegalName, companyAddress columns (added in Stage 1) but no 
+   UI to set them yet (Stage 4). For Stage 2, what's the fallback if 
+   these are null?
+   - company logo → if null, hide that element from PDF
+   - company name → fall back to accounts.name (which always exists)
+   - company address → if null, hide
+   Confirm accounts.name always has a value.
+
+Data shape we need for PDF generation
+10. Show me the existing GET /api/reports/:id handler — what fields it 
+    returns about: report itself, sections, section photos, project, 
+    creator user. Specifically need:
+    - report: title, description, coverConfig, status, createdAt, 
+      photo count (computed)
+    - project: name, address, coverPhotoId
+    - account: name, companyLogoUrl, companyLegalName, companyAddress
+    - creator: firstName, lastName
+    - sections: title, summary, photos[]
+    - section photos: caption, description, sortOrder, media (with 
+      original media row — uploadedById → uploader's name? optional)
+    Tell me which of these are already returned vs would need to be 
+    added.
+
+11. Cover photo selection: projects.coverPhotoId exists per the schema 
+    diagnostic. If set and showCoverPhoto toggle is on, use that media 
+    as the cover photo. If null, hide cover photo on PDF (Stage 5 can 
+    add per-report cover photo override). Confirm projects.coverPhotoId 
+    column exists.
+
+PDF endpoint design open questions
+12. HTTP method: POST /api/reports/:id/pdf or GET /api/reports/:id/pdf?
+    POST has the advantage of: (a) browsers can't trigger via plain 
+    <a> link (good — same as photo download, prevents accidental 
+    sharing), (b) no caching at any intermediate layer. GET is simpler. 
+    Recommend POST. Confirm.
+
+13. Auto-save before generate flow: should the PDF endpoint accept the 
+    in-memory draft state in its body (so server generates from draft 
+    without needing to persist first)? OR should the frontend force-
+    save (call PATCH endpoints), wait for them, then call POST /pdf 
+    which fetches the now-persisted state? Latter is cleaner — single 
+    source of truth, no chance of PDF and saved-state diverging. 
+    Recommend latter.
+
+14. Streaming response shape: Content-Type: application/pdf, 
+    Content-Disposition: attachment with filename like 
+    `${reportTitle-slug}-${YYYY-MM-DD}.pdf`. Use renderToStream() 
+    from @react-pdf/renderer and pipe to res. Confirm pattern fits 
+    existing photo download endpoint shape.
+
+Output: numbered findings 1-14. Then propose:
+- New deps to install with version pins
+- New files needed (e.g., server/pdf/ directory with layout components 
+  + image pipeline)
+- Endpoint additions (1 new endpoint, plus any helper data fetcher)
+- Frontend additions (Generate PDF button + download flow + auto-save-
+  first behavior)
+- Open product questions (e.g., what if 0 photos — empty PDF? Error?)
+
+Make NO code changes.
