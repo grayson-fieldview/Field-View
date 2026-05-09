@@ -1,0 +1,66 @@
+Goal: Stage 2 of reports — PDF generation. Decisions all locked from 
+the Phase 1 diagnosis answers. Implement the proposal as written, with 
+these adjustments:
+
+- Use react-pdf built-in Helvetica. No custom font registration. Skip 
+  font file commits.
+- Commit the FieldView brand PNG to server/pdf/assets/fieldview-logo.png 
+  at small dimensions (~200x60). Read via fs.readFileSync at runtime.
+- Add p-limit dependency if not present.
+- vercel.json: add "memory": 1769 to api/index.js function config (keep 
+  maxDuration: 60).
+- saveDraft mutation: change from .mutate() fire-and-forget to .mutateAsync() 
+  awaitable so the Generate PDF flow can chain after save reliably.
+- 0 photos → generate cover-only PDF
+- 0 photos in a section → render title + summary, no grid
+- Aspect ratio → contain (letterbox)
+- 50-photo cap → silent in editor, clear error at PDF time
+- Filename slugify → matches zip endpoint
+- US Letter page size
+- Cover page → no header/footer
+- Missing-data toggles → silently skip
+
+Two-phase: 2a is plan response, 2b is implementation. STOP between 
+phases for approval.
+
+=== Phase 2a — propose plan, max ~80 lines, no code ===
+
+Required content:
+- Dependency installs with version pins
+- Vercel config changes (vercel.json memory bump)
+- New files (server/pdf/* tree)
+- Asset commits (logo PNG path, dimensions)
+- New storage method signature: getReportForPdf(reportId)
+- New endpoint: POST /api/reports/:id/pdf — auth chain, request flow, 
+  error handling for >50 photos, streaming response
+- Image pipeline shape: parallel S3 fetch with p-limit(10) → 
+  streamToBuffer → sharp().resize(1600, { fit: 'inside' }).jpeg({ 
+  quality: 80 }) → buffer → embed
+- Cover photo handling: if projects.coverPhotoId set AND 
+  coverConfig.showCoverPhoto === true, fetch and embed; else skip
+- Company logo handling: if accounts.companyLogoUrl set AND 
+  coverConfig.showCompanyLogo === true, fetch and embed; else skip
+- Frontend: Generate PDF button position (top bar next to Save Draft), 
+  isDirty handling (auto-save first via mutateAsync, then POST), spinner 
+  state during save+generate, blob download via temp <a>, error toast 
+  with the >50 photos message rendered cleanly
+- Verification plan (manual smoke tests after deploy + manual promote)
+
+Open questions: any new ones surfaced during planning.
+
+STOP after the plan. Wait for approval.
+
+=== Phase 2b — implementation (only after I approve) ===
+
+Standard pattern. Single commit. TS clean against baseline (whatever 
+that is currently — don't drift it). Build green. Show me:
+- git diff --stat
+- vercel.json change
+- The endpoint handler in routes.ts in full
+- The Document.tsx layout root in full
+- Brief structure of the other layout components (file paths + 
+  rendered structure, not full code)
+- The image pipeline file in full
+
+Reminder: Vercel auto-promotion is OFF, so push → wait Ready → 
+manually promote. I'll handle the promote and run verification.
