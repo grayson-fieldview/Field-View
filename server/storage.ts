@@ -7,10 +7,11 @@ import {
   checklists,
   checklistItems,
   reports,
+  reportSections,
+  reportSectionPhotos,
   sharedGalleries,
   checklistTemplates,
   checklistTemplateItems,
-  reportTemplates,
   accountTags,
   calendarConnections,
   calendarEvents,
@@ -30,14 +31,16 @@ import {
   type InsertChecklistItem,
   type Report,
   type InsertReport,
+  type ReportSection,
+  type InsertReportSection,
+  type ReportSectionPhoto,
+  type InsertReportSectionPhoto,
   type SharedGallery,
   type InsertSharedGallery,
   type ChecklistTemplate,
   type InsertChecklistTemplate,
   type ChecklistTemplateItem,
   type InsertChecklistTemplateItem,
-  type ReportTemplate,
-  type InsertReportTemplate,
   type AccountTag,
   type InsertAccountTag,
   type CalendarConnection,
@@ -107,12 +110,24 @@ export interface IStorage {
   updateChecklistItem(id: number, data: Partial<InsertChecklistItem>): Promise<ChecklistItem | undefined>;
   deleteChecklistItem(id: number): Promise<void>;
 
+  // ── Reports (structured shape, session 37) ──────────────────────────────
   getReportsByProject(projectId: number): Promise<(Report & { createdBy?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } })[]>;
   getAllReports(accountId: string): Promise<(Report & { project?: { name: string }; createdBy?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } })[]>;
   getReport(id: number): Promise<Report | undefined>;
+  getReportTree(id: number): Promise<(Report & { sections: (ReportSection & { photos: (ReportSectionPhoto & { media: Media })[] })[] }) | undefined>;
   createReport(report: InsertReport): Promise<Report>;
   updateReport(id: number, data: Partial<InsertReport>): Promise<Report | undefined>;
   deleteReport(id: number): Promise<void>;
+
+  getReportSection(id: number): Promise<ReportSection | undefined>;
+  createReportSection(section: { reportId: number; title: string; summary?: string | null }): Promise<ReportSection>;
+  updateReportSection(id: number, data: Partial<InsertReportSection>): Promise<ReportSection | undefined>;
+  deleteReportSection(id: number): Promise<void>;
+
+  getReportSectionPhoto(id: number): Promise<ReportSectionPhoto | undefined>;
+  addReportSectionPhotos(sectionId: number, mediaIds: number[]): Promise<ReportSectionPhoto[]>;
+  updateReportSectionPhoto(id: number, data: Partial<InsertReportSectionPhoto>): Promise<ReportSectionPhoto | undefined>;
+  deleteReportSectionPhoto(id: number): Promise<void>;
 
   getUsers(accountId: string): Promise<User[]>;
 
@@ -126,10 +141,6 @@ export interface IStorage {
   getChecklistTemplateItems(templateId: number): Promise<ChecklistTemplateItem[]>;
   createChecklistTemplateItem(item: InsertChecklistTemplateItem): Promise<ChecklistTemplateItem>;
 
-  getAllReportTemplates(accountId: string): Promise<ReportTemplate[]>;
-  getReportTemplate(id: number): Promise<ReportTemplate | undefined>;
-  createReportTemplate(template: InsertReportTemplate): Promise<ReportTemplate>;
-  deleteReportTemplate(id: number): Promise<void>;
 
   getCalendarConnections(userId: string): Promise<CalendarConnection[]>;
   getCalendarConnection(id: number): Promise<CalendarConnection | undefined>;
@@ -633,6 +644,41 @@ export class DatabaseStorage implements IStorage {
     return item;
   }
 
+  async getReportTree(id: number) {
+    const [report] = await db.select().from(reports).where(eq(reports.id, id));
+    if (!report) return undefined;
+
+    const sections = await db
+      .select()
+      .from(reportSections)
+      .where(eq(reportSections.reportId, id))
+      .orderBy(asc(reportSections.sortOrder), asc(reportSections.id));
+
+    if (sections.length === 0) {
+      return { ...report, sections: [] as (ReportSection & { photos: (ReportSectionPhoto & { media: Media })[] })[] };
+    }
+
+    const sectionIds = sections.map((s) => s.id);
+    const photoRows = await db
+      .select({ photo: reportSectionPhotos, media })
+      .from(reportSectionPhotos)
+      .innerJoin(media, eq(reportSectionPhotos.mediaId, media.id))
+      .where(inArray(reportSectionPhotos.sectionId, sectionIds))
+      .orderBy(asc(reportSectionPhotos.sectionId), asc(reportSectionPhotos.sortOrder), asc(reportSectionPhotos.id));
+
+    const bySection = new Map<number, (ReportSectionPhoto & { media: Media })[]>();
+    for (const r of photoRows) {
+      const arr = bySection.get(r.photo.sectionId) ?? [];
+      arr.push({ ...r.photo, media: r.media });
+      bySection.set(r.photo.sectionId, arr);
+    }
+
+    return {
+      ...report,
+      sections: sections.map((s) => ({ ...s, photos: bySection.get(s.id) ?? [] })),
+    };
+  }
+
   async createReport(report: InsertReport): Promise<Report> {
     const [created] = await db.insert(reports).values(report).returning();
     return created;
@@ -649,6 +695,72 @@ export class DatabaseStorage implements IStorage {
 
   async deleteReport(id: number): Promise<void> {
     await db.delete(reports).where(eq(reports.id, id));
+  }
+
+  async getReportSection(id: number): Promise<ReportSection | undefined> {
+    const [s] = await db.select().from(reportSections).where(eq(reportSections.id, id));
+    return s;
+  }
+
+  async createReportSection(input: { reportId: number; title: string; summary?: string | null }): Promise<ReportSection> {
+    const [{ maxSort }] = await db
+      .select({ maxSort: sql<number | null>`max(${reportSections.sortOrder})` })
+      .from(reportSections)
+      .where(eq(reportSections.reportId, input.reportId));
+    const nextSort = (maxSort ?? -1) + 1;
+    const [created] = await db
+      .insert(reportSections)
+      .values({ reportId: input.reportId, title: input.title, summary: input.summary ?? null, sortOrder: nextSort })
+      .returning();
+    return created;
+  }
+
+  async updateReportSection(id: number, data: Partial<InsertReportSection>): Promise<ReportSection | undefined> {
+    const [updated] = await db
+      .update(reportSections)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(reportSections.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteReportSection(id: number): Promise<void> {
+    await db.delete(reportSections).where(eq(reportSections.id, id));
+  }
+
+  async getReportSectionPhoto(id: number): Promise<ReportSectionPhoto | undefined> {
+    const [p] = await db.select().from(reportSectionPhotos).where(eq(reportSectionPhotos.id, id));
+    return p;
+  }
+
+  async addReportSectionPhotos(sectionId: number, mediaIds: number[]): Promise<ReportSectionPhoto[]> {
+    if (mediaIds.length === 0) return [];
+    const [{ maxSort }] = await db
+      .select({ maxSort: sql<number | null>`max(${reportSectionPhotos.sortOrder})` })
+      .from(reportSectionPhotos)
+      .where(eq(reportSectionPhotos.sectionId, sectionId));
+    const base = (maxSort ?? -1) + 1;
+    const rows = mediaIds.map((mediaId, i) => ({
+      sectionId,
+      mediaId,
+      caption: null,
+      description: null,
+      sortOrder: base + i,
+    }));
+    return db.insert(reportSectionPhotos).values(rows).returning();
+  }
+
+  async updateReportSectionPhoto(id: number, data: Partial<InsertReportSectionPhoto>): Promise<ReportSectionPhoto | undefined> {
+    const [updated] = await db
+      .update(reportSectionPhotos)
+      .set(data)
+      .where(eq(reportSectionPhotos.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteReportSectionPhoto(id: number): Promise<void> {
+    await db.delete(reportSectionPhotos).where(eq(reportSectionPhotos.id, id));
   }
 
   async getUsers(accountId: string): Promise<User[]> {
@@ -700,23 +812,7 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
-  async getAllReportTemplates(accountId: string): Promise<ReportTemplate[]> {
-    return db.select().from(reportTemplates).where(eq(reportTemplates.accountId, accountId)).orderBy(desc(reportTemplates.createdAt));
-  }
-
-  async getReportTemplate(id: number): Promise<ReportTemplate | undefined> {
-    const [item] = await db.select().from(reportTemplates).where(eq(reportTemplates.id, id));
-    return item;
-  }
-
-  async createReportTemplate(template: InsertReportTemplate): Promise<ReportTemplate> {
-    const [created] = await db.insert(reportTemplates).values(template).returning();
-    return created;
-  }
-
-  async deleteReportTemplate(id: number): Promise<void> {
-    await db.delete(reportTemplates).where(eq(reportTemplates.id, id));
-  }
+  // Report templates (Stage 1: table exists, storage CRUD ships in Stage 4).
 
   async getCalendarConnections(userId: string): Promise<CalendarConnection[]> {
     return db.select().from(calendarConnections).where(eq(calendarConnections.userId, userId)).orderBy(desc(calendarConnections.createdAt));

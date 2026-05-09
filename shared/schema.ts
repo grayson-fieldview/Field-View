@@ -121,20 +121,56 @@ export const checklistItems = pgTable("checklist_items", {
   sortOrder: integer("sort_order").default(0).notNull(),
 });
 
+// ─── Reports (new structured shape, session 37 rewrite) ───────────────────────
+// coverConfig jsonb shape (Stage 1):
+//   {
+//     showCoverPhoto: boolean,
+//     showCompanyLogo: boolean,
+//     showCompanyName: boolean,
+//     showCreatorName: boolean,
+//     showPhotoCount: boolean,
+//     showDateCreated: boolean,
+//     coverPhotoMediaId: number | null   // Stage 2 will populate; field reserved
+//   }
+// Title and description are always-rendered first-class columns (not toggles).
 export const reports = pgTable("reports", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }).notNull(),
+  accountId: varchar("account_id").references(() => accounts.id, { onDelete: "cascade" }).notNull(),
   title: text("title").notNull(),
-  type: text("type").default("inspection").notNull(),
+  description: text("description"),
+  coverConfig: jsonb("cover_config").notNull().default(sql`'{}'::jsonb`),
   status: reportStatusEnum("status").default("draft").notNull(),
-  content: text("content"),
-  findings: text("findings"),
-  recommendations: text("recommendations"),
   createdById: varchar("created_by_id").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
   index("reports_project_id_idx").on(table.projectId),
+  index("reports_account_id_idx").on(table.accountId),
+]);
+
+export const reportSections = pgTable("report_sections", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  reportId: integer("report_id").references(() => reports.id, { onDelete: "cascade" }).notNull(),
+  title: text("title").notNull(),
+  summary: text("summary"),
+  sortOrder: integer("sort_order").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("report_sections_report_sort_idx").on(table.reportId, table.sortOrder),
+]);
+
+export const reportSectionPhotos = pgTable("report_section_photos", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  sectionId: integer("section_id").references(() => reportSections.id, { onDelete: "cascade" }).notNull(),
+  mediaId: integer("media_id").references(() => media.id, { onDelete: "cascade" }).notNull(),
+  caption: text("caption"),
+  description: text("description"),
+  sortOrder: integer("sort_order").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("report_section_photos_section_sort_idx").on(table.sectionId, table.sortOrder),
 ]);
 
 export const checklistTemplates = pgTable("checklist_templates", {
@@ -153,17 +189,20 @@ export const checklistTemplateItems = pgTable("checklist_template_items", {
   sortOrder: integer("sort_order").default(0).notNull(),
 });
 
+// Report templates (new shape, session 37). Stage 1 ships the table only; the
+// authoring/apply UI lands in Stage 4. templateConfig is intentionally opaque
+// jsonb so the shape can evolve without further migrations.
 export const reportTemplates = pgTable("report_templates", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  accountId: varchar("account_id").references(() => accounts.id, { onDelete: "cascade" }).notNull(),
   title: text("title").notNull(),
-  type: text("type").default("inspection").notNull(),
-  content: text("content"),
-  findings: text("findings"),
-  recommendations: text("recommendations"),
-  accountId: varchar("account_id").references(() => accounts.id),
+  templateConfig: jsonb("template_config").notNull().default(sql`'{}'::jsonb`),
   createdById: varchar("created_by_id").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("report_templates_account_id_idx").on(table.accountId),
+]);
 
 export const sharedGalleries = pgTable("shared_galleries", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
@@ -389,9 +428,20 @@ export const checklistItemsRelations = relations(checklistItems, ({ one }) => ({
   checklist: one(checklists, { fields: [checklistItems.checklistId], references: [checklists.id] }),
 }));
 
-export const reportsRelations = relations(reports, ({ one }) => ({
+export const reportsRelations = relations(reports, ({ one, many }) => ({
   project: one(projects, { fields: [reports.projectId], references: [projects.id] }),
   createdBy: one(users, { fields: [reports.createdById], references: [users.id] }),
+  sections: many(reportSections),
+}));
+
+export const reportSectionsRelations = relations(reportSections, ({ one, many }) => ({
+  report: one(reports, { fields: [reportSections.reportId], references: [reports.id] }),
+  photos: many(reportSectionPhotos),
+}));
+
+export const reportSectionPhotosRelations = relations(reportSectionPhotos, ({ one }) => ({
+  section: one(reportSections, { fields: [reportSectionPhotos.sectionId], references: [reportSections.id] }),
+  media: one(media, { fields: [reportSectionPhotos.mediaId], references: [media.id] }),
 }));
 
 export const checklistTemplatesRelations = relations(checklistTemplates, ({ many }) => ({
@@ -470,6 +520,17 @@ export const insertReportSchema = createInsertSchema(reports).omit({
   updatedAt: true,
 });
 
+export const insertReportSectionSchema = createInsertSchema(reportSections).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertReportSectionPhotoSchema = createInsertSchema(reportSectionPhotos).omit({
+  id: true,
+  createdAt: true,
+});
+
 export type InsertProject = z.infer<typeof insertProjectSchema>;
 export type Project = typeof projects.$inferSelect;
 export type InsertMedia = z.infer<typeof insertMediaSchema>;
@@ -487,6 +548,10 @@ export type InsertChecklistItem = z.infer<typeof insertChecklistItemSchema>;
 export type ChecklistItem = typeof checklistItems.$inferSelect;
 export type InsertReport = z.infer<typeof insertReportSchema>;
 export type Report = typeof reports.$inferSelect;
+export type InsertReportSection = z.infer<typeof insertReportSectionSchema>;
+export type ReportSection = typeof reportSections.$inferSelect;
+export type InsertReportSectionPhoto = z.infer<typeof insertReportSectionPhotoSchema>;
+export type ReportSectionPhoto = typeof reportSectionPhotos.$inferSelect;
 
 export const insertChecklistTemplateSchema = createInsertSchema(checklistTemplates).omit({
   id: true,
@@ -500,6 +565,7 @@ export const insertChecklistTemplateItemSchema = createInsertSchema(checklistTem
 export const insertReportTemplateSchema = createInsertSchema(reportTemplates).omit({
   id: true,
   createdAt: true,
+  updatedAt: true,
 });
 
 export type InsertChecklistTemplate = z.infer<typeof insertChecklistTemplateSchema>;

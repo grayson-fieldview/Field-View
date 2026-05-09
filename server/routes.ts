@@ -7,7 +7,7 @@ import { getAccountBilling, isAccountBillingEnabled, overlayAccountBillingOnUser
 import { requireAdmin, requireAdminOrManager } from "./middleware/auth";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
-import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertReportSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertReportTemplateSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, reports, projectAssignments, timeEntries, pendingGeofenceExits } from "@shared/schema";
+import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, pendingGeofenceExits } from "@shared/schema";
 import { executeAutoClockOut } from "./lib/timesheets";
 import { users, invitations, accounts } from "@shared/models/auth";
 import { computeSeatUsage } from "./lib/seats";
@@ -56,12 +56,66 @@ async function verifyTaskAccess(taskId: number, accountId: string): Promise<bool
 }
 
 async function verifyReportAccess(reportId: number, accountId: string): Promise<boolean> {
-  const result = await db.select({ accountId: projects.accountId })
+  const [row] = await db.select({ accountId: reports.accountId })
     .from(reports)
-    .innerJoin(projects, eq(reports.projectId, projects.id))
     .where(eq(reports.id, reportId))
     .limit(1);
-  return result.length > 0 && result[0].accountId === accountId;
+  return !!row && row.accountId === accountId;
+}
+
+async function verifyReportSectionAccess(sectionId: number, accountId: string): Promise<{ ok: boolean; reportId?: number; projectId?: number }> {
+  const [row] = await db.select({ accountId: reports.accountId, reportId: reports.id, projectId: reports.projectId })
+    .from(reportSections)
+    .innerJoin(reports, eq(reportSections.reportId, reports.id))
+    .where(eq(reportSections.id, sectionId))
+    .limit(1);
+  if (!row || row.accountId !== accountId) return { ok: false };
+  return { ok: true, reportId: row.reportId, projectId: row.projectId };
+}
+
+async function verifyReportSectionPhotoAccess(photoId: number, accountId: string): Promise<{ ok: boolean; projectId?: number }> {
+  const [row] = await db.select({ accountId: reports.accountId, projectId: reports.projectId })
+    .from(reportSectionPhotos)
+    .innerJoin(reportSections, eq(reportSectionPhotos.sectionId, reportSections.id))
+    .innerJoin(reports, eq(reportSections.reportId, reports.id))
+    .where(eq(reportSectionPhotos.id, photoId))
+    .limit(1);
+  if (!row || row.accountId !== accountId) return { ok: false };
+  return { ok: true, projectId: row.projectId };
+}
+
+// Restricted users can only touch projects they created or are assigned to.
+// Project-resolving variants chain tenant + role checks for report endpoints.
+async function userCanAccessProject(req: any, projectId: number): Promise<boolean> {
+  const project = await storage.getProject(projectId);
+  if (!project || project.accountId !== req.user.accountId) return false;
+  if (req.user.role !== "restricted") return true;
+  const [a] = await db.select().from(projectAssignments)
+    .where(and(eq(projectAssignments.projectId, projectId), eq(projectAssignments.userId, req.user.id)))
+    .limit(1);
+  return !!a || project.createdById === req.user.id;
+}
+
+async function verifyReportFullAccess(req: any, reportId: number): Promise<{ ok: boolean; projectId?: number }> {
+  const [row] = await db.select({ accountId: reports.accountId, projectId: reports.projectId })
+    .from(reports).where(eq(reports.id, reportId)).limit(1);
+  if (!row || row.accountId !== req.user.accountId) return { ok: false };
+  if (!(await userCanAccessProject(req, row.projectId))) return { ok: false };
+  return { ok: true, projectId: row.projectId };
+}
+
+async function verifyReportSectionFullAccess(req: any, sectionId: number): Promise<{ ok: boolean; reportId?: number; projectId?: number }> {
+  const access = await verifyReportSectionAccess(sectionId, req.user.accountId);
+  if (!access.ok || !access.projectId) return { ok: false };
+  if (!(await userCanAccessProject(req, access.projectId))) return { ok: false };
+  return access;
+}
+
+async function verifyReportSectionPhotoFullAccess(req: any, photoId: number): Promise<{ ok: boolean; projectId?: number }> {
+  const access = await verifyReportSectionPhotoAccess(photoId, req.user.accountId);
+  if (!access.ok || !access.projectId) return { ok: false };
+  if (!(await userCanAccessProject(req, access.projectId))) return { ok: false };
+  return access;
 }
 
 async function verifyTimeEntryAccess(timeEntryId: string, accountId: string): Promise<boolean> {
@@ -1123,51 +1177,112 @@ export async function registerRoutes(
     }
   });
 
-  // Reports
+  // ── Reports (structured shape, session 37 rewrite) ──────────────────────
   app.get("/api/reports", requireReadAccess, async (req: any, res) => {
     try {
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
-      const allReports = await storage.getAllReports(accountId);
-      res.json(allReports);
+      let all = await storage.getAllReports(accountId);
+      // Restricted users only see reports for projects they created or are assigned to.
+      if (req.user.role === "restricted") {
+        const assigned = await getRestrictedAssignedProjectIds(req.user.id);
+        all = all.filter((r: any) => assigned.has(r.projectId) || r.createdById === req.user.id);
+      }
+      res.json(all);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch reports" });
     }
   });
 
+  app.get("/api/projects/:id/reports", requireReadAccess, async (req: any, res) => {
+    try {
+      const projectId = parseInt(req.params.id as string);
+      if (!(await userCanAccessProject(req, projectId))) return res.status(403).json({ message: "Access denied" });
+      res.json(await storage.getReportsByProject(projectId));
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch project reports" });
+    }
+  });
+
+  app.get("/api/reports/:id", requireReadAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      const tree = await storage.getReportTree(id);
+      if (!tree) return res.status(404).json({ message: "Report not found" });
+      if (tree.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
+      if (!(await userCanAccessProject(req, tree.projectId))) return res.status(403).json({ message: "Access denied" });
+      // Presign each section photo's media URL for browser viewing.
+      const presigned = {
+        ...tree,
+        sections: await Promise.all(tree.sections.map(async (s) => ({
+          ...s,
+          photos: await Promise.all(s.photos.map(async (p) => {
+            let url = p.media.url;
+            if (isS3Url(url)) {
+              const key = extractS3KeyFromUrl(url);
+              if (key) url = await getPresignedUrl(key);
+            }
+            return { ...p, media: { ...p.media, url } };
+          })),
+        }))),
+      };
+      res.json(presigned);
+    } catch (error) {
+      console.error("[reports] get tree error:", error);
+      res.status(500).json({ message: "Failed to fetch report" });
+    }
+  });
+
+  const createReportBodySchema = z.object({
+    title: z.string().trim().min(1).max(200),
+    description: z.string().max(2000).optional().nullable(),
+    templateId: z.number().int().optional(), // forward-compat; ignored Stage 1
+  });
+
   app.post("/api/projects/:id/reports", requireWriteAccess, async (req: any, res) => {
     try {
       const projectId = parseInt(req.params.id as string);
-      if (!(await verifyProjectAccess(projectId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
-      const parsed = insertReportSchema.safeParse({
+      if (!(await userCanAccessProject(req, projectId))) return res.status(403).json({ message: "Access denied" });
+      const parsed = createReportBodySchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+      const report = await storage.createReport({
         projectId,
-        title: req.body.title,
-        type: req.body.type || "inspection",
-        content: req.body.content || null,
-        findings: req.body.findings || null,
-        recommendations: req.body.recommendations || null,
+        accountId: req.user.accountId,
+        title: parsed.data.title,
+        description: parsed.data.description ?? null,
+        coverConfig: {
+          showCoverPhoto: true,
+          showCompanyLogo: true,
+          showCompanyName: true,
+          showCreatorName: true,
+          showPhotoCount: true,
+          showDateCreated: true,
+          coverPhotoMediaId: null,
+        },
+        status: "draft",
         createdById: req.user.id,
       });
-      if (!parsed.success) {
-        return res.status(400).json({ message: parsed.error.message });
-      }
-      const report = await storage.createReport(parsed.data);
       res.status(201).json(report);
     } catch (error) {
+      console.error("[reports] create error:", error);
       res.status(500).json({ message: "Failed to create report" });
     }
+  });
+
+  const patchReportBodySchema = z.object({
+    title: z.string().trim().min(1).max(200).optional(),
+    description: z.string().max(2000).nullable().optional(),
+    coverConfig: z.record(z.any()).optional(),
+    status: z.enum(["draft", "submitted", "approved"]).optional(),
   });
 
   app.patch("/api/reports/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
-      if (!(await verifyReportAccess(id, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
-      const allowed = ["title", "type", "status", "content", "findings", "recommendations"];
-      const filtered: Record<string, any> = {};
-      for (const key of allowed) {
-        if (key in req.body) filtered[key] = req.body[key];
-      }
-      const updated = await storage.updateReport(id, filtered);
+      if (!(await verifyReportFullAccess(req, id)).ok) return res.status(403).json({ message: "Access denied" });
+      const parsed = patchReportBodySchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+      const updated = await storage.updateReport(id, parsed.data as any);
       if (!updated) return res.status(404).json({ message: "Report not found" });
       res.json(updated);
     } catch (error) {
@@ -1178,11 +1293,127 @@ export async function registerRoutes(
   app.delete("/api/reports/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
-      if (!(await verifyReportAccess(id, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      if (!(await verifyReportFullAccess(req, id)).ok) return res.status(403).json({ message: "Access denied" });
       await storage.deleteReport(id);
       res.json({ message: "Deleted" });
     } catch (error) {
       res.status(500).json({ message: "Failed to delete report" });
+    }
+  });
+
+  // Sections
+  const createSectionBodySchema = z.object({
+    title: z.string().trim().min(1).max(200),
+    summary: z.string().max(5000).nullable().optional(),
+  });
+
+  app.post("/api/reports/:id/sections", requireWriteAccess, async (req: any, res) => {
+    try {
+      const reportId = parseInt(req.params.id as string);
+      if (!(await verifyReportFullAccess(req, reportId)).ok) return res.status(403).json({ message: "Access denied" });
+      const parsed = createSectionBodySchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+      const section = await storage.createReportSection({
+        reportId,
+        title: parsed.data.title,
+        summary: parsed.data.summary ?? null,
+      });
+      res.status(201).json(section);
+    } catch (error) {
+      console.error("[reports] create section error:", error);
+      res.status(500).json({ message: "Failed to create section" });
+    }
+  });
+
+  const patchSectionBodySchema = z.object({
+    title: z.string().trim().min(1).max(200).optional(),
+    summary: z.string().max(5000).nullable().optional(),
+    sortOrder: z.number().int().min(0).optional(),
+  });
+
+  app.patch("/api/sections/:id", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      const access = await verifyReportSectionFullAccess(req, id);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
+      const parsed = patchSectionBodySchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+      const updated = await storage.updateReportSection(id, parsed.data);
+      if (!updated) return res.status(404).json({ message: "Section not found" });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update section" });
+    }
+  });
+
+  app.delete("/api/sections/:id", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      const access = await verifyReportSectionFullAccess(req, id);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
+      await storage.deleteReportSection(id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete section" });
+    }
+  });
+
+  // Section photos
+  const addSectionPhotosBodySchema = z.object({
+    mediaIds: z.array(z.number().int().positive()).min(1).max(50),
+  });
+
+  app.post("/api/sections/:id/photos", requireWriteAccess, async (req: any, res) => {
+    try {
+      const sectionId = parseInt(req.params.id as string);
+      const access = await verifyReportSectionFullAccess(req, sectionId);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
+      const parsed = addSectionPhotosBodySchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+      const rows = await db.select({ id: media.id, projectId: media.projectId })
+        .from(media).where(inArray(media.id, parsed.data.mediaIds));
+      if (rows.length !== parsed.data.mediaIds.length) {
+        return res.status(400).json({ message: "One or more photos not found" });
+      }
+      if (rows.some((r) => r.projectId !== access.projectId)) {
+        return res.status(400).json({ message: "All photos must belong to this report's project" });
+      }
+      const created = await storage.addReportSectionPhotos(sectionId, parsed.data.mediaIds);
+      res.status(201).json(created);
+    } catch (error) {
+      console.error("[reports] add section photos error:", error);
+      res.status(500).json({ message: "Failed to add photos" });
+    }
+  });
+
+  const patchSectionPhotoBodySchema = z.object({
+    caption: z.string().max(500).nullable().optional(),
+    description: z.string().max(2000).nullable().optional(),
+    sortOrder: z.number().int().min(0).optional(),
+  });
+
+  app.patch("/api/section-photos/:id", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      if (!(await verifyReportSectionPhotoFullAccess(req, id)).ok) return res.status(403).json({ message: "Access denied" });
+      const parsed = patchSectionPhotoBodySchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+      const updated = await storage.updateReportSectionPhoto(id, parsed.data);
+      if (!updated) return res.status(404).json({ message: "Photo not found" });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update photo" });
+    }
+  });
+
+  app.delete("/api/section-photos/:id", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      if (!(await verifyReportSectionPhotoFullAccess(req, id)).ok) return res.status(403).json({ message: "Access denied" });
+      await storage.deleteReportSectionPhoto(id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete photo" });
     }
   });
 
@@ -3106,50 +3337,8 @@ export async function registerRoutes(
     }
   });
 
-  // Report Templates
-  app.get("/api/report-templates", requireReadAccess, async (req: any, res) => {
-    try {
-      const accountId = req.user.accountId;
-      if (!accountId) return res.status(403).json({ message: "No account associated" });
-      const templates = await storage.getAllReportTemplates(accountId);
-      res.json(templates);
-    } catch (error) {
-      res.status(500).json({ message: "Failed to fetch report templates" });
-    }
-  });
-
-  app.post("/api/report-templates", requireWriteAccess, async (req: any, res) => {
-    try {
-      const parsed = insertReportTemplateSchema.safeParse({
-        title: req.body.title,
-        type: req.body.type || "inspection",
-        content: req.body.content || null,
-        findings: req.body.findings || null,
-        recommendations: req.body.recommendations || null,
-        accountId: req.user.accountId,
-        createdById: req.user.id,
-      });
-      if (!parsed.success) {
-        return res.status(400).json({ message: parsed.error.message });
-      }
-      const template = await storage.createReportTemplate(parsed.data);
-      res.status(201).json(template);
-    } catch (error) {
-      res.status(500).json({ message: "Failed to create report template" });
-    }
-  });
-
-  app.delete("/api/report-templates/:id", requireWriteAccess, async (req: any, res) => {
-    try {
-      const id = parseInt(req.params.id as string);
-      const template = await storage.getReportTemplate(id);
-      if (!template || template.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
-      await storage.deleteReportTemplate(id);
-      res.json({ message: "Deleted" });
-    } catch (error) {
-      res.status(500).json({ message: "Failed to delete report template" });
-    }
-  });
+  // Report Templates: Stage 1 ships the table only. Authoring/apply UI + API
+  // land in Stage 4 of the reports rewrite.
 
   app.post("/api/galleries", requireWriteAccess, async (req: any, res) => {
     try {
@@ -3578,8 +3767,7 @@ export async function registerRoutes(
       const allReportRows = await db
         .select({ id: reports.id, projectId: reports.projectId, createdAt: reports.createdAt })
         .from(reports)
-        .innerJoin(projects, eq(reports.projectId, projects.id))
-        .where(eq(projects.accountId, accountId));
+        .where(eq(reports.accountId, accountId));
       const filteredReports = allReportRows.filter((r) => {
         const d = new Date(r.createdAt);
         return d >= fromDate && d <= toDate;

@@ -87,10 +87,10 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { useLocation } from "wouter";
+import { useLocation, Link } from "wouter";
 import { LayoutTemplate } from "lucide-react";
 import { AddressAutocomplete } from "@/components/address-autocomplete";
-import type { Project, Media, Comment, Task, Checklist, ChecklistItem, Report, ChecklistTemplate, ChecklistTemplateItem, ReportTemplate, MediaAnnotation, AnnotationStroke } from "@shared/schema";
+import type { Project, Media, Comment, Task, Checklist, ChecklistItem, Report, ChecklistTemplate, ChecklistTemplateItem, MediaAnnotation, AnnotationStroke } from "@shared/schema";
 import { AnnotationOverlay } from "@/lib/annotation-svg";
 import { UploadPhotosDialog } from "@/components/upload-photos-dialog";
 
@@ -333,7 +333,6 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const [newChecklistTitle, setNewChecklistTitle] = useState("");
   const [newChecklistItems, setNewChecklistItems] = useState<string[]>([""]);
   const [newReportTitle, setNewReportTitle] = useState("");
-  const [newReportType, setNewReportType] = useState("inspection");
   const [expandedChecklist, setExpandedChecklist] = useState<number | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -369,10 +368,6 @@ export default function ProjectDetailPage({ id }: { id: string }) {
 
   const { data: checklistTemplates } = useQuery<(ChecklistTemplate & { itemCount: number })[]>({
     queryKey: ["/api/checklist-templates"],
-  });
-
-  const { data: reportTemplates } = useQuery<ReportTemplate[]>({
-    queryKey: ["/api/report-templates"],
   });
 
   const setCoverPhoto = useMutation({
@@ -416,15 +411,6 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     }
   }, [checklistTemplates, toast]);
 
-  const applyReportTemplate = useCallback((templateId: number) => {
-    const template = reportTemplates?.find(t => t.id === templateId);
-    if (template) {
-      setNewReportTitle(template.title);
-      setNewReportType(template.type);
-      toast({ title: `Template "${template.title}" applied` });
-    }
-  }, [reportTemplates, toast]);
-
   const createChecklist = useMutation({
     mutationFn: async () => {
       const items = newChecklistItems.filter(i => i.trim());
@@ -453,17 +439,15 @@ export default function ProjectDetailPage({ id }: { id: string }) {
 
   const createReport = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", `/api/projects/${id}/reports`, {
-        title: newReportTitle,
-        type: newReportType,
-      });
-      return res.json();
+      const res = await apiRequest("POST", `/api/projects/${id}/reports`, { title: newReportTitle });
+      return res.json() as Promise<Report>;
     },
-    onSuccess: () => {
+    onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
       queryClient.invalidateQueries({ queryKey: ["/api/reports"] });
       setNewReportTitle("");
       toast({ title: "Report created" });
+      navigate(`/reports/${created.id}/edit`);
     },
     onError: (error: Error) => {
       if (isUnauthorizedError(error)) {
@@ -472,17 +456,6 @@ export default function ProjectDetailPage({ id }: { id: string }) {
         return;
       }
       toast({ title: "Error", description: error.message, variant: "destructive" });
-    },
-  });
-
-  const updateReportStatus = useMutation({
-    mutationFn: async ({ reportId, status }: { reportId: number; status: string }) => {
-      const res = await apiRequest("PATCH", `/api/reports/${reportId}`, { status });
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
-      queryClient.invalidateQueries({ queryKey: ["/api/reports"] });
     },
   });
 
@@ -1654,31 +1627,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
           {activeTab === "reports" && (
             <div className="px-4 sm:px-6 py-4 space-y-4">
               <Card className="p-4 space-y-3">
-                <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-sm font-semibold">Create Report</h3>
-                  {reportTemplates && reportTemplates.length > 0 && (
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="sm" data-testid="button-apply-report-template">
-                          <LayoutTemplate className="h-3.5 w-3.5 mr-1.5" />
-                          Use Template
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        {reportTemplates.map((t) => (
-                          <DropdownMenuItem
-                            key={t.id}
-                            onClick={() => applyReportTemplate(t.id)}
-                            data-testid={`menu-apply-report-template-${t.id}`}
-                          >
-                            <LayoutTemplate className="h-3.5 w-3.5 mr-2 text-muted-foreground" />
-                            {t.title}
-                          </DropdownMenuItem>
-                        ))}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  )}
-                </div>
+                <h3 className="text-sm font-semibold">Create Report</h3>
                 <div className="flex flex-wrap items-center gap-3">
                   <Input
                     placeholder="Report title..."
@@ -1687,27 +1636,18 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                     className="flex-1 min-w-[200px]"
                     data-testid="input-new-report-title"
                   />
-                  <Select value={newReportType} onValueChange={setNewReportType}>
-                    <SelectTrigger className="w-[160px]" data-testid="select-report-type">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="inspection">Inspection</SelectItem>
-                      <SelectItem value="safety">Safety</SelectItem>
-                      <SelectItem value="progress">Progress</SelectItem>
-                      <SelectItem value="incident">Incident</SelectItem>
-                      <SelectItem value="daily">Daily</SelectItem>
-                    </SelectContent>
-                  </Select>
                   <Button
                     onClick={() => { if (newReportTitle.trim()) createReport.mutate(); }}
                     disabled={createReport.isPending || !newReportTitle.trim()}
                     data-testid="button-create-report"
                   >
                     <FileBarChart className="h-4 w-4 mr-2" />
-                    Create Report
+                    {createReport.isPending ? "Creating..." : "Create Report"}
                   </Button>
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  Create a draft and you'll be taken to the editor to add sections, photos, and a cover page.
+                </p>
               </Card>
 
               {projectReports.length === 0 ? (
@@ -1718,7 +1658,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                     </div>
                     <h3 className="text-lg font-semibold">No reports yet</h3>
                     <p className="text-sm text-muted-foreground max-w-sm mx-auto">
-                      Create your first inspection or project report above.
+                      Create your first report above.
                     </p>
                   </div>
                 </Card>
@@ -1727,59 +1667,43 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                   {projectReports.map((report) => {
                     const config = reportStatusConfig[report.status] || reportStatusConfig.draft;
                     return (
-                      <Card key={report.id} className="p-4" data-testid={`card-report-${report.id}`}>
-                        <div className="flex items-start gap-3">
-                          <div className="flex h-9 w-9 items-center justify-center rounded-md bg-muted shrink-0">
-                            <FileText className="h-4 w-4 text-muted-foreground" />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="text-sm font-semibold" data-testid={`text-report-title-${report.id}`}>
-                                {report.title}
-                              </span>
-                              <Badge variant="secondary" className={`text-xs shrink-0 no-default-hover-elevate no-default-active-elevate ${config.badgeClass}`}>
-                                {config.label}
-                              </Badge>
+                      <Link key={report.id} href={`/reports/${report.id}/edit`}>
+                        <Card className="p-4 hover-elevate cursor-pointer" data-testid={`card-report-${report.id}`}>
+                          <div className="flex items-start gap-3">
+                            <div className="flex h-9 w-9 items-center justify-center rounded-md bg-muted shrink-0">
+                              <FileText className="h-4 w-4 text-muted-foreground" />
                             </div>
-                            <div className="flex flex-wrap items-center gap-2 mt-1">
-                              <Badge variant="outline" className="text-xs no-default-hover-elevate no-default-active-elevate">
-                                {reportTypeLabels[report.type] || report.type}
-                              </Badge>
-                              <span className="text-xs text-muted-foreground">
-                                {new Date(report.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
-                              </span>
-                            </div>
-                            {report.createdBy && (
-                              <div className="flex items-center gap-1.5 mt-2">
-                                <Avatar className="h-5 w-5">
-                                  <AvatarImage src={report.createdBy.profileImageUrl || undefined} />
-                                  <AvatarFallback className="text-[8px] bg-primary/10 text-primary">
-                                    {getInitials(report.createdBy.firstName, report.createdBy.lastName)}
-                                  </AvatarFallback>
-                                </Avatar>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-sm font-semibold truncate" data-testid={`text-report-title-${report.id}`}>
+                                  {report.title}
+                                </span>
+                                <Badge variant="secondary" className={`text-xs shrink-0 no-default-hover-elevate no-default-active-elevate ${config.badgeClass}`}>
+                                  {config.label}
+                                </Badge>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2 mt-1">
                                 <span className="text-xs text-muted-foreground">
-                                  {report.createdBy.firstName} {report.createdBy.lastName}
+                                  {new Date(report.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
                                 </span>
                               </div>
-                            )}
-                            <div className="flex items-center gap-2 mt-3">
-                              <Select
-                                value={report.status}
-                                onValueChange={(status) => updateReportStatus.mutate({ reportId: report.id, status })}
-                              >
-                                <SelectTrigger className="w-[130px]" data-testid={`select-report-status-${report.id}`}>
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="draft">Draft</SelectItem>
-                                  <SelectItem value="submitted">Submitted</SelectItem>
-                                  <SelectItem value="approved">Approved</SelectItem>
-                                </SelectContent>
-                              </Select>
+                              {report.createdBy && (
+                                <div className="flex items-center gap-1.5 mt-2">
+                                  <Avatar className="h-5 w-5">
+                                    <AvatarImage src={report.createdBy.profileImageUrl || undefined} />
+                                    <AvatarFallback className="text-[8px] bg-primary/10 text-primary">
+                                      {getInitials(report.createdBy.firstName, report.createdBy.lastName)}
+                                    </AvatarFallback>
+                                  </Avatar>
+                                  <span className="text-xs text-muted-foreground">
+                                    {report.createdBy.firstName} {report.createdBy.lastName}
+                                  </span>
+                                </div>
+                              )}
                             </div>
                           </div>
-                        </div>
-                      </Card>
+                        </Card>
+                      </Link>
                     );
                   })}
                 </div>

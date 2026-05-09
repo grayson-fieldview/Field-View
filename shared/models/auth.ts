@@ -24,6 +24,9 @@ export const accounts = pgTable("accounts", {
   subscriptionLapsedAt: timestamp("subscription_lapsed_at"),
   industry: varchar("industry"),
   companySize: varchar("company_size"),
+  companyLogoUrl: varchar("company_logo_url"),
+  companyLegalName: text("company_legal_name"),
+  companyAddress: text("company_address"),
   deletedAt: timestamp("deleted_at"),
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => [
