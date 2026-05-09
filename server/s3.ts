@@ -1,5 +1,6 @@
 import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { Readable } from "stream";
 import path from "path";
 import crypto from "crypto";
 
@@ -76,6 +77,14 @@ export async function deleteFromS3(key: string): Promise<void> {
       Key: key,
     })
   );
+}
+
+export async function getObjectStream(key: string): Promise<Readable> {
+  const result = await s3Client.send(new GetObjectCommand({ Bucket: BUCKET, Key: key }));
+  if (!result.Body || typeof (result.Body as any).pipe !== "function") {
+    throw new Error(`No readable body for S3 key: ${key}`);
+  }
+  return result.Body as Readable;
 }
 
 export function extractS3KeyFromUrl(url: string): string | null {

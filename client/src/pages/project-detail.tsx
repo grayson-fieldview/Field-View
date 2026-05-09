@@ -79,7 +79,14 @@ import {
   Calendar,
   Camera,
   Pencil,
+  Download,
 } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useLocation } from "wouter";
 import { LayoutTemplate } from "lucide-react";
 import { AddressAutocomplete } from "@/components/address-autocomplete";
@@ -590,6 +597,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   const deleteSelected = useCallback(async () => {
     setIsDeleting(true);
@@ -625,6 +633,49 @@ export default function ProjectDetailPage({ id }: { id: string }) {
 
     queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
     queryClient.invalidateQueries({ queryKey: ["/api/media"] });
+  }, [selectedIds, id, toast]);
+
+  const downloadSelected = useCallback(async () => {
+    if (selectedIds.size === 0 || selectedIds.size > 50) return;
+    setIsDownloading(true);
+    toast({ title: "Preparing download…" });
+    try {
+      const response = await fetch(`/api/projects/${id}/media/download`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mediaIds: Array.from(selectedIds) }),
+      });
+      if (!response.ok) {
+        let message = "Download failed";
+        try {
+          const data = await response.json();
+          if (data?.message) message = data.message;
+        } catch {}
+        throw new Error(message);
+      }
+      const disposition = response.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename="?([^"]+)"?/i);
+      const filename = match?.[1] || "photos.zip";
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+      toast({ title: "Download ready" });
+    } catch (err: any) {
+      toast({
+        title: "Download failed",
+        description: err?.message || "Try again or refresh the page",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDownloading(false);
+    }
   }, [selectedIds, id, toast]);
 
   const openShareDialog = useCallback(() => {
@@ -1075,6 +1126,36 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                       <Trash2 className="h-4 w-4 mr-2" />
                       Delete
                     </Button>
+                    {selectedIds.size > 30 && selectedIds.size <= 50 && (
+                      <span className="text-xs text-muted-foreground" data-testid="text-download-warning">
+                        Large downloads may take up to a minute.
+                      </span>
+                    )}
+                    {selectedIds.size > 50 ? (
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span tabIndex={0}>
+                              <Button variant="outline" disabled data-testid="button-download-selected">
+                                <Download className="h-4 w-4 mr-2" />
+                                Download
+                              </Button>
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent>Maximum 50 photos at a time.</TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        onClick={downloadSelected}
+                        disabled={selectedIds.size === 0 || isDownloading}
+                        data-testid="button-download-selected"
+                      >
+                        <Download className="h-4 w-4 mr-2" />
+                        {isDownloading ? "Preparing…" : "Download"}
+                      </Button>
+                    )}
                     <Button
                       onClick={openShareDialog}
                       disabled={selectedIds.size === 0}

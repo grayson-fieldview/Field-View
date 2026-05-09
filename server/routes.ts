@@ -15,7 +15,8 @@ import { db } from "./db";
 import { eq, sql, and, or, inArray, count, isNull, desc } from "drizzle-orm";
 import { sanitizeUserForViewer, sanitizeTimeEntryForViewer, isManagerRole } from "./lib/userVisibility";
 import { z } from "zod";
-import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, deleteFromS3 } from "./s3";
+import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, deleteFromS3, getObjectStream } from "./s3";
+import archiver from "archiver";
 import { sendInvitationEmail, sendAccountDeletionEmail } from "./services/email";
 import { toCsv } from "./lib/csv";
 import bcrypt from "bcryptjs";
@@ -401,6 +402,103 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Create media error:", error?.message || error);
       res.status(500).json({ message: error?.message || "Failed to save media" });
+    }
+  });
+
+  const downloadMediaSchema = z.object({
+    mediaIds: z.array(z.number().int().positive()).min(1).max(50),
+  });
+
+  app.post("/api/projects/:id/media/download", requireReadAccess, async (req: any, res) => {
+    try {
+      const projectId = parseInt(req.params.id as string);
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
+      if (req.user.role === "restricted") {
+        const [assignment] = await db.select().from(projectAssignments)
+          .where(and(eq(projectAssignments.projectId, projectId), eq(projectAssignments.userId, req.user.id)));
+        if (!assignment && project.createdById !== req.user.id) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+      }
+
+      const parsed = downloadMediaSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid request body" });
+      }
+
+      const requestedIds = new Set(parsed.data.mediaIds);
+      const allMedia = await storage.getMediaByProject(projectId);
+      const targets = allMedia.filter((m) => requestedIds.has(m.id));
+      if (targets.length === 0) {
+        return res.status(400).json({ message: "No matching media found" });
+      }
+
+      const slug =
+        (project.name || "")
+          .replace(/[^a-z0-9]+/gi, "-")
+          .toLowerCase()
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 50) || "project";
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const filename = `${slug}-photos-${dateStr}.zip`;
+
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.setHeader("Cache-Control", "no-store");
+
+      const archive = archiver("zip", { store: true });
+      archive.on("error", (err) => {
+        console.error("[media-download] archive error:", err);
+        res.destroy();
+      });
+      archive.pipe(res);
+
+      const errors: Array<{ name: string; error: string }> = [];
+      const usedNames = new Map<string, number>();
+      const dedupe = (raw: string): string => {
+        let safe = raw.replace(/[\/\\]/g, "_").replace(/^\.+/, "").trim();
+        if (!safe) safe = "file";
+        const lower = safe.toLowerCase();
+        const count = usedNames.get(lower) || 0;
+        usedNames.set(lower, count + 1);
+        if (count === 0) return safe;
+        const dot = safe.lastIndexOf(".");
+        if (dot > 0) {
+          return `${safe.slice(0, dot)} (${count + 1})${safe.slice(dot)}`;
+        }
+        return `${safe} (${count + 1})`;
+      };
+
+      for (const m of targets) {
+        const key = extractS3KeyFromUrl(m.url);
+        const entryName = dedupe(m.originalName || `media-${m.id}.bin`);
+        if (!key) {
+          errors.push({ name: entryName, error: "Could not extract S3 key from URL" });
+          continue;
+        }
+        try {
+          const stream = await getObjectStream(key);
+          archive.append(stream, { name: entryName });
+        } catch (err: any) {
+          errors.push({ name: entryName, error: err?.message || "S3 fetch failed" });
+        }
+      }
+
+      if (errors.length > 0) {
+        const manifest = errors.map((e) => `${e.name}: ${e.error}`).join("\n");
+        archive.append(manifest, { name: "_DOWNLOAD_ERRORS.txt" });
+      }
+
+      await archive.finalize();
+    } catch (error: any) {
+      console.error("[media-download] error:", error?.message || error);
+      if (!res.headersSent) {
+        res.status(500).json({ message: "Failed to download media" });
+      } else {
+        res.destroy();
+      }
     }
   });
 
