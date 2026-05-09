@@ -109,7 +109,7 @@ export async function registerRoutes(
   // TEMP: streaming probe — verify Vercel Node runtime streams res.write end-to-end.
   // Writes 1 MB of zero bytes every 500ms, 5 chunks (5 MB over ~2.5s).
   // REMOVE after confirming chunked transfer encoding on the wire.
-  app.get("/api/__streaming-probe", async (_req, res) => {
+  app.get("/api/streaming-probe", async (_req, res) => {
     res.setHeader("Content-Type", "application/octet-stream");
     res.setHeader("Content-Disposition", 'attachment; filename="probe.bin"');
     res.setHeader("Cache-Control", "no-store");
