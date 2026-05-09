@@ -206,6 +206,7 @@ export default function ReportEditPage({ id }: { id: string }) {
     mutationFn: async ({ sectionId, mediaIds }: { sectionId: number; mediaIds: number[] }) => {
       await apiRequest("POST", `/api/sections/${sectionId}/photos`, { mediaIds });
       // Refetch the full tree so we get the new photos joined with media (presigned URLs).
+      await queryClient.invalidateQueries({ queryKey: ["/api/reports", reportId] });
       const fresh = await queryClient.fetchQuery<ReportTree>({ queryKey: ["/api/reports", reportId] });
       return fresh;
     },
