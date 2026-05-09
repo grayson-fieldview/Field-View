@@ -30,7 +30,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { ArrowLeft, FileText, Image as ImageIcon, Plus, Save, Trash2 } from "lucide-react";
+import { ArrowLeft, FileText, FileDown, Image as ImageIcon, Loader2, Plus, Save, Trash2 } from "lucide-react";
 import type { Media, Report, ReportSection, ReportSectionPhoto } from "@shared/schema";
 
 type Pane = { kind: "cover" } | { kind: "section"; id: number };
@@ -88,6 +88,7 @@ export default function ReportEditPage({ id }: { id: string }) {
   const [pickerSectionId, setPickerSectionId] = useState<number | null>(null);
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [confirmDeleteSection, setConfirmDeleteSection] = useState<number | null>(null);
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [confirmDeletePhoto, setConfirmDeletePhoto] = useState<number | null>(null);
   const lastLoadedReportIdRef = useRef<number | null>(null);
 
@@ -305,6 +306,63 @@ export default function ReportEditPage({ id }: { id: string }) {
           <Button onClick={() => saveDraft.mutate()} disabled={!isDirty || saveDraft.isPending} data-testid="button-save-draft">
             <Save className="h-4 w-4 mr-1.5" />
             {saveDraft.isPending ? "Saving..." : "Save Draft"}
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={async () => {
+              setIsGeneratingPdf(true);
+              try {
+                if (isDirty) {
+                  try {
+                    await saveDraft.mutateAsync();
+                  } catch {
+                    // saveDraft.onError already surfaced a "Save failed" toast.
+                    setIsGeneratingPdf(false);
+                    return;
+                  }
+                }
+                const res = await fetch(`/api/reports/${reportId}/pdf`, {
+                  method: "POST",
+                  credentials: "include",
+                });
+                if (!res.ok) {
+                  const body = await res.json().catch(() => ({ message: "PDF generation failed" }));
+                  throw new Error(body.message || "PDF generation failed");
+                }
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const slug = (draftTitle || "report")
+                  .replace(/[^a-z0-9]+/gi, "-")
+                  .toLowerCase()
+                  .replace(/^-+|-+$/g, "")
+                  .slice(0, 50) || "report";
+                const dateStr = new Date().toISOString().slice(0, 10);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `${slug}-${dateStr}.pdf`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+              } catch (e) {
+                toast({
+                  title: "Couldn't generate PDF",
+                  description: (e as Error).message,
+                  variant: "destructive",
+                });
+              } finally {
+                setIsGeneratingPdf(false);
+              }
+            }}
+            disabled={isGeneratingPdf || saveDraft.isPending}
+            data-testid="button-generate-pdf"
+          >
+            {isGeneratingPdf ? (
+              <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+            ) : (
+              <FileDown className="h-4 w-4 mr-1.5" />
+            )}
+            {isGeneratingPdf ? "Generating..." : "Generate PDF"}
           </Button>
         </div>
       </div>

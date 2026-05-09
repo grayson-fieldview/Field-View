@@ -1417,6 +1417,69 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/reports/:id/pdf", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      if (!(await verifyReportFullAccess(req, id)).ok) return res.status(403).json({ message: "Access denied" });
+      const data = await storage.getReportForPdf(id);
+      if (!data) return res.status(404).json({ message: "Report not found" });
+      if (data.totalPhotos > 50) {
+        return res.status(400).json({
+          message: `Report has ${data.totalPhotos} photos; PDF generation is capped at 50. Remove some photos and try again.`,
+        });
+      }
+      const { buildReportPdfStream } = await import("./pdf/buildPdf");
+      const stream = await buildReportPdfStream({
+        report: {
+          title: data.report.title,
+          description: data.report.description,
+          coverConfig: data.report.coverConfig as any,
+          createdAt: data.report.createdAt,
+        },
+        account: {
+          name: data.account.name,
+          companyLogoUrl: data.account.companyLogoUrl,
+          companyLegalName: data.account.companyLegalName,
+          companyAddress: data.account.companyAddress,
+        },
+        creator: data.creator,
+        sections: data.sections.map((s) => ({
+          id: s.id,
+          title: s.title,
+          summary: s.summary,
+          photos: s.photos.map((p) => ({
+            id: p.id,
+            s3Key: extractS3KeyFromUrl(p.media.url),
+            caption: p.caption,
+            description: p.description,
+          })),
+        })),
+        coverPhotoUrl: data.coverPhoto?.url ?? null,
+        totalPhotos: data.totalPhotos,
+      });
+      const slug =
+        (data.report.title || "")
+          .replace(/[^a-z0-9]+/gi, "-")
+          .toLowerCase()
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 50) || "report";
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const filename = `${slug}-${dateStr}.pdf`;
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.setHeader("Cache-Control", "no-store");
+      stream.on("error", (err) => {
+        console.error("[reports/pdf] stream error:", err);
+        res.destroy();
+      });
+      stream.pipe(res);
+    } catch (error) {
+      console.error("[reports/pdf] error:", error);
+      if (!res.headersSent) res.status(500).json({ message: "Failed to generate PDF" });
+      else res.destroy();
+    }
+  });
+
   app.get("/api/users", requireReadAccess, async (req: any, res) => {
     try {
       const accountId = req.user.accountId;

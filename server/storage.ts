@@ -115,6 +115,15 @@ export interface IStorage {
   getAllReports(accountId: string): Promise<(Report & { project?: { name: string }; createdBy?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } })[]>;
   getReport(id: number): Promise<Report | undefined>;
   getReportTree(id: number): Promise<(Report & { sections: (ReportSection & { photos: (ReportSectionPhoto & { media: Media })[] })[] }) | undefined>;
+  getReportForPdf(id: number): Promise<{
+    report: Report;
+    project: { id: number; name: string; address: string | null; coverPhotoId: number | null };
+    account: { id: string; name: string; companyLogoUrl: string | null; companyLegalName: string | null; companyAddress: string | null };
+    creator: { firstName: string | null; lastName: string | null } | null;
+    sections: (ReportSection & { photos: (ReportSectionPhoto & { media: Media })[] })[];
+    coverPhoto: Media | null;
+    totalPhotos: number;
+  } | undefined>;
   createReport(report: InsertReport): Promise<Report>;
   updateReport(id: number, data: Partial<InsertReport>): Promise<Report | undefined>;
   deleteReport(id: number): Promise<void>;
@@ -761,6 +770,52 @@ export class DatabaseStorage implements IStorage {
 
   async deleteReportSectionPhoto(id: number): Promise<void> {
     await db.delete(reportSectionPhotos).where(eq(reportSectionPhotos.id, id));
+  }
+
+  async getReportForPdf(id: number) {
+    const tree = await this.getReportTree(id);
+    if (!tree) return undefined;
+    const { sections, ...report } = tree;
+
+    const [project] = await db
+      .select({ id: projects.id, name: projects.name, address: projects.address, coverPhotoId: projects.coverPhotoId })
+      .from(projects)
+      .where(eq(projects.id, report.projectId));
+    if (!project) return undefined;
+
+    const [account] = await db
+      .select({
+        id: accounts.id,
+        name: accounts.name,
+        companyLogoUrl: accounts.companyLogoUrl,
+        companyLegalName: accounts.companyLegalName,
+        companyAddress: accounts.companyAddress,
+      })
+      .from(accounts)
+      .where(eq(accounts.id, report.accountId));
+    if (!account) return undefined;
+
+    let creator: { firstName: string | null; lastName: string | null } | null = null;
+    if (report.createdById) {
+      const [u] = await db
+        .select({ firstName: users.firstName, lastName: users.lastName })
+        .from(users)
+        .where(eq(users.id, report.createdById));
+      creator = u ?? null;
+    }
+
+    // Prefer report-scoped cover photo (coverConfig.coverPhotoMediaId, reserved for
+    // future per-report override) and fall back to the project's cover photo.
+    const cfg = (report.coverConfig ?? {}) as { coverPhotoMediaId?: number | null };
+    const coverMediaId = cfg.coverPhotoMediaId ?? project.coverPhotoId ?? null;
+    let coverPhoto: Media | null = null;
+    if (coverMediaId) {
+      const [m] = await db.select().from(media).where(eq(media.id, coverMediaId));
+      coverPhoto = m ?? null;
+    }
+
+    const totalPhotos = sections.reduce((acc, s) => acc + s.photos.length, 0);
+    return { report, project, account, creator, sections, coverPhoto, totalPhotos };
   }
 
   async getUsers(accountId: string): Promise<User[]> {
