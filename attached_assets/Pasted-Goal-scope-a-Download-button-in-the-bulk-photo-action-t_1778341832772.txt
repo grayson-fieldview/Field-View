@@ -1,0 +1,55 @@
+Goal: scope a Download button in the bulk-photo-action toolbar on the 
+project Photos tab. When photos are selected, toolbar currently shows 
+Delete and Share. Add a Download button between them that downloads all 
+selected photos as a single zip file.
+
+Phase 1 only — DIAGNOSE, no code changes. Report findings numbered.
+
+Existing UI
+1. Find the component that renders the "X Selected | Deselect All ... 
+   Delete | Share" bulk action toolbar on the project Photos tab. Show me 
+   the file path, the JSX for the toolbar, and how Delete and Share are 
+   wired (handler functions, what they call). I want to see the existing 
+   pattern so the Download button matches.
+2. What component renders the Photos tab's photo list, and what's the 
+   data shape of a photo object (id, url, fileName, mimeType, size, 
+   uploadedAt, etc.)?
+3. How are selected photo IDs tracked — local state in a parent 
+   component, context, or a store?
+
+Photo URLs and access
+4. Show me one example of a CloudFront URL for a photo (just the URL 
+   structure, not real data). Memory says photos live on S3 fronted by 
+   CloudFront with OAC. Are these URLs permanent and publicly accessible, 
+   or do they require auth headers / signed URLs?
+5. Critical for client-side zip: are photos fetchable from the browser 
+   via cross-origin fetch()? Specifically — does the CloudFront 
+   distribution (E2J90HPGRDSOTL per memory) have CORS configured to 
+   allow GET requests from app.field-view.com? If you can find the CORS 
+   config in Terraform / IaC / a doc, show it. If not, note this as 
+   "needs to be tested in browser."
+
+Existing Share button behavior
+6. What does the Share button currently do? Generate a shareable link, 
+   open a system share sheet, copy URLs to clipboard, something else? 
+   I want to understand whether download functionality is already 
+   partially present elsewhere.
+
+Existing libraries
+7. Is JSZip (or any zip library — adm-zip, archiver, etc.) already 
+   installed in the client or server? Check both package.json files. 
+   If JSZip is present, perfect — we use it. If not, note we'd need to 
+   add it (~100KB gzipped client-side).
+
+Server-side context (in case we need it)
+8. Is there an existing photo-bytes endpoint on the server (e.g., 
+   GET /api/photos/:id/download) that returns the raw image, or do 
+   clients always read from CloudFront directly? Show me whichever it 
+   is.
+
+Output: numbered findings 1-8 with file paths and code snippets where 
+relevant. At the end, give your read on whether client-side zip 
+(JSZip + browser fetch) or server-side zip (Vercel function streaming) 
+is the better starting point given what you found, and why.
+
+Make NO code changes.
