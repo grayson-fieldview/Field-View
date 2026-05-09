@@ -1,0 +1,53 @@
+Bug: when user adds photos via the picker, they don't appear in the 
+section UI until "Save Draft" is clicked. Expected: photos appear 
+immediately after the picker submits.
+
+Verified on prod just now during smoke test.
+
+Phase 1 — DIAGNOSE, no code changes. Show me:
+
+1. The add-photos mutation in client/src/pages/report-edit.tsx — the 
+   useMutation that POSTs to /api/sections/:id/photos. Show the full 
+   definition including onSuccess.
+
+2. How the local draft state's section.photos array gets updated (or 
+   doesn't) after a successful add. Does onSuccess:
+   - Refetch the report tree (queryClient.invalidateQueries on the 
+     report query)?
+   - Merge the response data directly into local draft state?
+   - Do nothing, expecting the next save's refetch to pick it up?
+
+3. Show me the server-side POST /api/sections/:id/photos handler in 
+   server/routes.ts. What does it return — a success boolean, the 
+   newly-created photo records, the full updated section, something 
+   else?
+
+4. The "surgical merge" logic from the prior fix — show me where it 
+   lives and what triggers it. Confirm whether it's wired to the 
+   add-photos mutation's onSuccess or only to the save mutation's 
+   onSuccess.
+
+Output the findings. Don't fix yet.
+
+Phase 2 — fix (after I review the diagnosis):
+
+Goal: photos appear in the section's photos array in the editor 
+immediately after the add-photos picker submits, without requiring 
+a Save Draft click.
+
+Constraint: any unsaved caption/description edits on OTHER (already-
+existing) photos in the section must be preserved — the user could 
+have typed captions on photos 1-3 without saving, then added photos 
+4-6, and the captions on 1-3 should still be there.
+
+Approach (suggest in plan, don't pre-decide): either
+(a) Server's POST /api/sections/:id/photos returns the newly-created 
+    photo records → frontend appends them to the local draft state's 
+    section.photos array. No refetch needed. Cleanest.
+(b) Frontend invalidates the report query → refetch happens → existing 
+    surgical-merge logic preserves unsaved edits while updating photos. 
+    Slightly more network but reuses existing code.
+
+Pick whichever is simpler and explain in the diagnosis report.
+
+Verify TS clean, build green. Single commit. Show me the diff.
