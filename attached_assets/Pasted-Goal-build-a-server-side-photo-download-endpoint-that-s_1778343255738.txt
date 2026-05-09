@@ -1,0 +1,55 @@
+Goal: build a server-side photo download endpoint that streams a zip of 
+selected photos from S3 to the client. Bypass CloudFront entirely on the 
+server side (server uses S3 GetObjectCommand directly via the existing 
+server/s3.ts setup).
+
+Background: CORS on CloudFront didn't pan out after considerable AWS 
+Console debugging. Pivoting to a server-side implementation.
+
+Phase 1 — DIAGNOSE first, no code changes. Report findings numbered.
+
+1. Existing S3 access on server
+   - Show me server/s3.ts in full. What credentials/SDK setup is in place?
+   - Specifically: is GetObjectCommand exported/available? Is there an 
+     existing "fetch object as stream" helper or do we use raw 
+     s3Client.send(new GetObjectCommand(...)) inline?
+   - extractS3KeyFromUrl helper — show its implementation, since we'll 
+     need to convert media.url back to S3 key for fetching.
+
+2. archiver or alternative
+   - Is `archiver` installed in package.json? What version?
+   - If not, what zip library would you suggest for Node streaming? 
+     (archiver is the standard; `yazl` is an alternative)
+   - Bundle-size concern is server-side, not client-side, so size matters 
+     less here than for fflate.
+
+3. Vercel streaming response patterns
+   - Find any existing server endpoint that returns a streamed response 
+     (the timesheet CSV export at server/routes.ts:2760 was mentioned 
+     earlier — show me that). Specifically: how is Content-Type, 
+     Content-Disposition, and the actual stream-piping done?
+   - Are there any helpers / utilities for streaming responses through 
+     Express/Vercel?
+
+4. Vercel function configuration
+   - Show me api/index.js — the Vercel handler entry point.
+   - Show me vercel.json (especially functions.maxDuration if present).
+   - What's the current function timeout? Pro plan default is 10s; 
+     extending to 60s requires explicit config. We'll likely need 60s 
+     for a 30-50 photo zip.
+
+5. Auth + tenancy on existing photo endpoints
+   - Show me the existing GET endpoint that returns a single photo's 
+     metadata (or just the project's photos list). I want to see the 
+     auth middleware and accountId tenancy check pattern to mirror.
+
+6. Endpoint shape proposal
+   - Based on findings 1-5, propose: HTTP method, URL path, request body 
+     shape, response Content-Type and Content-Disposition, error 
+     handling (especially: what happens if one photo's S3 fetch fails 
+     mid-stream — abort? skip and log? include partial zip?).
+
+Output: numbered findings 1-6. Make NO code changes.
+
+After I review findings, we'll write the implementation plan, then 
+implement.
