@@ -1,0 +1,97 @@
+Goal: implement server-side photo download endpoint that streams a zip 
+of selected photos from S3 to the browser. Bypass CloudFront entirely 
+on the server side (server-to-server S3 fetch, no CORS concern).
+
+Streaming on Vercel Fluid is confirmed working (5MB probe over 2s, 
+May 9 2026). All decisions below are locked — do not revisit.
+
+Two-phase: Phase 2a is a plan response, Phase 2b is implementation. 
+STOP between phases for approval.
+
+=== Phase 2a — propose plan, max ~40 lines, no code ===
+
+Required content:
+- Backend: file paths and changes for each of these
+  - server/s3.ts: new exported getObjectStream(key) helper using 
+    s3Client.send(new GetObjectCommand({Bucket, Key})) and returning 
+    the Body as a Readable. Don't expose s3Client directly.
+  - server/routes.ts: new POST /api/projects/:id/media/download route 
+    near the other project-scoped media routes.
+  - script/build.ts: add archiver to the bundle allowlist OR mark 
+    external — recommend external since archiver pulls native-ish deps 
+    (zip-stream → compress-commons → crc-32-stream). Show the proposed 
+    edit.
+  - package.json: add `archiver` (latest stable). No types package 
+    needed if @types/archiver is included; check.
+- Frontend: file path and changes
+  - client/src/pages/project-detail.tsx: add Download button between 
+    Delete (line ~1077) and Share (line ~1081) in the bulk action 
+    toolbar. variant="outline" so Share remains the visual primary CTA.
+  - Handler: POST /api/projects/:id/media/download with selected IDs, 
+    response.blob() → URL.createObjectURL → trigger temp <a download> 
+    click → revoke URL.
+  - Spinner toast during download (use existing toast pattern from 
+    deleteSelected).
+  - Soft-warn helper text near the Download button when 
+    selectedIds.size > 30: "Large downloads may take up to a minute."
+  - Hard cap: if selectedIds.size > 50, disable the Download button 
+    and tooltip "Maximum 50 photos at a time."
+- Server endpoint contract (recap, you already speced this — just 
+  confirm in plan):
+  - POST /api/projects/:id/media/download
+  - Body: { mediaIds: number[] }, zod schema: 
+    z.object({ mediaIds: z.array(z.number().int().positive()).min(1).max(50) })
+  - Auth: requireReadAccess + accountId tenancy check + restricted-
+    role assignment check (mirror GET /api/projects/:id pattern)
+  - Validation: filter mediaIds to ones that belong to the project, 
+    drop unknowns silently (no info leak), 400 if intersection empty
+  - Response headers: Content-Type: application/zip, 
+    Content-Disposition: attachment with sanitized filename, 
+    Cache-Control: no-store
+  - Filename: `${projectSlug}-photos-${yyyy-mm-dd}.zip` where 
+    projectSlug is project.name.replace(/[^a-z0-9]+/gi,"-").toLowerCase().slice(0,50)
+  - Zip body: archiver("zip", { store: true }) — no compression, 
+    JPEGs/MP4s don't compress
+  - Entry naming: use media.originalName, sanitize against path 
+    traversal (strip / \ and leading .), de-dupe collisions with 
+    " (2)", " (3)" suffix before extension
+  - Error handling: per-file S3 fetch failure → log, skip, append to 
+    _DOWNLOAD_ERRORS.txt manifest at end. archiver-level error → 
+    destroy response (TCP-level failure, not corrupted zip). Pre-flight 
+    failures (auth, validation) → standard JSON 4xx.
+- Tests / verification plan:
+  - Manual test paths to run on prod after deploy + promote.
+  - Don't add automated tests in this PR.
+
+STOP after the plan. Wait for approval.
+
+=== Phase 2b — implementation (only after I approve) ===
+
+- Implement everything in the plan. Single commit.
+- Match existing code style (whatever's adjacent in routes.ts and 
+  project-detail.tsx).
+- Use existing toast pattern, existing useMutation pattern from 
+  client/src/pages/project-detail.tsx.
+- data-testid attributes: button-download-selected, optional 
+  text-download-warning for the >30 helper text.
+- No console.log debug statements in final.
+- Run `npm run build` locally to verify build is green before 
+  reporting back.
+- Show me git diff --stat + the new content in server/s3.ts (the new 
+  helper) and the new route handler block from server/routes.ts. Don't 
+  paste the full project-detail.tsx — just the diff hunk for the new 
+  button + handler.
+
+Out of scope:
+- No global-page download (only project-scoped — global /photos view 
+  doesn't exist per earlier diagnostic)
+- No download progress bar (spinner toast only — fast-follow if users 
+  ask)
+- No download history / re-download support
+- No watermarks or image transformations
+- No retry logic on S3 failures (skip-and-log is sufficient)
+
+Important context: Vercel auto-promotion is OFF (per memory). After I 
+push, I'll need to manually promote the deploy in Vercel UI before the 
+endpoint is reachable. Don't skip the test step assuming the endpoint 
+is live just because Vercel says "Ready".
