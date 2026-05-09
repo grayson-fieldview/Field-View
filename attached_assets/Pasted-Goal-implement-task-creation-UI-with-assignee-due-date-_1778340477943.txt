@@ -1,0 +1,52 @@
+Goal: implement task creation UI with assignee + due date for both 
+(a) project detail Tasks tab and (b) global /tasks page. Zero backend 
+changes — the API and schema already support all fields.
+
+Decisions already made (do not revisit):
+- Single shared component: TaskFormDialog. Used by both pages.
+- Native <input type="date"> for due date (matches app convention).
+- POST /api/projects/:id/tasks for both pages. Global mode picks project 
+  in the dialog.
+- All account users are valid assignees (no restricted-role filtering).
+- Modal opened from a "+ Add Task" button. Replace the existing inline 
+  row on project-detail.tsx with the button.
+
+Phase 2a — propose plan, no code yet.
+Write a brief plan (max ~30 lines) covering:
+- TaskFormDialog component shape: file location, props interface, fields 
+  and their components, validation rules, mutation handling, query 
+  invalidation strategy on success.
+- project-detail.tsx changes: which lines to remove (current inline 
+  form), where the new button goes, how project pre-selection passes 
+  down.
+- tasks.tsx changes: where the "+ Add Task" button goes in the header, 
+  how the project picker is populated (probably useQuery on /api/projects).
+- Form-reset behavior on dialog close, on successful submit.
+- Loading and error states.
+
+STOP after the plan. Do not write code. Wait for approval.
+
+Phase 2b — implementation (only after I approve the plan).
+- Create TaskFormDialog.
+- Update project-detail.tsx.
+- Update tasks.tsx.
+- Add data-testid attributes consistent with existing patterns 
+  (input-task-title, select-task-assignee, input-task-due-date, 
+  select-task-project, button-submit-task, button-add-task).
+- No console.log debug statements left in.
+- Manually verify with the running dev server: open project page, click 
+  Add Task, fill form, submit, see new task appear. Then global tasks 
+  page, click Add Task, pick project, fill form, submit, see new task 
+  appear filtered to that project.
+
+Out of scope:
+- No editing existing tasks via this dialog (PATCH endpoint exists, but 
+  edit UI is a follow-up).
+- No bulk task creation.
+- No subtasks, attachments, or comments.
+- No keyboard shortcuts beyond what shadcn Dialog provides natively.
+- No backend changes of any kind.
+- The "Start application workflow failed" issue is separate; do NOT 
+  investigate it as part of this work.
+
+Report back with the plan, then wait.
