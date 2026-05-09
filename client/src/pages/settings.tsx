@@ -14,6 +14,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useTheme } from "@/components/theme-provider";
+import { BrandingCard } from "@/components/branding-card";
 import { useToast } from "@/hooks/use-toast";
 import { SiGoogle, SiGooglecalendar, SiApple } from "react-icons/si";
 import {
@@ -875,6 +876,8 @@ export default function SettingsPage() {
       </div>
 
       <ProfileCard />
+
+      <BrandingCard />
 
       <Card className="p-6" data-testid="card-appearance">
         <div className="flex items-center gap-2 mb-4">

@@ -140,6 +140,9 @@ export interface IStorage {
 
   getUsers(accountId: string): Promise<User[]>;
 
+  getAccountBranding(accountId: string): Promise<{ companyLogoUrl: string | null; companyLegalName: string | null; companyAddress: string | null } | undefined>;
+  updateAccountBranding(accountId: string, patch: { companyLogoUrl?: string | null; companyLegalName?: string | null; companyAddress?: string | null }): Promise<{ companyLogoUrl: string | null; companyLegalName: string | null; companyAddress: string | null }>;
+
   createSharedGallery(gallery: InsertSharedGallery): Promise<SharedGallery>;
   getSharedGalleryByToken(token: string): Promise<SharedGallery | undefined>;
 
@@ -820,6 +823,38 @@ export class DatabaseStorage implements IStorage {
 
   async getUsers(accountId: string): Promise<User[]> {
     return db.select().from(users).where(eq(users.accountId, accountId)).orderBy(desc(users.createdAt));
+  }
+
+  async getAccountBranding(accountId: string) {
+    const [row] = await db
+      .select({
+        companyLogoUrl: accounts.companyLogoUrl,
+        companyLegalName: accounts.companyLegalName,
+        companyAddress: accounts.companyAddress,
+      })
+      .from(accounts)
+      .where(eq(accounts.id, accountId));
+    return row;
+  }
+
+  async updateAccountBranding(
+    accountId: string,
+    patch: { companyLogoUrl?: string | null; companyLegalName?: string | null; companyAddress?: string | null },
+  ) {
+    const set: Record<string, string | null> = {};
+    if (patch.companyLogoUrl !== undefined) set.companyLogoUrl = patch.companyLogoUrl;
+    if (patch.companyLegalName !== undefined) set.companyLegalName = patch.companyLegalName;
+    if (patch.companyAddress !== undefined) set.companyAddress = patch.companyAddress;
+    const [updated] = await db
+      .update(accounts)
+      .set(set)
+      .where(eq(accounts.id, accountId))
+      .returning({
+        companyLogoUrl: accounts.companyLogoUrl,
+        companyLegalName: accounts.companyLegalName,
+        companyAddress: accounts.companyAddress,
+      });
+    return updated;
   }
 
   async createSharedGallery(gallery: InsertSharedGallery): Promise<SharedGallery> {

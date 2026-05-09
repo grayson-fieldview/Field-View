@@ -396,7 +396,8 @@ export async function registerRoutes(
           if (typeof f.fileSize !== "number" || !Number.isFinite(f.fileSize) || f.fileSize <= 0 || f.fileSize > sizeLimit) {
             throw new Error(`File size must be between 1 byte and ${Math.round(sizeLimit / (1024 * 1024))} MB: ${f.originalName}`);
           }
-          return getPresignedPutUrl(f.originalName, f.mimeType, "photos", f.fileSize);
+          const folder = f.folder === "branding" ? "branding" : "photos";
+          return getPresignedPutUrl(f.originalName, f.mimeType, folder, f.fileSize);
         })
       );
       res.json(signed);
@@ -1477,6 +1478,44 @@ export async function registerRoutes(
       console.error("[reports/pdf] error:", error);
       if (!res.headersSent) res.status(500).json({ message: "Failed to generate PDF" });
       else res.destroy();
+    }
+  });
+
+  app.get("/api/account/branding", requireReadAccess, async (req: any, res) => {
+    try {
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const branding = await storage.getAccountBranding(accountId);
+      if (!branding) return res.status(404).json({ message: "Account not found" });
+      const rawLogo = branding.companyLogoUrl;
+      const companyLogoUrl =
+        rawLogo && isS3Url(rawLogo) ? await getPresignedUrl(extractS3KeyFromUrl(rawLogo)) : rawLogo;
+      res.json({ ...branding, companyLogoUrl });
+    } catch (error) {
+      console.error("[branding GET] error:", error);
+      res.status(500).json({ message: "Failed to load branding" });
+    }
+  });
+
+  app.patch("/api/account/branding", requireWriteAccess, requireAdminOrManager, async (req: any, res) => {
+    try {
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const schema = z.object({
+        companyLogoUrl: z.string().url().nullable().optional(),
+        companyLegalName: z.string().max(200).nullable().optional(),
+        companyAddress: z.string().max(500).nullable().optional(),
+      });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: "Invalid body", errors: parsed.error.flatten() });
+      const updated = await storage.updateAccountBranding(accountId, parsed.data);
+      const rawLogo = updated.companyLogoUrl;
+      const companyLogoUrl =
+        rawLogo && isS3Url(rawLogo) ? await getPresignedUrl(extractS3KeyFromUrl(rawLogo)) : rawLogo;
+      res.json({ ...updated, companyLogoUrl });
+    } catch (error) {
+      console.error("[branding PATCH] error:", error);
+      res.status(500).json({ message: "Failed to update branding" });
     }
   });
 

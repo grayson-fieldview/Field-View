@@ -40,8 +40,6 @@ export const styles = StyleSheet.create({
   coverPhotoBox: {
     width: "100%",
     height: 252,
-    borderWidth: 1,
-    borderColor: "#E5E5E5",
     marginBottom: 24,
   },
   coverPhoto: { width: "100%", height: "100%", objectFit: "contain" },
@@ -87,8 +85,6 @@ export const styles = StyleSheet.create({
   cellPhotoBox: {
     width: "100%",
     height: 168,
-    borderWidth: 1,
-    borderColor: "#E5E5E5",
     marginBottom: 6,
   },
   cellPhoto: { width: "100%", height: "100%", objectFit: "contain" },

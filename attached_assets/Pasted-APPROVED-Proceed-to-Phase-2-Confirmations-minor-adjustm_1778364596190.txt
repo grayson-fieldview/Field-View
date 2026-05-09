@@ -1,0 +1,50 @@
+APPROVED. Proceed to Phase 2.
+
+Confirmations / minor adjustments:
+
+1. Border removal: yes, just the 4 lines in styles.ts. Keep the header 
+   divider line on body pages — that's structural, not a photo frame.
+
+2. Folder param on /api/uploads/sign: whitelist exactly "photos" | 
+   "branding", default to "photos" if not specified (preserves backward 
+   compat for any existing call sites). Server-side validation rejects 
+   any other folder string.
+
+3. Logo image: the existing PDF cover layout already renders 
+   accounts.companyLogoUrl when set + showCompanyLogo toggle on. 
+   Sanity-check that no Stage 2 layout changes are needed — uploaded 
+   logo should "just work" in the rendered PDF without code changes 
+   beyond what's planned. Confirm this in implementation, don't 
+   discover it during testing.
+
+4. BrandingCard subtitle: "These fields appear on PDF reports." 
+   Concrete, sets expectation.
+
+5. Permission UX: when a non-manager opens Settings, the Branding card 
+   should still RENDER (showing current values read-only) but with all 
+   inputs disabled and a small note "Only account admins can edit 
+   branding." Don't hide the card entirely — they should know company 
+   branding exists and is centralized.
+
+6. Logo file constraints: 
+   - image/png, image/jpeg, image/webp only (reject SVG — security)
+   - 5 MB cap client-side (reject before upload starts; show toast)
+   - No dimension validation (let the user upload whatever; the PDF 
+     letterhead box constrains rendering)
+
+7. Save button text: "Save changes" when not saving, "Saving..." with 
+   spinner when in flight. Disable when !isDirty || isSaving.
+
+8. After successful save, toast: "Branding updated."
+
+Verify TS clean (baseline 34), build green, dev workflow boots. Single 
+commit. Show me:
+- styles.ts diff (the 4-line removal)
+- routes.ts diff for the 2 new branding endpoints + the folder param 
+  tweak on /api/uploads/sign
+- BrandingCard component in full (it's net-new, ~150 lines is fine 
+  to see)
+- The 1-line addition in settings.tsx that mounts <BrandingCard />
+
+Reminder: Vercel auto-promotion is OFF. After my push, deploy lands 
+Staged. I manually promote.
