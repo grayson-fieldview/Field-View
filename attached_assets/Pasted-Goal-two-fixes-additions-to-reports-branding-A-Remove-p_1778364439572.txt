@@ -1,0 +1,68 @@
+Goal: two fixes / additions to reports + branding.
+
+(A) Remove photo borders from PDF output. The cover photo box and 
+    every body PhotoCell currently render with a 1px border that 
+    looks dated. Strip it everywhere.
+
+(B) Add Settings → Branding UI for company logo upload + legal name + 
+    address. The accounts.company_logo_url, company_legal_name, and 
+    company_address columns already exist (Stage 1 migration). Need 
+    UI to set them.
+
+Two-phase. STOP between phases for approval.
+
+=== Phase 1 — DIAGNOSE only, no code changes ===
+
+For (A):
+1. Show me the current border styling in:
+   - server/pdf/layout/CoverPage.tsx (cover photo box)
+   - server/pdf/layout/PhotoCell.tsx (body photo cells)
+   - server/pdf/layout/styles.ts (any shared border tokens)
+   Confirm what gets removed.
+
+For (B):
+2. Find the existing Settings page. Identify the file path 
+   (likely client/src/pages/settings.tsx or similar) and the 
+   sidebar nav route. Show me the existing structure — what tabs/
+   sections exist today.
+3. Find the existing file/photo upload pattern. We need to know:
+   - How files get sent to S3 (multipart/form-data? presigned URL?)
+   - What server endpoint pattern is used (e.g. POST /api/projects/:id/media/upload?)
+   - How the resulting URL gets stored
+   Show me the simplest existing upload flow we can mirror for the logo.
+4. Confirm accounts table has the three branding columns from Stage 1 
+   migration. Show me the current Drizzle definition in shared/schema.ts.
+5. Confirm there's no existing PATCH endpoint for accounts metadata. 
+   If there is one, we can extend it. If not, we'll need a new endpoint.
+
+Output findings 1-5. Then propose Phase 2 plan including:
+- For (A): exact lines to remove/modify
+- For (B): 
+  * Storage strategy for the logo image (separate S3 prefix? or media 
+    table like photos?)
+  * New endpoint(s) needed (logo upload, branding patch)
+  * Settings page Branding section UI: file picker + preview + remove 
+    button + legal name input + address textarea + Save button
+  * How the PDF endpoint will pick up the new logo (already wired — 
+    accounts.companyLogoUrl is read by getReportForPdf)
+
+=== Phase 2 — implement after approval ===
+
+Standard. Single commit. Show diff.
+
+Constraints:
+- Logo upload UX: drag-drop OR click-to-upload, single file, image 
+  formats only (png/jpg/webp), reasonable size cap (5 MB).
+- Show current logo preview (small thumbnail) when set; show "Remove 
+  logo" button next to it.
+- Legal name and address are text inputs; both optional.
+- Save button is disabled until any field changes; saves all branding 
+  fields together via single PATCH /api/account/branding (or whatever 
+  pattern fits).
+- After upload + save, refresh the page state so the next PDF 
+  generation uses the new logo.
+
+Out of scope:
+- Cover photo per-report override (Stage 5)
+- Email/marketing branding (just PDF cover for now)
+- Logo cropping/editing UI
