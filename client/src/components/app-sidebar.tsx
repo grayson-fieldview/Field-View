@@ -30,7 +30,7 @@ import {
 import { useLocation, Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { ThemeToggle } from "@/components/theme-toggle";
-import faviconImg from "@assets/Favicon-01_1772067008525.png";
+import faviconImg from "@assets/Favicon-01-brand_1778259672.png";
 
 type NavItem = {
   title: string;
