@@ -1,0 +1,78 @@
+Three fixes / additions to the report cover page. Diagnose first, 
+implement after I approve.
+
+(A) Logo black background fix
+sharp converts transparent PNG to JPEG without flattening, defaulting 
+to black fill for transparent pixels. Visible in current PDF — Palm 
+Beach Painters logo has black behind transparent areas instead of 
+white. Fix: add .flatten({ background: "#ffffff" }) before .jpeg() in 
+the image pipeline. Apply universally — all PDF images render on 
+white pages, this is always correct.
+
+(B) Center cover page layout
+Rewrite server/pdf/layout/CoverPage.tsx layout. New stacking order, 
+all elements horizontally centered:
+  1. Logo (when showCompanyLogo + companyLogoUrl set)
+  2. Company name (when showCompanyName, fallback chain: legal → name)
+  3. Address (when showCompanyName + companyAddress set; conditional 
+     on showCompanyName since address pairs with name)
+  4. ~24pt vertical space
+  5. Title (always rendered, centered, Helvetica Bold 28pt)
+  6. Description (optional, centered, when set on report)
+  7. Cover photo (when showCoverPhoto + a cover photo resolves)
+  8. ~16pt vertical space
+  9. "Prepared by: <name>" (when showCreatorName)
+  10. "Date: <date>" (when showDateCreated)
+  11. "Photos: <count>" (when showPhotoCount)
+Each toggleable element silently skips when disabled or data missing 
+(existing behavior). Vertical spacing collapses when elements are 
+hidden — no awkward gaps.
+
+(C) Cover photo selector in editor
+Currently coverConfig.coverPhotoMediaId is reserved in schema, honored 
+by PDF endpoint, but no UI to set it. Add UI to the editor's Cover 
+Page pane.
+
+UX: 
+- New "Cover Photo" section in the Cover pane (above or below the 
+  existing 6 toggles, your call based on layout)
+- When no override set: small text "Will use project default cover 
+  photo" with a "Choose cover photo" button
+- When override set: 80×80 preview thumb of the selected photo + 
+  "Change" button + "Use project default" button to clear the override
+- Clicking "Choose cover photo" or "Change" opens a modal showing all 
+  photos in the report's project (mirror the existing photo picker 
+  pattern from section photo selection — single-select instead of 
+  multi-select)
+- Selecting a photo + Save in the modal sets coverConfig.coverPhotoMediaId
+- Mark isDirty true when the selection changes
+- Save Draft persists it (existing PATCH /api/reports/:id endpoint 
+  accepts coverConfig — verify in diagnosis)
+
+Phase 1 — DIAGNOSE only:
+
+For (A):
+1. Show me imagePipeline.ts current sharp call. Confirm where 
+   .flatten() needs to insert.
+
+For (B):
+2. Show me CoverPage.tsx current render structure (top-to-bottom 
+   element list). Identify each element's current position so I can 
+   verify the new ordering is correct.
+3. Show me the relevant styles in styles.ts that govern cover layout — 
+   any flex/alignment that needs to change for centering.
+
+For (C):
+4. Confirm the existing PATCH /api/reports/:id endpoint accepts 
+   coverConfig in its request body and persists changes to the JSONB 
+   column. Show me the route handler.
+5. Show me the existing photo picker pattern (from section photo 
+   addition in the editor). Multi-select modal — what file is it in, 
+   what props does it take. We'll mirror this for single-select.
+6. Show me the existing Cover pane render in report-edit.tsx. Identify 
+   where the new "Cover Photo" section slots in.
+
+Output findings, propose Phase 2 plan with specific changes per file. 
+No code changes yet.
+
+Phase 2 — implement after my approval. Single commit. Show diff.
