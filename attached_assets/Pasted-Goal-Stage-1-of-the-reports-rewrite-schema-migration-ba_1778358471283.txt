@@ -1,0 +1,174 @@
+Goal: Stage 1 of the reports rewrite — schema migration, backend CRUD 
+for the new structured shape, and a bare-bones report editor UI. No 
+PDF generation, no share links, no templates, no drag-drop, no company 
+logo. Those are Stages 2-5.
+
+Two-phase: 2a is a plan response, 2b is implementation. STOP between 
+phases for approval.
+
+=== Phase 2a — propose plan, no code ===
+
+Write a plan, max ~80 lines, covering the items below. Surface any 
+discoveries that contradict assumptions in this prompt — don't silently 
+work around.
+
+SCHEMA MIGRATION (script/migrations/migrate_sessionXX_reports_rewrite.ts)
+- Use script/migrations/migrate_session22_timesheets.ts as the template 
+  (transaction wrapper, RDS host guard, ALLOW_PROD_MIGRATION=yes gate, 
+  IF NOT EXISTS / IF EXISTS guards, post-commit verification).
+- DROP reports, DROP report_templates (zero prod data).
+- CREATE TABLE reports:
+  id int identity PK
+  projectId int NOT NULL REFERENCES projects(id) ON DELETE CASCADE
+  accountId int NOT NULL REFERENCES accounts(id) ON DELETE CASCADE
+  title text NOT NULL
+  description text
+  coverConfig jsonb NOT NULL DEFAULT '{}'
+  status report_status_enum NOT NULL DEFAULT 'draft' (reuse existing enum)
+  createdById varchar REFERENCES users(id)
+  createdAt, updatedAt timestamps
+  Indexes: (projectId), (accountId)
+- CREATE TABLE report_sections:
+  id int identity PK
+  reportId int NOT NULL REFERENCES reports(id) ON DELETE CASCADE
+  title text NOT NULL
+  summary text
+  sortOrder int NOT NULL
+  createdAt, updatedAt timestamps
+  Index: (reportId, sortOrder)
+- CREATE TABLE report_section_photos:
+  id int identity PK
+  sectionId int NOT NULL REFERENCES report_sections(id) ON DELETE CASCADE
+  mediaId int NOT NULL REFERENCES media(id) ON DELETE CASCADE
+  caption text
+  description text
+  sortOrder int NOT NULL
+  createdAt timestamp
+  Index: (sectionId, sortOrder)
+- CREATE TABLE report_templates:
+  id int identity PK
+  accountId int NOT NULL REFERENCES accounts(id) ON DELETE CASCADE
+  title text NOT NULL
+  templateConfig jsonb NOT NULL DEFAULT '{}'
+  createdById varchar REFERENCES users(id)
+  createdAt, updatedAt timestamps
+  Index: (accountId)
+- ALTER accounts ADD COLUMN companyLogoUrl varchar, companyLegalName 
+  text, companyAddress text (all nullable).
+- Drop the report_status_enum if it has no other dependencies and 
+  re-create only if needed (verify in plan).
+
+SHARED SCHEMA (shared/schema.ts)
+- Drizzle declarations for all new tables.
+- Mirror declaration style from existing tables.
+- Drop the old reports/reportTemplates exports.
+
+BACKEND ROUTES (server/routes.ts)
+- Replace existing report endpoints (lines 1127, 1138, 1161, 1178, 
+  3110, 3121, 3142). Remove the old ones. New endpoints:
+  - GET /api/reports (account-scoped list, requireReadAccess)
+  - GET /api/projects/:id/reports (project-scoped list, requireReadAccess + project-tenancy + restricted-role check)
+  - GET /api/reports/:id (single report with sections + section photos joined, full tree)
+  - POST /api/projects/:id/reports (create empty report — title required, optional templateId in body to bootstrap from a template; for Stage 1, ignore templateId since templates aren't built yet but accept the param for forward-compat)
+  - PATCH /api/reports/:id (update title, description, coverConfig, status — partial)
+  - DELETE /api/reports/:id
+  - POST /api/reports/:id/sections (create section — title required, sortOrder = max+1)
+  - PATCH /api/sections/:id (update title, summary, sortOrder)
+  - DELETE /api/sections/:id
+  - POST /api/sections/:id/photos (body: { mediaIds: number[] } — bulk add, server validates each mediaId belongs to the report's project, assigns sortOrder = max+1+i)
+  - PATCH /api/section-photos/:id (update caption, description, sortOrder)
+  - DELETE /api/section-photos/:id
+- All endpoints: account-tenancy check + restricted-role assignment 
+  check mirroring GET /api/projects/:id pattern.
+- Zod validation on all POST/PATCH bodies.
+- Don't implement drag-drop reorder yet — sortOrder is set by server 
+  on create, can be updated via PATCH. Stage 5 adds bulk reorder UX.
+
+FRONTEND
+- New route: /reports/:id/edit (the report editor page).
+  - Add Route in client/src/App.tsx.
+  - New page file: client/src/pages/report-edit.tsx.
+- Replace the existing project Reports tab UI (project-detail.tsx 
+  L1654-L1720). New behavior: list of reports with title + status + 
+  date, "Create Blank Report" button. Clicking a report navigates to 
+  /reports/:id/edit. (Templates dropdown removed for Stage 1 — 
+  re-added in Stage 4.)
+- Replace client/src/pages/reports.tsx for the global Reports page. 
+  All Reports tab: same flat list across all projects. Templates tab: 
+  empty placeholder for Stage 1 ("Templates coming soon" or hidden).
+- Editor page (report-edit.tsx) layout — left sidebar (Cover Page + 
+  ordered section list + "+ Add Section" link), main content area:
+  - Selected: Cover Page → cover settings form (editable title + 
+    description + 6 toggles for coverConfig).
+  - Selected: A section → section title (inline edit), summary 
+    (textarea), photos list (each with caption + description fields 
+    inline), "+ Add Photos" button → opens modal.
+  - Top bar: "Save Draft" button (right side), "Status: <draft/...>" 
+    indicator (left side).
+- Photo picker modal: reuses the existing project photo grid UI 
+  pattern (whatever upload-photos-dialog.tsx does — find and mirror). 
+  Multi-select. Submit attaches photos to the section in one POST.
+- UNSAVED-CHANGES GUARD:
+  - Local state isDirty tracks any unsaved changes since last save.
+  - useBlocker (or equivalent for the router version in use — wouter? 
+    react-router?) intercepts in-app navigation when isDirty.
+  - useEffect adds beforeunload listener when isDirty: e.preventDefault(); 
+    e.returnValue = "" — triggers browser native "leave site" dialog.
+  - Save Draft button disabled when !isDirty. After save, isDirty 
+    flips false.
+  - Modal/dialog confirmation on intercepted nav: "You have unsaved 
+    changes. Save before leaving? [Save & Continue] [Discard Changes] 
+    [Stay]"
+  - Detect router library by checking package.json first — if wouter, 
+    different pattern than react-router.
+
+OUT OF SCOPE FOR STAGE 1
+- PDF generation
+- Share link / public viewer
+- Templates (table created but no UI)
+- Company logo upload (column added but no UI)
+- Drag-and-drop section/photo reordering (sortOrder editable via PATCH 
+  but no UI)
+- Auto-save (Save Draft button only, per spec)
+
+VERIFICATION PLAN
+- After deploy + manual promote, on prod:
+  - Create a report from a project Reports tab → lands on editor
+  - Add 2 sections → reorder via sortOrder PATCH → reload, ordering 
+    holds
+  - Add 4 photos to one section, edit captions, save → reload, holds
+  - Toggle each cover page setting → save → reload, holds
+  - Try to navigate away with unsaved changes → confirmation dialog
+  - Refresh tab with unsaved changes → browser native dialog
+  - Verify cross-tenant: another account's reportId → 403
+  - Verify list endpoints scope correctly: GET /api/reports only 
+    returns this account's reports
+
+Open questions surfaced during diagnosis: list any.
+
+STOP after the plan. Wait for approval.
+
+=== Phase 2b — implementation (only after I approve) ===
+
+Standard pattern:
+- Install any deps (none expected for Stage 1 — no PDF, no sharp, no 
+  react-pdf yet).
+- TS clean, build green, dev workflow boots (despite the pre-existing 
+  Neon phone column issue that's separate).
+- One git commit. Show me git diff --stat plus the migration script in 
+  full and key new route handlers / new editor page structure.
+- I'll review and push.
+
+CRITICAL — Migration sequence reminder:
+- This is a schema-touching deploy. HARD RULE applies: prod RDS 
+  migration BEFORE the Vercel code deploy goes live.
+- Order: I take RDS snapshot → whitelist Replit IP → run migration 
+  with ALLOW_PROD_MIGRATION=yes → verify schema → manually promote 
+  Vercel deploy → remove Replit IP from security group.
+- Vercel auto-promotion is OFF, so the deploy will sit Staged anyway. 
+  Don't proceed with frontend testing on Staged URL — run migration 
+  first, then promote, then test.
+
+Don't skip the diagnose-first pattern within Phase 2b: if you discover 
+the router is wouter (not react-router), or that some assumed table 
+column doesn't exist, STOP and report rather than working around it.
