@@ -53,6 +53,7 @@ async function buildAll() {
     bundle: true,
     format: "cjs",
     outfile: "dist/index.cjs",
+    jsx: "automatic",
     define: {
       "process.env.NODE_ENV": '"production"',
     },
@@ -69,6 +70,7 @@ async function buildAll() {
     bundle: true,
     format: "cjs",
     outfile: "api/index.js",
+    jsx: "automatic",
     define: {
       "process.env.NODE_ENV": '"production"',
     },
@@ -85,6 +87,7 @@ async function buildAll() {
     bundle: true,
     format: "cjs",
     outfile: "api/stripe/webhook.js",
+    jsx: "automatic",
     define: {
       "process.env.NODE_ENV": '"production"',
     },
