@@ -1,0 +1,66 @@
+Goal: verify the Stage 1 reports rewrite commit is clean and matches 
+the approved plan, before user pushes to main. This is a schema-touching 
+deploy with a HARD RULE migration sequence — accuracy matters more than 
+speed here.
+
+Read-only diagnostics. NO code changes.
+
+1. Diff scope check
+   - Run: git diff --stat HEAD~1..HEAD (or whatever range matches the 
+     "merged by the platform" state — figure out which commits are in 
+     scope and tell me)
+   - List every file in the diff. For each, one-sentence description 
+     of what changed.
+   - Specifically grep the diff for any of: "Google", "sign-in", 
+     "signin", "OAuth", "redesign", "project detail page" (the stale 
+     task list keywords). Report any hits — those would indicate code 
+     from prior sessions accidentally bundled in.
+
+2. Endpoint count verification
+   - Open server/routes.ts. List every endpoint registered for paths 
+     starting with /api/reports/, /api/sections/, /api/section-photos/. 
+     Confirm count = 13. List them with method + path.
+   - Confirm the OLD endpoints are removed: GET /api/reports (old), 
+     POST /api/projects/:id/reports (old), PATCH /api/reports/:id 
+     (old), DELETE /api/reports/:id (old), and all 3 
+     /api/report-templates/* endpoints. None should remain.
+
+3. TS error count verification
+   - Run: npm run check (or whatever produces the TS error count)
+   - Report the exact count.
+   - If 34: list the new error explicitly (file, line, full message). 
+     Do NOT hand-wave "Drizzle inference noise" — show me the actual 
+     error and confirm it appears verbatim somewhere else in the 
+     codebase as a baseline pattern (i.e., the same error pattern 
+     existed on a prior table before this PR).
+
+4. Migration script integrity
+   - Show me script/migrations/migrate_session37_reports_rewrite.ts in 
+     FULL.
+   - Confirm: RDS host guard, ALLOW_PROD_MIGRATION=yes gate, 
+     transaction wrapper, post-commit information_schema verification. 
+     Compare side-by-side against migrate_session22_timesheets.ts — 
+     they should structurally match.
+
+5. Schema declarations
+   - Show me the new pgTable defs in shared/schema.ts for: reports, 
+     report_sections, report_section_photos, report_templates.
+   - Confirm reports.accountId is varchar (not int) per the discovery 
+     finding.
+   - Confirm coverConfig is jsonb with default '{}'.
+   - Confirm cover toggle field names in cover_config will be: 
+     showCoverPhoto, showCompanyLogo, showCompanyName, showCreatorName, 
+     showPhotoCount, showDateCreated. (If they're stored as separate 
+     columns, that's wrong — they should live inside coverConfig 
+     JSONB.)
+
+6. Frontend editor confirmation
+   - Show me the layout block from client/src/pages/report-edit.tsx 
+     (just the JSX of the main render, ~30 lines).
+   - Confirm the unsaved-changes hook handles both beforeunload AND 
+     in-editor pane switches per spec.
+
+Output: numbered findings 1-6. If anything is amiss, flag explicitly. 
+If everything checks out, give an "all clear" summary and I'll push.
+
+Make NO code changes during this verification.
