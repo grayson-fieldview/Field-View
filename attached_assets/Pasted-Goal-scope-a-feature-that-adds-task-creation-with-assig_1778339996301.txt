@@ -1,0 +1,79 @@
+Goal: scope a feature that adds task creation with assignee + due date 
+fields, accessible from both (a) the project detail Tasks tab and (b) the 
+global /tasks page. Currently the project page has an inline "Add a new 
+task" input with priority only, and the global tasks page has no add-task 
+affordance at all.
+
+Phase 1 only — DIAGNOSE, no code changes. Do not write a migration, do 
+not modify any component. Report findings back; we'll review and then 
+write the plan.
+
+DB schema
+1. Show me the `tasks` table definition from shared/schema.ts — every 
+   column, every type. Specifically confirm: does it already have an 
+   assignee/assignedTo column and a dueDate column? If yes, exact column 
+   names and types. If no, say so explicitly.
+2. Run a `\d tasks` equivalent against the dev DB (Neon) so we can compare 
+   the declared schema to actual columns. Report any drift.
+3. Show me how the `users` table relates to tasks — is there a foreign 
+   key, and what's the user identifier the FK would point to (id, uuid, 
+   email)?
+
+API layer
+4. Find the POST endpoint that creates tasks (likely server/routes.ts or 
+   server/routes/tasks.ts). Show me:
+   - The exact route path and method
+   - The request body Zod/validation schema
+   - The fields it currently accepts
+   - The auth/permission checks
+5. Find the GET endpoint that lists tasks for a project, and the GET 
+   endpoint that lists all tasks for the global /tasks page. For each: 
+   route path, response shape (especially: does it return assignee info 
+   joined in, or just IDs?).
+
+Team/members data
+6. How does the frontend currently fetch the list of users in the current 
+   account/team (for the assignee dropdown)? Show me the hook/query 
+   (likely useQuery from react-query) and the underlying API endpoint. 
+   This needs to exist for both single-account and multi-seat scenarios.
+
+Frontend — project page (Image 1)
+7. Find the component that renders the "Add a new task..." input + 
+   priority dropdown + Add Task button on the project detail Tasks tab. 
+   File path + component code. Show me how priority is currently 
+   collected and submitted.
+
+Frontend — tasks page (Image 2)
+8. Find the component for /tasks (the global tasks page). Confirm there 
+   is no add-task UI currently, and show me where the page header is 
+   rendered so we know where an "Add Task" button would live.
+
+Reusable primitives
+9. What date picker pattern is used elsewhere in the codebase? (Search 
+   for `react-day-picker`, `Calendar`, `<input type="date">`, etc.) If 
+   shadcn/ui DatePicker is already wired up, point me at the file. If 
+   not, note that we'll need to add one.
+10. What modal/dialog primitive is used elsewhere? (Likely shadcn 
+    Dialog.) Point at one existing usage as a reference pattern.
+11. What select/dropdown primitive is used? (Likely shadcn Select.) 
+    Reference usage.
+
+Permissions / multi-tenant safety
+12. When a task is created from the project page, how does the server 
+    verify the requesting user has permission to add a task to that 
+    project (account membership check)? Show me the code path.
+13. Will an assignee dropdown need to filter to only users in the same 
+    account/seat group? Confirm where that check lives or would live.
+
+Output
+Report findings back as a single response, numbered 1–13. For each section 
+flag explicitly:
+- "Already exists" — and point at it
+- "Doesn't exist, would need to be built" — and rough size
+
+Specifically call out at the end whether this feature requires a schema 
+migration (assignee/dueDate columns missing from tasks table). If yes, 
+that triggers the HARD RULE prod-RDS-migration sequence and we plan 
+accordingly. If no, this is pure code.
+
+Make NO code changes in this phase.
