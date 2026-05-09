@@ -42,6 +42,7 @@ import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/auth-utils";
 import { useAuth } from "@/hooks/use-auth";
 import PhotoViewer from "@/components/photo-viewer";
+import TaskFormDialog from "@/components/task-form-dialog";
 import {
   Upload,
   MapPin,
@@ -321,8 +322,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const [originalAddress, setOriginalAddress] = useState("");
   const [showCoverPicker, setShowCoverPicker] = useState(false);
   const [selectedMedia, setSelectedMedia] = useState<(Media & { uploadedBy?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } }) | null>(null);
-  const [newTaskTitle, setNewTaskTitle] = useState("");
-  const [newTaskPriority, setNewTaskPriority] = useState<string>("medium");
+  const [isAddTaskOpen, setIsAddTaskOpen] = useState(false);
   const [newChecklistTitle, setNewChecklistTitle] = useState("");
   const [newChecklistItems, setNewChecklistItems] = useState<string[]>([""]);
   const [newReportTitle, setNewReportTitle] = useState("");
@@ -376,29 +376,6 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
       toast({ title: "Cover photo updated" });
-    },
-  });
-
-  const addTask = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("POST", `/api/projects/${id}/tasks`, {
-        title: newTaskTitle,
-        priority: newTaskPriority,
-      });
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
-      setNewTaskTitle("");
-      toast({ title: "Task added" });
-    },
-    onError: (error: Error) => {
-      if (isUnauthorizedError(error)) {
-        toast({ title: "Unauthorized", variant: "destructive" });
-        setTimeout(() => { window.location.href = "/login"; }, 500);
-        return;
-      }
-      toast({ title: "Error", description: error.message, variant: "destructive" });
     },
   });
 
@@ -1404,30 +1381,14 @@ export default function ProjectDetailPage({ id }: { id: string }) {
 
           {activeTab === "tasks" && (
             <div className="px-4 sm:px-6 py-4 space-y-4">
-              <div className="flex flex-wrap items-center gap-3">
-                <Input
-                  placeholder="Add a new task..."
-                  value={newTaskTitle}
-                  onChange={(e) => setNewTaskTitle(e.target.value)}
-                  className="flex-1 min-w-[200px]"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && newTaskTitle.trim()) addTask.mutate();
-                  }}
-                  data-testid="input-new-task"
-                />
-                <Select value={newTaskPriority} onValueChange={setNewTaskPriority}>
-                  <SelectTrigger className="w-[120px]" data-testid="select-task-priority">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="low">Low</SelectItem>
-                    <SelectItem value="medium">Medium</SelectItem>
-                    <SelectItem value="high">High</SelectItem>
-                  </SelectContent>
-                </Select>
+              <TaskFormDialog
+                open={isAddTaskOpen}
+                onOpenChange={setIsAddTaskOpen}
+                projectId={Number(id)}
+              />
+              <div className="flex items-center justify-end">
                 <Button
-                  onClick={() => { if (newTaskTitle.trim()) addTask.mutate(); }}
-                  disabled={addTask.isPending || !newTaskTitle.trim()}
+                  onClick={() => setIsAddTaskOpen(true)}
                   data-testid="button-add-task"
                 >
                   <Plus className="h-4 w-4 mr-2" />

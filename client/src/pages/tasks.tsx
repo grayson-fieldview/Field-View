@@ -23,8 +23,10 @@ import {
   CheckCircle2,
   Circle,
   Clock,
+  Plus,
 } from "lucide-react";
 import type { Task, Project } from "@shared/schema";
+import TaskFormDialog from "@/components/task-form-dialog";
 
 type TaskWithDetails = Task & {
   project?: { name: string };
@@ -50,6 +52,7 @@ export default function TasksPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<FilterStatus>("all");
   const [projectFilter, setProjectFilter] = useState<string>("all");
+  const [isAddTaskOpen, setIsAddTaskOpen] = useState(false);
   const [, navigate] = useLocation();
 
   const { data: allTasks, isLoading } = useQuery<TaskWithDetails[]>({
@@ -88,10 +91,18 @@ export default function TasksPage() {
 
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-7xl mx-auto">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight" data-testid="text-tasks-title">Tasks</h1>
-        <p className="text-sm text-muted-foreground mt-1">Manage tasks across all projects</p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight" data-testid="text-tasks-title">Tasks</h1>
+          <p className="text-sm text-muted-foreground mt-1">Manage tasks across all projects</p>
+        </div>
+        <Button onClick={() => setIsAddTaskOpen(true)} data-testid="button-add-task">
+          <Plus className="h-4 w-4 mr-2" />
+          Add Task
+        </Button>
       </div>
+
+      <TaskFormDialog open={isAddTaskOpen} onOpenChange={setIsAddTaskOpen} />
 
       <div className="flex flex-wrap items-center gap-3">
         <div className="relative flex-1 min-w-[200px] max-w-sm">
