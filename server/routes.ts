@@ -1488,8 +1488,8 @@ export async function registerRoutes(
       const branding = await storage.getAccountBranding(accountId);
       if (!branding) return res.status(404).json({ message: "Account not found" });
       const rawLogo = branding.companyLogoUrl;
-      const companyLogoUrl =
-        rawLogo && isS3Url(rawLogo) ? await getPresignedUrl(extractS3KeyFromUrl(rawLogo)) : rawLogo;
+      const s3Key = rawLogo && isS3Url(rawLogo) ? extractS3KeyFromUrl(rawLogo) : null;
+      const companyLogoUrl = s3Key ? await getPresignedUrl(s3Key) : rawLogo;
       res.json({ ...branding, companyLogoUrl });
     } catch (error) {
       console.error("[branding GET] error:", error);
@@ -1510,8 +1510,8 @@ export async function registerRoutes(
       if (!parsed.success) return res.status(400).json({ message: "Invalid body", errors: parsed.error.flatten() });
       const updated = await storage.updateAccountBranding(accountId, parsed.data);
       const rawLogo = updated.companyLogoUrl;
-      const companyLogoUrl =
-        rawLogo && isS3Url(rawLogo) ? await getPresignedUrl(extractS3KeyFromUrl(rawLogo)) : rawLogo;
+      const s3Key = rawLogo && isS3Url(rawLogo) ? extractS3KeyFromUrl(rawLogo) : null;
+      const companyLogoUrl = s3Key ? await getPresignedUrl(s3Key) : rawLogo;
       res.json({ ...updated, companyLogoUrl });
     } catch (error) {
       console.error("[branding PATCH] error:", error);
