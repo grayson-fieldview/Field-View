@@ -106,6 +106,22 @@ export async function registerRoutes(
   await setupAuth(app);
   registerAuthRoutes(app);
 
+  // TEMP: streaming probe — verify Vercel Node runtime streams res.write end-to-end.
+  // Writes 1 MB of zero bytes every 500ms, 5 chunks (5 MB over ~2.5s).
+  // REMOVE after confirming chunked transfer encoding on the wire.
+  app.get("/api/__streaming-probe", async (_req, res) => {
+    res.setHeader("Content-Type", "application/octet-stream");
+    res.setHeader("Content-Disposition", 'attachment; filename="probe.bin"');
+    res.setHeader("Cache-Control", "no-store");
+    const chunk = Buffer.alloc(1024 * 1024, 0);
+    for (let i = 0; i < 5; i++) {
+      res.write(chunk);
+      if (typeof (res as any).flush === "function") (res as any).flush();
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    res.end();
+  });
+
   app.get("/api/config/maps", requireReadAccess, (_req, res) => {
     const apiKey = process.env.GOOGLE_MAPS_API_KEY;
     if (!apiKey) {

@@ -1,0 +1,50 @@
+Goal: confirm Vercel's Node serverless runtime streams res.write 
+end-to-end (chunked transfer encoding visible at the wire), or whether 
+it buffers under the hood despite the Express interface. This is a 
+prerequisite for the photo download endpoint design — if Vercel 
+buffers, we hit response-size limits at scale.
+
+Build a temporary diagnostic endpoint, deploy, test, then remove.
+
+1. Add a temporary route to server/routes.ts (or a separate routes file 
+   it imports) — only if reading routes.ts shows there's a clean place 
+   to add it that won't conflict with existing routes:
+
+   GET /api/__streaming-probe
+   - Auth: skip (this is a diagnostic, not user-facing)
+   - Headers:
+     Content-Type: application/octet-stream
+     Content-Disposition: attachment; filename="probe.bin"
+     Cache-Control: no-store
+   - Behavior: write 1 MB of zero bytes every 500ms, 5 chunks total 
+     (5 MB total over ~2.5 seconds). Use res.write() and end with 
+     res.end().
+
+2. Push to main, wait for Vercel deploy.
+
+3. Test with curl from terminal:
+   curl --no-buffer -v https://app.field-view.com/api/__streaming-probe -o /tmp/probe.bin
+
+   The --no-buffer flag is critical — it disables curl's own buffering 
+   so we see chunks as they arrive on the wire.
+
+4. What to look for in the curl output:
+   - "Transfer-Encoding: chunked" in the response headers (definitive 
+     streaming confirmation)
+   - In verbose output, the bytes arriving in chunks over ~2.5 seconds 
+     rather than a single dump at the end
+   - File size 5,242,880 (5 MB exact)
+
+5. Three possible outcomes:
+   (a) chunked encoding + bytes arriving over 2.5s → STREAMING WORKS, 
+       proceed with archiver-based download endpoint
+   (b) Content-Length present (not chunked) + all bytes arriving at end 
+       after 2.5s wait → Vercel is buffering, hard pivot needed
+   (c) Connection terminates with error (timeout, response-size limit, 
+       OOM) → also buffering / size-limited, hard pivot needed
+
+6. After test: revert the probe route in a follow-up commit. Don't leave 
+   diagnostic endpoints in production.
+
+Report back with: curl output (headers + timing), and which of (a), (b), 
+(c) you got. Do NOT implement the actual download endpoint yet.
