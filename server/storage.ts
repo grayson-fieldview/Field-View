@@ -54,7 +54,7 @@ import {
   type PendingGeofenceExit,
   type InsertPendingGeofenceExit,
 } from "@shared/schema";
-import { users, type User } from "@shared/models/auth";
+import { users, accounts, type User } from "@shared/models/auth";
 import { db } from "./db";
 import { eq, desc, sql, asc, and, inArray, lte } from "drizzle-orm";
 
