@@ -87,6 +87,8 @@ export default function ReportEditPage({ id }: { id: string }) {
   const [isPickerOpen, setIsPickerOpen] = useState(false);
   const [pickerSectionId, setPickerSectionId] = useState<number | null>(null);
   const [picked, setPicked] = useState<Set<number>>(new Set());
+  const [isCoverPickerOpen, setIsCoverPickerOpen] = useState(false);
+  const [pickedCoverId, setPickedCoverId] = useState<number | null>(null);
   const [confirmDeleteSection, setConfirmDeleteSection] = useState<number | null>(null);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [confirmDeletePhoto, setConfirmDeletePhoto] = useState<number | null>(null);
@@ -419,9 +421,22 @@ export default function ReportEditPage({ id }: { id: string }) {
               title={draftTitle}
               description={draftDescription}
               cover={draftCover}
+              coverPhotoUrl={
+                draftCover.coverPhotoMediaId
+                  ? projectMedia.find((m) => m.id === draftCover.coverPhotoMediaId)?.url ?? null
+                  : null
+              }
               onTitleChange={(v) => { setDraftTitle(v); markDirty(); }}
               onDescriptionChange={(v) => { setDraftDescription(v); markDirty(); }}
               onCoverChange={(c) => { setDraftCover(c); markDirty(); }}
+              onPickCoverPhoto={() => {
+                setPickedCoverId(draftCover.coverPhotoMediaId);
+                setIsCoverPickerOpen(true);
+              }}
+              onClearCoverPhoto={() => {
+                setDraftCover({ ...draftCover, coverPhotoMediaId: null });
+                markDirty();
+              }}
             />
           )}
           {pane.kind === "section" && activeSection && (
@@ -599,6 +614,67 @@ export default function ReportEditPage({ id }: { id: string }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Cover photo picker (single-select) */}
+      <Dialog open={isCoverPickerOpen} onOpenChange={setIsCoverPickerOpen}>
+        <DialogContent className="max-w-3xl max-h-[80vh] overflow-hidden flex flex-col" data-testid="dialog-cover-photo-picker">
+          <DialogHeader>
+            <DialogTitle>Choose cover photo</DialogTitle>
+            <DialogDescription>Pick one photo from this project to use as the report's cover image.</DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto -mx-6 px-6">
+            {projectMedia.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-8">This project has no photos yet.</p>
+            ) : (
+              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                {projectMedia.map((m) => {
+                  const checked = pickedCoverId === m.id;
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => setPickedCoverId(m.id)}
+                      className={`relative aspect-square rounded-md overflow-hidden border-2 transition-colors ${
+                        checked ? "border-primary" : "border-transparent"
+                      }`}
+                      data-testid={`button-pick-cover-${m.id}`}
+                    >
+                      <img src={m.url} alt="" className="object-cover w-full h-full" />
+                      {checked && (
+                        <div className="absolute top-1 right-1 bg-primary text-primary-foreground text-xs rounded-full h-5 w-5 flex items-center justify-center">
+                          ✓
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setIsCoverPickerOpen(false)}
+              data-testid="button-cancel-cover-picker"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (pickedCoverId !== null) {
+                  setDraftCover({ ...draftCover, coverPhotoMediaId: pickedCoverId });
+                  markDirty();
+                }
+                setIsCoverPickerOpen(false);
+              }}
+              disabled={pickedCoverId === null}
+              data-testid="button-confirm-cover-picker"
+            >
+              Use this photo
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -608,11 +684,24 @@ function CoverEditor(props: {
   title: string;
   description: string;
   cover: CoverConfig;
+  coverPhotoUrl: string | null;
   onTitleChange: (v: string) => void;
   onDescriptionChange: (v: string) => void;
   onCoverChange: (c: CoverConfig) => void;
+  onPickCoverPhoto: () => void;
+  onClearCoverPhoto: () => void;
 }) {
-  const { title, description, cover, onTitleChange, onDescriptionChange, onCoverChange } = props;
+  const {
+    title,
+    description,
+    cover,
+    coverPhotoUrl,
+    onTitleChange,
+    onDescriptionChange,
+    onCoverChange,
+    onPickCoverPhoto,
+    onClearCoverPhoto,
+  } = props;
   const toggles: { key: keyof CoverConfig; label: string }[] = useMemo(() => [
     { key: "showCoverPhoto", label: "Cover photo" },
     { key: "showCompanyLogo", label: "Company logo" },
@@ -668,6 +757,53 @@ function CoverEditor(props: {
             </div>
           ))}
         </div>
+      </Card>
+
+      <Card className="p-4 space-y-3" data-testid="card-cover-photo-override">
+        <h3 className="text-sm font-semibold">Cover Photo</h3>
+        {cover.coverPhotoMediaId && coverPhotoUrl ? (
+          <div className="flex items-center gap-3">
+            <img
+              src={coverPhotoUrl}
+              alt="Selected cover"
+              className="h-20 w-20 rounded object-cover border"
+              data-testid="img-cover-override-thumb"
+            />
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onPickCoverPhoto}
+                data-testid="button-change-cover-photo"
+              >
+                Change
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onClearCoverPhoto}
+                data-testid="button-clear-cover-photo"
+              >
+                Use project default
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-3">
+            <p className="text-sm text-muted-foreground flex-1">
+              Will use project default cover photo.
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onPickCoverPhoto}
+              data-testid="button-choose-cover-photo"
+            >
+              <ImageIcon className="h-4 w-4 mr-1.5" />
+              Choose cover photo
+            </Button>
+          </div>
+        )}
       </Card>
     </div>
   );

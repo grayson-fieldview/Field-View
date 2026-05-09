@@ -24,6 +24,7 @@ export async function fetchAndResize(keys: string[]): Promise<Map<string, Buffer
           const resized = await sharp(raw)
             .rotate()
             .resize(1600, 1600, { fit: "inside", withoutEnlargement: true })
+            .flatten({ background: "#ffffff" })
             .jpeg({ quality: 80 })
             .toBuffer();
           out.set(key, resized);
