@@ -1,0 +1,81 @@
+Goal: scope a full rewrite of the reports feature. Current schema is 
+flat (title + content + findings + recommendations as text fields). 
+New design is structured: cover page with toggleable elements, ordered 
+sections containing photos with captions, drag-drop reordering, PDF 
+generation via @react-pdf/renderer, anonymous share link with public 
+HTML viewer, per-account company logo. No existing reports in 
+production — clean slate.
+
+Phase 1 only — DIAGNOSE, no code changes. Report findings numbered.
+
+Current reports / templates state
+1. Show me the reports table definition from shared/schema.ts, every 
+   column, every type. Also any related tables (report_templates, 
+   report_sections, report_photos, etc.). Note which columns/tables 
+   already exist vs. are missing.
+2. Find the API endpoints for reports and templates in server/routes.ts. 
+   List each with its HTTP method, path, auth middleware, and a one-
+   line description. We're going to replace most of these.
+3. Find the frontend pages/components for the current reports feature:
+   - The project detail Reports tab (likely in 
+     client/src/pages/project-detail.tsx)
+   - The global Reports page (client/src/pages/reports.tsx?)
+   - The Templates tab on that page
+   List file paths and how big each one is roughly (line count).
+
+Existing share-token pattern (to reuse for report sharing)
+4. Find the gallery share implementation. Memory says it generates a 
+   token via createGallery mutation, stores in a galleries (or similar) 
+   table, and exposes a public URL like ${origin}/gallery/${token}. 
+   Show me:
+   - The galleries table schema
+   - The POST endpoint that creates a token
+   - The GET endpoint that resolves a token to gallery data
+   - The frontend route + component that renders the public anonymous 
+     view at /gallery/:token
+   - How (and whether) tokens expire or get revoked
+   This whole pattern gets duplicated for /report/:token.
+
+Account / settings infrastructure
+5. Show me the accounts table from shared/schema.ts, every column. 
+   Specifically: is there already a company_logo_url column or similar? 
+   Is there any branding/customization storage at the account level?
+6. Find the admin/manager settings page (likely client/src/pages/
+   settings.tsx or similar). Show me its structure — what tabs/sections 
+   exist, where would a "Company Settings" or "Branding" section fit?
+7. How is admin/manager role-gating done in the existing UI? Show me 
+   one example of "this UI element only shows for admins/managers" so 
+   we can mirror the pattern.
+8. How does file upload work today? Specifically photo uploads — show 
+   me the existing flow: client → server → S3 → CloudFront URL stored 
+   in DB. We'll mirror this for company logo uploads, possibly to a 
+   different S3 prefix (logos/ instead of photos/).
+
+PDF generation infrastructure (likely net-new)
+9. Check package.json for any of: @react-pdf/renderer, puppeteer, 
+   pdfkit, jspdf, sharp, libuuid. Report which are present, which 
+   versions.
+10. If sharp is NOT installed: confirm whether the existing image 
+    upload path does any image processing today (resize, EXIF strip, 
+    thumbnail generation). If yes, where? If no, we'll add sharp solely 
+    for PDF embedding (resize to ~1600px max, JPEG at 80% quality 
+    before embedding).
+
+Photo metadata available for sections
+11. The media table (per the photo download diagnostic): we already 
+    have id, projectId, filename, originalName, mimeType, url, caption, 
+    latitude, longitude, tags, createdAt. For PDF report photos, we 
+    also want the uploader's name. Show me how to get from media row → 
+    uploader's display name (presumably media.uploadedById → 
+    users.firstName + lastName).
+
+Project header data for cover page
+12. Show me the projects table columns (especially: name, address, 
+    accountId, createdAt, status). The cover page will pull 
+    project.name as default title, and may show project.address.
+
+Output: numbered findings 1-12. After review, we plan Stage 1 
+(schema + backend + basic editor UI). Stages 2-4 will get their own 
+plans once Stage 1 lands.
+
+Make NO code changes.
