@@ -378,11 +378,12 @@ function BillingCard() {
     },
   });
 
-  // Session 2 trial-flow rework: trialing users without a Stripe
-  // customer yet need a way to add a card from Settings (in addition
-  // to the in-app banner). Same monthly default as the banner CTA;
-  // annual upgrades happen later via the Stripe portal.
-  const SETTINGS_MONTHLY_PRICE_ID = "price_1TMaPlR1AnIJLf9qcJsFWa1w";
+  // Session 3 BUG 5 fix: sourced from VITE_STRIPE_PRICE_MONTHLY env var
+  // instead of a hardcoded test-mode price ID that didn't exist in live
+  // Stripe. Mirrors the banner CTA in App.tsx; will be removed in
+  // Session 3 Commit B when this CTA also routes to the /subscribe
+  // plan picker.
+  const SETTINGS_MONTHLY_PRICE_ID = import.meta.env.VITE_STRIPE_PRICE_MONTHLY as string;
   const checkoutMutation = useMutation({
     mutationFn: async () => {
       const res = await fetch("/api/create-checkout-session", {

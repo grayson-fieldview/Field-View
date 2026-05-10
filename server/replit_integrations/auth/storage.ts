@@ -21,7 +21,10 @@ class AuthStorage implements IAuthStorage {
 
   async getUserByEmail(email: string): Promise<User | undefined> {
     if (!email) return undefined;
-    const [user] = await db.select().from(users).where(eq(users.email, email));
+    // Session 3 BUG 1 fix: case-insensitive lookup so callers can't
+    // accidentally bypass the duplicate-email guard with mixed casing.
+    const normalized = email.trim().toLowerCase();
+    const [user] = await db.select().from(users).where(eq(users.email, normalized));
     return user;
   }
 

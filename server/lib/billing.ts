@@ -107,7 +107,25 @@ export async function getAccountBilling(req: any): Promise<BillingState> {
   };
 }
 
+// Session 3 of trial-flow rework: prefer exact priceId compare against
+// STRIPE_PRICE_SEAT_ADDON env var (resolves the pre-existing TECH_DEBT
+// item about string-matching product names). Fall back to the legacy
+// product-name string-match when the env var is not set so we degrade
+// gracefully rather than mis-counting seats — but warn loudly so the
+// missing config gets noticed.
+let seatAddonFallbackWarned = false;
 export function isSeatAddonItem(item: any): boolean {
+  const seatAddonPriceId = process.env.STRIPE_PRICE_SEAT_ADDON;
+  const itemPriceId = item?.price?.id;
+  if (seatAddonPriceId) {
+    return itemPriceId === seatAddonPriceId;
+  }
+  if (!seatAddonFallbackWarned) {
+    seatAddonFallbackWarned = true;
+    console.warn(
+      "[billing] STRIPE_PRICE_SEAT_ADDON not set — falling back to product-name string-match for seat-addon detection. Set the env var to remove this fallback."
+    );
+  }
   const product = item?.price?.product;
   const productName = typeof product === "string" ? "" : (product?.name || "");
   const lower = productName.toLowerCase();

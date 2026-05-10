@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useLocation, useSearch } from "wouter";
+import { Link, useLocation, useSearch } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,6 +20,11 @@ export default function RegisterPage() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
+  // Session 3 BUG 1 fix: inline error rendered under the email field
+  // when the server returns 409 (email already registered). Kept
+  // separate from the toast so a duplicate signup gets a persistent,
+  // in-context message + a "Sign in" link instead of a transient toast.
+  const [emailInUseError, setEmailInUseError] = useState(false);
   const { executeRecaptcha } = useGoogleReCaptcha();
 
   const params = new URLSearchParams(searchString);
@@ -77,8 +82,10 @@ export default function RegisterPage() {
         }),
       });
       if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.message || "Registration failed");
+        const data = await res.json().catch(() => ({}));
+        const err: any = new Error(data.message || "Registration failed");
+        err.status = res.status;
+        throw err;
       }
       return res.json();
     },
@@ -97,21 +104,39 @@ export default function RegisterPage() {
       // Trial branch: backend auto-logged the user in and returned the full
       // user object. Seed the auth cache so AppContent's gates evaluate
       // immediately without a flash of /login, then route to /welcome (Step 2).
-      // The verification email will fire from PATCH /api/auth/me on welcome
-      // submit — they haven't filled their profile yet so no verification email
-      // (no email exists yet to "check").
+      // Session 3 BUG 2 fix: do NOT invalidateQueries here — the seeded data
+      // is already correct. The previous invalidate triggered an immediate
+      // background refetch of /api/auth/user that occasionally hit a Vercel
+      // serverless instance whose session cookie hadn't propagated yet,
+      // returning 401, wiping the user, and dumping the new signup into the
+      // unauthenticated CatchAllRedirect (blank/redirect to /signup). The
+      // verification email will fire from PATCH /api/auth/me on welcome
+      // submit — they haven't filled their profile yet so no verification
+      // email (no email exists yet to "check").
       queryClient.setQueryData(["/api/auth/user"], data);
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
       setLocation("/welcome");
     },
-    onError: (error: Error) => {
+    onError: (error: any) => {
+      // Session 3 BUG 1 fix: 409 = email already registered. Show an
+      // inline error under the email input (with a Sign in link) instead
+      // of a generic toast — easier to spot, easier to act on.
+      if (error?.status === 409) {
+        setEmailInUseError(true);
+        return;
+      }
       toast({
         title: "Registration failed",
-        description: error.message,
+        description: error?.message || "Something went wrong",
         variant: "destructive",
       });
     },
   });
+
+  // Clear the inline 409 error as soon as the user edits the email field.
+  useEffect(() => {
+    if (emailInUseError) setEmailInUseError(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [email]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -388,9 +413,27 @@ export default function RegisterPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
-                  className="bg-white border-2 border-slate-300 focus:border-[#F09000] focus-visible:ring-0 focus-visible:ring-offset-0 shadow-none"
+                  aria-invalid={emailInUseError || undefined}
+                  aria-describedby={emailInUseError ? "email-error" : undefined}
+                  className={`bg-white border-2 ${emailInUseError ? "border-red-500 focus:border-red-500" : "border-slate-300 focus:border-[#F09000]"} focus-visible:ring-0 focus-visible:ring-offset-0 shadow-none`}
                   data-testid="input-email"
                 />
+                {emailInUseError && (
+                  <p
+                    id="email-error"
+                    className="text-sm text-red-600 dark:text-red-400"
+                    data-testid="text-email-in-use-error"
+                  >
+                    This email is already registered.{" "}
+                    <Link
+                      href="/login"
+                      className="font-bold text-[#F09000] hover:underline"
+                      data-testid="link-sign-in-instead"
+                    >
+                      Sign in instead
+                    </Link>
+                  </p>
+                )}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="password">Password</Label>

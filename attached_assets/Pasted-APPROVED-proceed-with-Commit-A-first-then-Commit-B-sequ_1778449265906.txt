@@ -1,0 +1,108 @@
+APPROVED — proceed with Commit A first, then Commit B sequentially.
+
+Commit grouping: A/B as proposed, with OPTION (b) for BUG 5 frontend.
+Rationale: Add Card must work between A and B in case Commit B is 
+delayed (end of stamina, unexpected issue). Throwaway 
+VITE_STRIPE_PRICE_MONTHLY env var is fine.
+
+=== Commit A — Critical Fixes ===
+
+BUG 1 — Email-in-use:
+- Server: lowercase email before lookup AND before insert/upsert in 
+  /api/register handler. Apply same lowercase in findOrCreateOAuthUser 
+  for symmetry.
+- Verify: existing users with mixed-case emails — what's the count? 
+  If < 10, just leave them; if more, propose a follow-up migration to 
+  normalize. Don't modify existing rows in this commit.
+- Client: detect 409 status specifically, set inline error state 
+  under email field, show "This email is already registered. Try 
+  logging in instead." with "Sign in instead" link → /login. Keep 
+  toast as secondary but the primary UX is the inline error.
+
+BUG 2 — Blank page:
+- Drop invalidateQueries call after setQueryData in register.tsx:104. 
+  Seeded data is already correct.
+- Add retry: 1 to useAuth query (defensive — single transient 401 
+  shouldn't wipe session).
+- Inspect CatchAllRedirect — confirm it doesn't render null while 
+  computing destination. Fix if needed.
+- Don't add console-log instrumentation. The defensive changes are 
+  harmless even if the actual bug is elsewhere. If after Commit A 
+  the blank page still happens on fresh signup, we'll instrument.
+
+BUG 4 — Banner cutoff:
+- Move <BillingBanner /> INSIDE the main content column (inside the 
+  inner flex flex-col flex-1 min-w-0 div, before <main>). Sidebar 
+  can never overlap it.
+
+BUG 5 — Stripe price IDs (Commit A scope):
+- Server side: introduce STRIPE_PRICE_SEAT_ADDON env var. Rewrite 
+  isSeatAddonItem in server/lib/billing.ts to compare priceId === 
+  process.env.STRIPE_PRICE_SEAT_ADDON instead of string-matching 
+  product name. Keep string-match as FALLBACK if env var is not set 
+  (graceful degradation) but log a warning. This addresses the 
+  pre-existing TECH_DEBT item.
+- Frontend (option b): replace hardcoded MONTHLY_PRICE_ID in 
+  App.tsx:46 AND settings.tsx:385 with import.meta.env.VITE_STRIPE_PRICE_MONTHLY. 
+  Throw at module load if not set so we catch missing env early.
+
+TS baseline 39, build green, dev workflow clean, architect review pass.
+
+After Commit A pushes (Vercel auto-promotes):
+- Grayson sets these Vercel env vars BEFORE testing:
+  * STRIPE_PRICE_SEAT_ADDON (server)
+  * VITE_STRIPE_PRICE_MONTHLY (frontend, triggers a Vercel rebuild)
+- Verify:
+  * Fresh signup → routes to /welcome (no blank page)
+  * Welcome wizard completes → /verify-email loads
+  * Email collision: try registering same email twice → inline error + 
+    Sign in link
+  * Mixed-case email: register Test@example.com, then try 
+    test@example.com → blocked
+  * Banner shows full text from left edge (no cutoff)
+  * Add Card → Stripe Checkout opens with $79/mo, no 500 error
+
+=== Commit B — UX + Polish (after A verified clean) ===
+
+BUG 3 — Verify-email alignment:
+- Restructure right column with flex flex-col justify-between:
+  * Top: "Logged in as ... Sign out" row (was already top-right but 
+    floating)
+  * Middle: flex-1 flex flex-col justify-center wrapping the heading + 
+    code input
+  * Bottom: "Wrong account? Sign out" link
+- Goal: midline of code input aligns with midline of "Almost there." 
+  headline on left card
+
+UX 6 — Plan picker via SubscribePage reuse:
+- BillingBanner "Add Card" CTA → setLocation("/subscribe") instead 
+  of direct Checkout
+- Settings.tsx "Add payment method" CTA → also route to /subscribe
+- Add "Maybe later" / "Back to dashboard" link on SubscribePage 
+  (currently gate-locked so it has no escape). Link visible only 
+  when accessLevel !== 'locked' (trialing users can dismiss; locked 
+  users still can't bypass).
+- Confirm SubscribePage's /api/create-checkout-session call preserves 
+  trial_end (it should via the Session 2 server logic, but verify)
+
+BUG 5 cleanup (Commit B scope):
+- Delete MONTHLY_PRICE_ID constants from App.tsx and settings.tsx 
+  (now unused)
+- Document in TECH_DEBT.md: VITE_STRIPE_PRICE_MONTHLY env var can be 
+  removed from Vercel after this commit deploys
+
+TS baseline 39, build green, architect review pass.
+
+After Commit B pushes:
+- Grayson removes VITE_STRIPE_PRICE_MONTHLY from Vercel env vars
+- Verify:
+  * Banner Add Card → /subscribe page with plan picker (monthly/annual 
+    toggle + seat selector)
+  * Pick monthly + 3 seats → Stripe Checkout with correct line items 
+    + trial_end set
+  * "Maybe later" link returns to dashboard
+  * Verify-email page: right column content midline aligned with left 
+    column headline
+
+Stop between commits and confirm A is verified on prod before 
+starting B. No migration. No new endpoints.

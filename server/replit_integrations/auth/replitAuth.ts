@@ -62,9 +62,11 @@ async function findOrCreateOAuthUser(opts: {
     return { user: restoreResult.user, isNewSignup: false };
   }
 
-  // 2. Match by email — link the provider id to the existing account
-  if (opts.email) {
-    const existing = await authStorage.getUserByEmail(opts.email);
+  // 2. Match by email — link the provider id to the existing account.
+  // Session 3 BUG 1 fix: normalize casing for symmetry with /api/register.
+  const normalizedEmail = opts.email ? opts.email.trim().toLowerCase() : null;
+  if (normalizedEmail) {
+    const existing = await authStorage.getUserByEmail(normalizedEmail);
     if (existing) {
       const restoreResult = await restoreAccountIfWithinGrace(existing);
       if (restoreResult.expired) {
@@ -81,7 +83,7 @@ async function findOrCreateOAuthUser(opts: {
   }
 
   // 3. Brand new user. Honor invite token if present, else create a new team.
-  if (!opts.email) {
+  if (!normalizedEmail) {
     throw new Error("Email permission was not granted by the OAuth provider");
   }
 
@@ -100,7 +102,7 @@ async function findOrCreateOAuthUser(opts: {
     if (!invitation || new Date() > invitation.expiresAt) {
       throw new Error("Invalid or expired invitation");
     }
-    if (invitation.email.toLowerCase() !== opts.email.toLowerCase()) {
+    if (invitation.email.toLowerCase() !== normalizedEmail) {
       throw new Error("Email does not match invitation");
     }
     accountId = invitation.accountId;
@@ -125,7 +127,7 @@ async function findOrCreateOAuthUser(opts: {
     // a 14-day no-card trial, mirroring the /api/register trial branch.
     initialSubscriptionStatus = "trialing";
     initialTrialEndsAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
-    const accountName = [opts.firstName, opts.lastName].filter(Boolean).join(" ") || opts.email;
+    const accountName = [opts.firstName, opts.lastName].filter(Boolean).join(" ") || normalizedEmail;
     const [account] = await db.insert(accounts).values({
       name: accountName + "'s Team",
       subscriptionStatus: initialSubscriptionStatus,
@@ -136,7 +138,7 @@ async function findOrCreateOAuthUser(opts: {
   }
 
   const created = await authStorage.upsertUser({
-    email: opts.email,
+    email: normalizedEmail,
     firstName: opts.firstName || null,
     lastName: opts.lastName || null,
     profileImageUrl: opts.profileImageUrl || null,
@@ -437,11 +439,16 @@ export async function setupAuth(app: Express) {
         return res.status(400).json({ message: "You must accept the Terms of Service and Privacy Policy to continue." });
       }
 
-      const { email, password, companyName, inviteToken } = req.body;
+      const { email: rawEmail, password, companyName, inviteToken } = req.body;
 
-      if (!email || !password) {
+      if (!rawEmail || !password) {
         return res.status(400).json({ message: "Email and password are required" });
       }
+
+      // Session 3 BUG 1 fix: normalize email casing so the duplicate check
+      // and the eventual users.email row are case-insensitive (matches how
+      // login + invite-email comparisons already lowercase).
+      const email = String(rawEmail).trim().toLowerCase();
 
       if (password.length < 8) {
         return res.status(400).json({ message: "Password must be at least 8 characters" });

@@ -29,7 +29,13 @@ export function useAuth() {
   const { data: user, isLoading } = useQuery<User | null>({
     queryKey: ["/api/auth/user"],
     queryFn: fetchUser,
-    retry: false,
+    // Session 3 BUG 2 defense: a single transient 401 (e.g., Vercel
+    // serverless cold-start cookie race right after /api/register) used
+    // to wipe the seeded user object and bounce the freshly-signed-up
+    // user out to the unauthenticated <Switch>. One retry recovers
+    // before that happens; fetchUser already returns null (not throws)
+    // on a real 401, so retries only fire on transport errors.
+    retry: 1,
     staleTime: 1000 * 60 * 5,
   });
 

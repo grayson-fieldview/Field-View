@@ -41,9 +41,21 @@ import TasksPage from "@/pages/tasks";
 import AnalyticsPage from "@/pages/analytics";
 import CalendarPage from "@/pages/calendar";
 
-// Session 2 trial-flow rework: monthly default plan for direct-Checkout
-// CTAs from the trial banner. Annual upgrades stay in Settings → Billing.
-const MONTHLY_PRICE_ID = "price_1TMaPlR1AnIJLf9qcJsFWa1w";
+// Session 3 BUG 5 fix: monthly default plan for the direct-Checkout
+// banner CTA. Sourced from VITE_STRIPE_PRICE_MONTHLY (set in Vercel env)
+// instead of the previous hardcoded `price_1TMaPl…` which did not exist
+// in the live Stripe account and 500'd on POST /api/create-checkout-session.
+// Throw at module load so a missing env var is caught immediately at boot
+// rather than at the moment a user clicks "Add Card".
+// Note: in Session 3 Commit B this CTA will be replaced by a route to
+// /subscribe (plan picker), at which point this env var becomes unused
+// and can be removed from Vercel.
+const MONTHLY_PRICE_ID = import.meta.env.VITE_STRIPE_PRICE_MONTHLY as string;
+if (!MONTHLY_PRICE_ID) {
+  throw new Error(
+    "VITE_STRIPE_PRICE_MONTHLY is not set. Add it to your Vercel/Replit environment so the trial banner Add Card CTA can open Stripe Checkout."
+  );
+}
 
 function BillingBanner() {
   const { user } = useAuth();
@@ -190,7 +202,6 @@ function AuthenticatedLayout() {
 
   return (
     <div className="flex flex-col h-screen w-full overflow-hidden">
-      <BillingBanner />
       <SidebarProvider
         style={style as React.CSSProperties}
         className="!min-h-0 flex-1"
@@ -202,6 +213,15 @@ function AuthenticatedLayout() {
             <SidebarTrigger data-testid="button-mobile-menu" />
             <span className="text-sm font-medium text-foreground">Field View</span>
           </div>
+          {/* Session 3 BUG 4 fix: BillingBanner moved INSIDE the main
+              content column (after AppSidebar, inside the flex-1 main
+              column) so the sidebar — which uses position:fixed in its
+              mobile/collapsed state — can never overlap the banner's
+              left edge. Previously the banner was a sibling of
+              SidebarProvider, which let the sidebar's fixed-position
+              chrome overlay it on smaller viewports, hiding the
+              "Your trial ends in X days. Add a" prefix. */}
+          <BillingBanner />
           <main className="flex-1 overflow-auto">
             <Switch>
               <Route path="/" component={DashboardPage} />
