@@ -1,0 +1,81 @@
+Goal: Templates UI for reports — Stage 4 (final substantive reports 
+stage). Three surfaces: Templates Tab list/CRUD, template editor 
+(reuse /reports/:id/edit pattern), apply-template flow on report 
+creation (global + project-detail).
+
+Two-phase as usual. STOP between phases for approval.
+
+=== Phase 1 — DIAGNOSE only, no code changes ===
+
+Schema & backend
+1. Show me the report_templates table definition in shared/schema.ts. 
+   Confirm: id, accountId, title, templateConfig jsonb, createdById, 
+   createdAt, updatedAt. The Stage 1 migration created it; nothing 
+   else has touched it.
+2. templateConfig shape — propose what JSON structure it should hold:
+   { cover: { description?: string, coverConfig: {...6 toggles...} },
+     sections: Array<{ title: string, summary?: string, sortOrder: number }> }
+   No photos (project-specific). Confirm this matches the data we'd 
+   need to instantiate a report.
+3. Look for existing template-related routes in server/routes.ts. 
+   Stage 1 removed the old /api/report-templates endpoints. Confirm 
+   none currently exist for the new structured shape.
+4. storage.ts — confirm no template methods exist yet for the new 
+   structured shape. We'll add: getTemplates(accountId), 
+   getTemplate(id), createTemplate(...), updateTemplate(...), 
+   deleteTemplate(...).
+
+Frontend
+5. Show me the current Templates Tab placeholder in 
+   client/src/pages/reports.tsx. What renders, what state, what we 
+   replace.
+6. Show me the editor structure of client/src/pages/report-edit.tsx — 
+   specifically the parts that handle Cover pane and Section panes. 
+   For the template editor we want to reuse the same UI minus the 
+   photo picker (templates have no photos). 
+   
+   Two architectural options to consider:
+   (a) Add a `mode: "report" | "template"` prop to the existing 
+       page, branch on photo-picker visibility and a few labels
+   (b) Create a separate /templates/:id/edit route + new page 
+       template-edit.tsx that imports/composes the cover + section 
+       UI components (would require extracting them from report-edit.tsx)
+   
+   (a) is faster and simpler if the divergence is small. (b) is 
+   cleaner if we expect templates to evolve differently. Recommend 
+   one based on what you find when you read the editor file.
+7. Apply-template flow — show me the existing Create Report 
+   dialogs (global ReportFormDialog + project-detail inline card). 
+   Where does a template selector slot in?
+
+Permissions
+8. Confirm role-based access for templates. Recommend: 
+   - List templates: any user with read access (so they can pick 
+     when creating a report)
+   - Create/edit/delete templates: Admin/Manager only (matches 
+     branding pattern, keeps templates curated)
+   Approve or push back.
+
+Output: numbered findings. Then propose Phase 2 plan covering:
+
+- New routes: GET /api/report-templates, GET /api/report-templates/:id, 
+  POST /api/report-templates, PATCH /api/report-templates/:id, 
+  DELETE /api/report-templates/:id (auth chain per #8)
+- New endpoint: POST /api/projects/:projectId/reports with 
+  optional templateId in body — instantiates template structure into 
+  the new report. Server-side: load template, create report, create 
+  sections from template.sections, return the new report. Same 
+  endpoint signature; new optional field.
+- New storage methods in server/storage.ts
+- Template editor approach (option a or b)
+- Templates Tab functional UI
+- Apply-template selector in Create Report dialogs
+- Migration considerations: NONE (table exists, just no rows)
+
+Out of scope (defer):
+- "Save as template" from an existing report (nice-to-have, separate 
+  PR)
+- Template categories/folders
+- Public/shared template library across accounts
+
+No code changes in Phase 1. Just findings + Phase 2 plan.
