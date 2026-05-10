@@ -1,0 +1,93 @@
+Goal: Stage 3 — Share link + public viewer for reports. Token-based 
+public read access, mirrors existing shared_galleries pattern. Anyone 
+with the link can view; no auth required for the viewer; sharer can 
+revoke at any time by regenerating or removing the token.
+
+Two-phase. STOP between phases for approval.
+
+=== Phase 1 — DIAGNOSE only, no code changes ===
+
+1. Show me the existing shared_galleries pattern in full:
+   - Schema definition (shared/schema.ts) — table structure, token 
+     column type/format, foreign key to project, indexes
+   - Storage methods (createSharedGallery, getSharedGalleryByToken, 
+     revokeSharedGallery if exists)
+   - Server route handlers — both the PUBLIC viewer endpoint (no auth) 
+     and any management endpoints (create/revoke)
+   - Frontend share UI — where it lives, what it looks like, how the 
+     link is copied, dialog/modal pattern
+   This is the template we mirror for reports.
+
+2. Schema choice: storing the share token. Two options:
+   (a) Add a share_token column directly on reports table (one token 
+       per report, regenerating replaces it)
+   (b) Create a report_shares table with FK to reports (allows token 
+       history, multiple tokens per report — overkill for our needs)
+   
+   Recommend (a) unless shared_galleries went with (b) and there's 
+   precedent worth following. Token format: random URL-safe string 
+   (e.g. nanoid 16 chars). Migration approach: nullable column with 
+   IF NOT EXISTS guard.
+
+3. Public viewer route:
+   - Path: /report/<token> on app.field-view.com
+   - Auth: NONE on this route — token IS the access grant
+   - Render: HTML view of the report (cover + sections + photos with 
+     captions/descriptions), with branding (logo, name, address) 
+     pulled from accounts table
+   - PDF download button on the viewer page that hits a public 
+     /api/public/reports/<token>/pdf endpoint (which generates the 
+     same PDF as the authenticated endpoint, using token-based access 
+     instead of session auth)
+   
+   Reuse the existing PDF generation pipeline — same buildPdf.ts, 
+   same imagePipeline.ts. Just a different auth chain at the entry 
+   point.
+
+4. Share UI placement in editor:
+   - Top bar of /reports/:id/edit, between Save Draft and Generate PDF
+   - "Share" icon button (link/share icon)
+   - Click → dialog with two states:
+     * Not yet shared → "Generate shareable link" button → POST 
+       creates token → dialog updates to show the URL
+     * Already shared → URL displayed (read-only input + Copy button), 
+       "Revoke link" button below (destructive variant)
+   - Copy → clipboard, toast "Link copied"
+   - Revoke → confirm dialog → DELETE token → dialog returns to "not 
+     yet shared" state
+
+5. Permissions:
+   - Create share token: requireWriteAccess + verifyReportFullAccess 
+     (matches Generate PDF — anyone with write access can share)
+   - Revoke: same auth chain
+   - Public viewer GET: no auth, token validation only
+   - Public PDF endpoint GET: no auth, token validation only
+
+6. Public viewer HTML rendering — propose component structure:
+   - Reuse the cover layout structure from CoverPage.tsx but as HTML 
+     (not @react-pdf/renderer)
+   - Mirror the body page structure: header (report name + date), 
+     sections with photos in a 2-col grid (or responsive single 
+     column on narrow screens), captions/descriptions, footer with 
+     branding
+   - Self-contained page (no app shell, no left sidebar) — public 
+     visitors shouldn't see Field View's nav
+   - Include a PDF download button up top
+   - SEO: noindex meta tag (don't want Google indexing private 
+     reports)
+
+Output findings + Phase 2 plan with file diff stat estimate. Migration 
+required for new column.
+
+=== Phase 2 — implement after my approval ===
+
+Standard. Migration follows HARD RULE (snapshot, whitelist Replit IP, 
+run migration, verify, then push, then unwhitelist). Single commit 
+for the code changes; the migration is run separately.
+
+Out of scope:
+- Token expiration (no expiry by design — revoke is the only end 
+  state)
+- Password-protected shares
+- View analytics (count of views, etc) — defer
+- Custom share-page branding beyond the existing account branding
