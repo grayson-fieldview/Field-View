@@ -63,8 +63,20 @@ export default function WelcomePage() {
       const res = await apiRequest("PATCH", "/api/auth/me", body);
       return res.json();
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/auth/user"] });
+    onSuccess: (data) => {
+      // Session 3 BUG 2 fix: apply Commit A's pattern from register.tsx —
+      // the PATCH response IS the updated user (full shape, with billing
+      // overlay + sanitize), so seed the cache directly. The previous
+      // invalidate→refetch shape raced Vercel cookie propagation and
+      // intermittently 401-wiped the user, dumping the freshly-completed
+      // signup into the unauthenticated CatchAllRedirect (blank screen
+      // until Cmd+Shift+R).
+      console.log("[welcome] submit success → setQueryData + navigate /verify-email", {
+        userId: data?.id,
+        profileCompletedAt: data?.profileCompletedAt,
+        emailVerified: data?.emailVerified,
+      });
+      qc.setQueryData(["/api/auth/user"], data);
       setLocation("/verify-email");
     },
     onError: (err: Error) => {

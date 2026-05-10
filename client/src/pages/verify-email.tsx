@@ -43,8 +43,18 @@ export default function VerifyEmailPage() {
       }
       return data;
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+    onSuccess: (data) => {
+      // Session 3 BUG 2 fix: apply Commit A's pattern from register.tsx —
+      // /api/verify-email-code now returns the full user (server patch,
+      // same commit) so we seed the auth cache directly instead of
+      // invalidate→refetch (which raced Vercel cookie propagation and
+      // intermittently wiped the user, blank-screening the post-verify
+      // navigation to /subscribe).
+      console.log("[verify-email] submit success → setQueryData + navigate /subscribe", {
+        userId: data?.id,
+        emailVerified: data?.emailVerified,
+      });
+      queryClient.setQueryData(["/api/auth/user"], data);
       setLocation("/subscribe");
     },
     onError: (err: any) => {

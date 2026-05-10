@@ -14,6 +14,7 @@ import { eq, and, isNull, isNotNull } from "drizzle-orm";
 import { passwordResetTokens, users, accounts, invitations, type User } from "@shared/models/auth";
 import { sendPasswordResetEmail, sendEmailVerificationEmail, sendWelcomeEmail, sendAccountRestoredEmail } from "../../services/email";
 import { getAccountBilling, overlayAccountBillingOnUser, computeAccessLevel } from "../../lib/billing";
+import { sanitizeUserForViewer } from "../../lib/userVisibility";
 import { verifyRecaptchaToken } from "../../services/recaptcha";
 import { CURRENT_TERMS_VERSION } from "@shared/constants";
 import {
@@ -821,7 +822,13 @@ export async function setupAuth(app: Express) {
       }
 
       if (user.emailVerified) {
-        return res.status(200).json({ already_verified: true });
+        // Session 3 BUG 2 fix: return the full user (matching PATCH /api/auth/me
+        // and /api/register shapes) so the client can setQueryData this response
+        // directly into the auth cache instead of invalidate→refetch (which
+        // races with Vercel session-cookie propagation and wipes the user).
+        const { password: _pw, ...safeUser } = user as any;
+        const safeUserWithBilling = await overlayAccountBillingOnUser(safeUser, req);
+        return res.status(200).json(sanitizeUserForViewer(safeUserWithBilling, user));
       }
 
       if (!user.verificationCode) {
@@ -863,16 +870,30 @@ export async function setupAuth(app: Express) {
 
       const [verifiedUser] = await db.select().from(users).where(eq(users.id, user.id));
       if (!verifiedUser) {
-        return res.json({ verified: true });
+        return res.status(500).json({ error: "user_not_found_after_verify" });
       }
 
-      req.login(verifiedUser, (err) => {
+      // Session 3 BUG 2 fix: respond with the full user object as the
+      // top-level body (matching /api/register and PATCH /api/auth/me)
+      // so the client can setQueryData(["/api/auth/user"], data) directly
+      // and skip the invalidate→refetch race that Commit A identified.
+      // overlayAccountBillingOnUser + sanitizeUserForViewer match GET
+      // /api/auth/user's shape so the cache seed is byte-equivalent.
+      req.login(verifiedUser, async (err) => {
         if (err) {
           console.error("[verify-email-code] req.login failed:", err);
-          return res.json({ verified: true });
+          // Even on relogin failure we still return the user — the client
+          // already had a valid session before the verify call, and the
+          // existing session cookie remains intact.
         }
-        const { password: _, ...safeUser } = verifiedUser;
-        res.json({ verified: true, user: safeUser });
+        try {
+          const { password: _pw, ...safeUser } = verifiedUser as any;
+          const safeUserWithBilling = await overlayAccountBillingOnUser(safeUser, req);
+          res.json(sanitizeUserForViewer(safeUserWithBilling, verifiedUser));
+        } catch (overlayErr) {
+          console.error("[verify-email-code] overlay/sanitize failed:", overlayErr);
+          res.status(500).json({ error: "post_verify_serialization_failed" });
+        }
       });
     } catch (error) {
       console.error("Verify email code error:", error);

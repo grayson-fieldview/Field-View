@@ -1,0 +1,48 @@
+Apply the Commit A pattern from register.tsx to welcome.tsx and verify-email.tsx. Both pages still use the broken invalidateQueries + setLocation shape that Commit A fixed for register — they're the source of the blank-page race on the welcome → verify-email and verify-email → subscribe transitions. This is a surgical change. Do not refactor anything else, do not touch JSX, do not modify AppContent's gate or useAuth.
+Pre-flight check (do this BEFORE editing either client file):
+Open the server route handlers for PATCH /api/auth/me and POST /api/verify-email-code (likely in server/routes.ts). Confirm both currently return the full updated user object in the response body — the same shape /api/register returns on its trial branch. If either returns something else (e.g. { success: true }, { user: ... } wrapped, or a partial object), patch the route first to select the user record after the update and return it as the top-level JSON body, matching register's shape exactly. Same column set, same casing. Paste a diff of any server change you make before continuing to the client.
+File 1 — client/src/pages/welcome.tsx:
+Find the submit mutation. Its mutationFn already does return res.json() and the onSuccess discards it. Change onSuccess from:
+jsonSuccess: () => {
+  qc.invalidateQueries({ queryKey: ["/api/auth/user"] });
+  setLocation("/verify-email");
+},
+to:
+jsonSuccess: (data) => {
+  console.log("[welcome] submit success → setQueryData + navigate /verify-email", {
+    userId: data?.id,
+    profileCompletedAt: data?.profileCompletedAt,
+    emailVerified: data?.emailVerified,
+  });
+  qc.setQueryData(["/api/auth/user"], data);
+  setLocation("/verify-email");
+},
+File 2 — client/src/pages/verify-email.tsx:
+Find the submitCode mutation. Same pattern — its mutationFn already returns data from await res.json(). Change onSuccess from:
+jsonSuccess: () => {
+  queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+  setLocation("/subscribe");
+},
+to:
+jsonSuccess: (data) => {
+  console.log("[verify-email] submit success → setQueryData + navigate /subscribe", {
+    userId: data?.id,
+    emailVerified: data?.emailVerified,
+  });
+  queryClient.setQueryData(["/api/auth/user"], data);
+  setLocation("/subscribe");
+},
+Guardrails:
+
+Do NOT touch register.tsx. It's already correct (Commit A).
+Do NOT touch AppContent's gate logic or useAuth — they aren't the bug, they're the victim of the bug.
+Keep the existing [welcome] render-log and [appcontent] instrumentation in place; we want them on post-fix to confirm the race is gone in prod.
+The two new console.log lines I'm adding to onSuccess are intentional diagnostic adds, leave them.
+
+After the changes, paste:
+
+A diff of any server route changes (or "no server change needed, both routes already return the full user").
+A diff of welcome.tsx.
+A diff of verify-email.tsx.
+
+Do not push yet. I want to review all three diffs before commit.
