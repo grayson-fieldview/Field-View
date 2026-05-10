@@ -31,6 +31,15 @@ export default function WelcomePage() {
   const { toast } = useToast();
   const qc = useQueryClient();
 
+  // [DIAG] Session 3 BUG 2 instrumentation — log every render with user prop
+  console.log("[welcome] render", {
+    hasUser: !!user,
+    userId: (user as any)?.id ?? null,
+    profileCompletedAt: (user as any)?.profileCompletedAt ?? null,
+    emailVerified: (user as any)?.emailVerified ?? null,
+    role: (user as any)?.role ?? null,
+  });
+
   const isAdmin = (user as any)?.role === "admin";
 
   const [firstName, setFirstName] = useState((user as any)?.firstName ?? "");

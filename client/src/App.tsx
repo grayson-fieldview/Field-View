@@ -295,13 +295,28 @@ function TrialExpiredToastBridge() {
 
 function CatchAllRedirect() {
   const search = useSearch();
+  const [loc] = useLocation();
   const target = search ? `/signup?${search}` : `/signup`;
+  // [DIAG] Session 3 BUG 2 instrumentation
+  console.log("[catchall] render", { fromLocation: loc, redirectingTo: target });
   return <Redirect to={target} />;
 }
 
 function AppContent() {
   const { user, isLoading } = useAuth();
   const [location] = useLocation();
+
+  // [DIAG] Session 3 BUG 2 instrumentation — every render of the auth gate
+  console.log("[appcontent] render", {
+    location,
+    isLoading,
+    hasUser: !!user,
+    userId: (user as any)?.id ?? null,
+    profileCompletedAt: (user as any)?.profileCompletedAt ?? null,
+    emailVerified: (user as any)?.emailVerified ?? null,
+    accessLevel: (user as any)?.accessLevel ?? null,
+    subscriptionStatus: (user as any)?.subscriptionStatus ?? null,
+  });
 
   if (isLoading) {
     return (
@@ -316,6 +331,7 @@ function AppContent() {
   }
 
   if (!user) {
+    console.log("[appcontent] gate=unauthenticated", { location });
     return (
       <Switch>
         <Route path="/login" component={LoginPage} />
@@ -334,17 +350,32 @@ function AppContent() {
   // the dashboard. Invitees have profileCompletedAt set at /api/register time
   // and skip this entirely.
   if (!(user as any).profileCompletedAt) {
-    if (location !== "/welcome") return <Redirect to="/welcome" />;
+    if (location !== "/welcome") {
+      console.log("[appcontent] gate=needs-welcome → redirect /welcome", { location });
+      return <Redirect to="/welcome" />;
+    }
+    console.log("[appcontent] gate=needs-welcome → render WelcomePage");
     return <WelcomePage />;
   }
-  if (location === "/welcome") return <Redirect to="/" />;
+  if (location === "/welcome") {
+    console.log("[appcontent] gate=profile-done & on /welcome → redirect /");
+    return <Redirect to="/" />;
+  }
 
   if (!(user as any).emailVerified) {
-    if (location !== "/verify-email") return <Redirect to="/verify-email" />;
+    if (location !== "/verify-email") {
+      console.log("[appcontent] gate=needs-verify → redirect /verify-email", { location });
+      return <Redirect to="/verify-email" />;
+    }
+    console.log("[appcontent] gate=needs-verify → render VerifyEmailPage");
     return <VerifyEmailPage />;
   }
-  if ((user as any).emailVerified && location === "/verify-email") return <Redirect to="/" />;
+  if ((user as any).emailVerified && location === "/verify-email") {
+    console.log("[appcontent] gate=verified & on /verify-email → redirect /");
+    return <Redirect to="/" />;
+  }
 
+  console.log("[appcontent] gate=passthrough → SubscriptionGate");
   return <SubscriptionGate />;
 }
 

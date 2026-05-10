@@ -1,0 +1,46 @@
+BUG 2 (blank page after signup) is NOT FIXED. The invalidateQueries 
+race hypothesis was wrong — the defensive changes (drop 
+invalidateQueries, add retry: 1) shipped in Commit A and the bug 
+still reproduces. User signs up, gets blank page at /welcome (or 
+wherever), has to Cmd+Shift+R to see the verification page.
+
+Stop guessing. Instrument properly.
+
+Add console.log instrumentation across the signup → welcome → verify 
+flow:
+
+1. register.tsx onSuccess: log "[register] success, navigating to 
+   /welcome", log user object received from server
+2. App.tsx AppContent or wherever the auth gate lives: log every 
+   render with current path (wouter location), user value, 
+   profileCompletedAt, accessLevel
+3. WelcomePage component: log "[welcome] mount", log user prop
+4. useAuth hook: log every state transition (loading, success, error, 
+   401)
+5. queryClient: log every query that fires after signup with status 
+   and timing
+6. CatchAllRedirect: log when it renders, what location it sees, what 
+   it redirects to
+
+Frame the logs with prefixes ([register], [auth], [welcome], etc.) 
+so they're filterable.
+
+This is a single-purpose diagnostic commit. No fixes yet. Push it 
+to prod (auto-promotes), Grayson will reproduce the blank page with 
+DevTools console open and paste the full log output.
+
+ALSO during this diagnostic, check:
+- Does Field View use a service worker? grep "serviceWorker" / 
+  "navigator.serviceWorker" / "workbox" / "vite-plugin-pwa" in the 
+  client codebase
+- Is there a lazy-loaded chunk that could fail to load? grep "lazy(" 
+  in client/src
+- Is throw-at-module-load on VITE_STRIPE_PRICE_MONTHLY conditional 
+  (only throws if undefined) or always throws even when set? Test by 
+  reading the actual code and confirming the throw is `if 
+  (!import.meta.env.VITE_STRIPE_PRICE_MONTHLY) throw new Error(...)` 
+  (correct) vs unconditional (wrong, would crash always)
+
+Output: brief findings on the 3 environmental checks above, then ship 
+the diagnostic-only commit with console.logs. TS at 39 baseline. 
+No architect review needed for log-only changes — fast turnaround.

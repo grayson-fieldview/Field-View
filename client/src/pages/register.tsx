@@ -90,10 +90,21 @@ export default function RegisterPage() {
       return res.json();
     },
     onSuccess: (data) => {
+      // [DIAG] Session 3 BUG 2 instrumentation
+      console.log("[register] success", {
+        inviteToken: !!inviteToken,
+        userId: data?.id,
+        email: data?.email,
+        profileCompletedAt: data?.profileCompletedAt,
+        emailVerified: data?.emailVerified,
+        accessLevel: data?.accessLevel,
+        subscriptionStatus: data?.subscriptionStatus,
+      });
       // Invitee branch: backend returned {message, email} (no auto-login —
       // they were emailed a verification link and must click it before
       // signing in cleanly). Send them to the "Check your email" landing.
       if (inviteToken) {
+        console.log("[register] invite branch → /login");
         toast({
           title: "Check your email",
           description: "We sent a 6-digit verification code. Sign in to verify your account.",
@@ -114,6 +125,7 @@ export default function RegisterPage() {
       // submit — they haven't filled their profile yet so no verification
       // email (no email exists yet to "check").
       queryClient.setQueryData(["/api/auth/user"], data);
+      console.log("[register] trial branch → setQueryData + navigate /welcome");
       setLocation("/welcome");
     },
     onError: (error: any) => {

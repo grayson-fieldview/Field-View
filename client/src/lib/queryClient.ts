@@ -89,3 +89,29 @@ export const queryClient = new QueryClient({
     },
   },
 });
+
+// [DIAG] Session 3 BUG 2 instrumentation — log every query lifecycle event
+// (fetch start, success, error). Cache-level subscription so it covers
+// queries fired by any component, not just useAuth.
+const queryStartTimes = new Map<string, number>();
+queryClient.getQueryCache().subscribe((event) => {
+  if (!event) return;
+  const key = JSON.stringify(event.query.queryKey);
+  if (event.type === "updated") {
+    const action: any = (event as any).action;
+    if (action?.type === "fetch") {
+      queryStartTimes.set(key, performance.now());
+      console.log("[query] fetch start", { key });
+    } else if (action?.type === "success") {
+      const t = queryStartTimes.get(key);
+      const dt = t ? Math.round(performance.now() - t) : null;
+      queryStartTimes.delete(key);
+      console.log("[query] success", { key, ms: dt });
+    } else if (action?.type === "error") {
+      const t = queryStartTimes.get(key);
+      const dt = t ? Math.round(performance.now() - t) : null;
+      queryStartTimes.delete(key);
+      console.log("[query] error", { key, ms: dt, error: String(action.error?.message ?? action.error) });
+    }
+  }
+});
