@@ -23,6 +23,65 @@ import bcrypt from "bcryptjs";
 import { Sentry } from "./lib/sentry";
 import { sendPushNotification } from "./lib/push";
 
+async function streamReportPdfById(id: number, res: any): Promise<void> {
+  const data = await storage.getReportForPdf(id);
+  if (!data) {
+    if (!res.headersSent) res.status(404).json({ message: "Report not found" });
+    return;
+  }
+  if (data.totalPhotos > 50) {
+    if (!res.headersSent) res.status(400).json({
+      message: `Report has ${data.totalPhotos} photos; PDF generation is capped at 50. Remove some photos and try again.`,
+    });
+    return;
+  }
+  const { buildReportPdfStream } = await import("./pdf/buildPdf");
+  const stream = await buildReportPdfStream({
+    report: {
+      title: data.report.title,
+      description: data.report.description,
+      coverConfig: data.report.coverConfig as any,
+      createdAt: data.report.createdAt,
+    },
+    account: {
+      name: data.account.name,
+      companyLogoUrl: data.account.companyLogoUrl,
+      companyLegalName: data.account.companyLegalName,
+      companyAddress: data.account.companyAddress,
+    },
+    creator: data.creator,
+    sections: data.sections.map((s) => ({
+      id: s.id,
+      title: s.title,
+      summary: s.summary,
+      photos: s.photos.map((p) => ({
+        id: p.id,
+        s3Key: extractS3KeyFromUrl(p.media.url),
+        caption: p.caption,
+        description: p.description,
+      })),
+    })),
+    coverPhotoUrl: data.coverPhoto?.url ?? null,
+    totalPhotos: data.totalPhotos,
+  });
+  const slug =
+    (data.report.title || "")
+      .replace(/[^a-z0-9]+/gi, "-")
+      .toLowerCase()
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 50) || "report";
+  const dateStr = new Date().toISOString().slice(0, 10);
+  const filename = `${slug}-${dateStr}.pdf`;
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  res.setHeader("Cache-Control", "no-store");
+  stream.on("error", (err: Error) => {
+    console.error("[reports/pdf] stream error:", err);
+    res.destroy();
+  });
+  stream.pipe(res);
+}
+
 async function verifyProjectAccess(projectId: number, accountId: string): Promise<boolean> {
   const project = await storage.getProject(projectId);
   return !!project && project.accountId === accountId;
@@ -1455,60 +1514,117 @@ export async function registerRoutes(
     try {
       const id = parseInt(req.params.id as string);
       if (!(await verifyReportFullAccess(req, id)).ok) return res.status(403).json({ message: "Access denied" });
-      const data = await storage.getReportForPdf(id);
+      await streamReportPdfById(id, res);
+    } catch (error) {
+      console.error("[reports/pdf] error:", error);
+      if (!res.headersSent) res.status(500).json({ message: "Failed to generate PDF" });
+      else res.destroy();
+    }
+  });
+
+  // Generate or regenerate a public share token for a report.
+  app.post("/api/reports/:id/share", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid id" });
+      if (!(await verifyReportFullAccess(req, id)).ok) return res.status(403).json({ message: "Access denied" });
+      const token = crypto.randomBytes(16).toString("base64url");
+      const updated = await storage.setReportShareToken(id, token);
+      if (!updated) return res.status(404).json({ message: "Report not found" });
+      res.json({ shareToken: token });
+    } catch (error) {
+      console.error("[reports/share] create error:", error);
+      res.status(500).json({ message: "Failed to create share link" });
+    }
+  });
+
+  // Revoke an existing share token.
+  app.delete("/api/reports/:id/share", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid id" });
+      if (!(await verifyReportFullAccess(req, id)).ok) return res.status(403).json({ message: "Access denied" });
+      const updated = await storage.setReportShareToken(id, null);
+      if (!updated) return res.status(404).json({ message: "Report not found" });
+      res.json({ shareToken: null });
+    } catch (error) {
+      console.error("[reports/share] revoke error:", error);
+      res.status(500).json({ message: "Failed to revoke share link" });
+    }
+  });
+
+  // Public viewer — no auth, token is the access grant.
+  app.get("/api/public/reports/:token", async (req, res) => {
+    try {
+      const token = String(req.params.token || "");
+      if (!token) return res.status(404).json({ message: "Report not found" });
+      const row = await storage.getReportByShareToken(token);
+      if (!row) return res.status(404).json({ message: "Report not found" });
+      const data = await storage.getReportForPdf(row.id);
       if (!data) return res.status(404).json({ message: "Report not found" });
-      if (data.totalPhotos > 50) {
-        return res.status(400).json({
-          message: `Report has ${data.totalPhotos} photos; PDF generation is capped at 50. Remove some photos and try again.`,
-        });
-      }
-      const { buildReportPdfStream } = await import("./pdf/buildPdf");
-      const stream = await buildReportPdfStream({
+
+      const sections = await Promise.all(
+        data.sections.map(async (s) => ({
+          id: s.id,
+          title: s.title,
+          summary: s.summary,
+          sortOrder: s.sortOrder,
+          photos: await presignMediaUrls(
+            s.photos.map((p) => ({
+              id: p.id,
+              url: p.media.url,
+              caption: p.caption,
+              description: p.description,
+              sortOrder: p.sortOrder,
+            })),
+          ),
+        })),
+      );
+
+      const coverPhotoPresigned = data.coverPhoto
+        ? (await presignMediaUrls([{ url: data.coverPhoto.url }]))[0].url
+        : null;
+
+      const rawLogo = data.account.companyLogoUrl;
+      const logoKey = rawLogo && isS3Url(rawLogo) ? extractS3KeyFromUrl(rawLogo) : null;
+      const companyLogoUrl = logoKey ? await getPresignedUrl(logoKey) : rawLogo;
+
+      res.json({
         report: {
+          id: data.report.id,
           title: data.report.title,
           description: data.report.description,
-          coverConfig: data.report.coverConfig as any,
+          coverConfig: data.report.coverConfig,
           createdAt: data.report.createdAt,
+          status: data.report.status,
         },
+        project: { name: data.project.name, address: data.project.address },
         account: {
           name: data.account.name,
-          companyLogoUrl: data.account.companyLogoUrl,
+          companyLogoUrl,
           companyLegalName: data.account.companyLegalName,
           companyAddress: data.account.companyAddress,
         },
         creator: data.creator,
-        sections: data.sections.map((s) => ({
-          id: s.id,
-          title: s.title,
-          summary: s.summary,
-          photos: s.photos.map((p) => ({
-            id: p.id,
-            s3Key: extractS3KeyFromUrl(p.media.url),
-            caption: p.caption,
-            description: p.description,
-          })),
-        })),
-        coverPhotoUrl: data.coverPhoto?.url ?? null,
-        totalPhotos: data.totalPhotos,
+        coverPhotoUrl: coverPhotoPresigned,
+        sections,
       });
-      const slug =
-        (data.report.title || "")
-          .replace(/[^a-z0-9]+/gi, "-")
-          .toLowerCase()
-          .replace(/^-+|-+$/g, "")
-          .slice(0, 50) || "report";
-      const dateStr = new Date().toISOString().slice(0, 10);
-      const filename = `${slug}-${dateStr}.pdf`;
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-      res.setHeader("Cache-Control", "no-store");
-      stream.on("error", (err) => {
-        console.error("[reports/pdf] stream error:", err);
-        res.destroy();
-      });
-      stream.pipe(res);
     } catch (error) {
-      console.error("[reports/pdf] error:", error);
+      console.error("[public-reports] get error:", error);
+      res.status(500).json({ message: "Failed to load report" });
+    }
+  });
+
+  // Public PDF — no auth, token is the access grant.
+  app.get("/api/public/reports/:token/pdf", async (req, res) => {
+    try {
+      const token = String(req.params.token || "");
+      if (!token) return res.status(404).json({ message: "Report not found" });
+      const row = await storage.getReportByShareToken(token);
+      if (!row) return res.status(404).json({ message: "Report not found" });
+      await streamReportPdfById(row.id, res);
+    } catch (error) {
+      console.error("[public-reports] pdf error:", error);
       if (!res.headersSent) res.status(500).json({ message: "Failed to generate PDF" });
       else res.destroy();
     }

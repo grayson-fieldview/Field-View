@@ -1,0 +1,85 @@
+APPROVED. Proceed to Phase 2.
+
+Confirmations:
+- Token: crypto.randomBytes(16).toString("base64url") (~22 chars)
+- No gallery revoke (out of scope)
+- Public viewer 0-section state: render cover + "This report has no 
+  content yet" friendly card
+
+Implementation notes:
+
+1. Migration HARD RULE applies. After commit, the sequence is mine:
+   - RDS snapshot via AWS Console
+   - Whitelist Replit IP on RDS security group
+   - Run migration script from Replit:
+     ALLOW_PROD_MIGRATION=yes npx tsx script/migrations/migrate_session38_share_tokens.ts
+   - Verify column + index in TablePlus
+   - Push code from Git pane
+   - Vercel auto-promote deploys it
+   - Un-whitelist Replit IP
+
+   Migration script must follow the session22_timesheets template: 
+   transaction wrapper, RDS host guard, ALLOW_PROD_MIGRATION=yes gate, 
+   IF NOT EXISTS guards, post-commit verification of column existence + 
+   index existence.
+
+2. PDF helper extraction (your sequencing step 3) is the highest-risk 
+   refactor. Verify both auth path and public path produce identical 
+   PDFs. After the extraction, run the existing auth path (Generate 
+   PDF in editor) once before adding the public path.
+
+3. Public viewer SEO: <meta name="robots" content="noindex,nofollow"> 
+   via useEffect injecting into document.head. Also include 
+   document.title = `${report.title} — Field View` for browser 
+   tab clarity.
+
+4. "Download PDF" button on viewer: opens /api/public/reports/:token/pdf 
+   in same tab (browser handles download via Content-Disposition: 
+   attachment header, same as authenticated PDF endpoint). NOT a 
+   blob fetch (would hold the PDF in browser memory unnecessarily).
+
+5. Copy-to-clipboard pattern: navigator.clipboard.writeText with 
+   toast on success. Fallback for older browsers via 
+   document.execCommand('copy') on a hidden input — but only if you 
+   already have a fallback elsewhere in the codebase. If this is the 
+   first clipboard usage in the app, just use navigator.clipboard 
+   without fallback (modern browsers all have it).
+
+6. Public report page Title bar should NOT include any "Edit" or 
+   "Share" actions — viewers aren't editors. Just title + Download 
+   PDF.
+
+7. TS baseline 34, do NOT drift. ~620 LOC across 7 files is the 
+   largest single PR all session — verify TS count after each 
+   sequencing step, not just at the end.
+
+Verify before push:
+- npx tsc --noEmit count is 34
+- npm run build green
+- Dev workflow boots clean
+- Migration script runs cleanly against dev DB FIRST (not prod) — 
+  use Neon as a smoke test, then prod RDS
+
+Manual smoke test on prod after migration + push + auto-promote:
+- Open existing report → editor → Share button (new) appears between 
+  Save Draft and Generate PDF
+- Click Share → dialog "Generate shareable link" → click → URL appears
+- Copy link → toast → paste in incognito → loads as public viewer 
+  (no login)
+- Public viewer shows cover, sections, photos, footer, Download PDF 
+  button
+- Click Download PDF in viewer → PDF downloads, looks identical to 
+  authenticated PDF
+- Back to editor → Share button now reads "Manage share" or shows 
+  shared state in dialog
+- Click Revoke → confirm → token cleared
+- Reload incognito viewer → "Report not found. This link may have 
+  been revoked."
+- Re-share → new token generated (different from prior)
+- Empty-state test: create a fresh report with 0 sections → share → 
+  viewer shows cover + "This report has no content yet" card
+- SEO check: view-source on viewer → confirms <meta name="robots" 
+  content="noindex,nofollow">
+- Cross-account check: a token from one account viewable in 
+  incognito (token is the auth, no account scoping) — that IS the 
+  design, just confirm it works

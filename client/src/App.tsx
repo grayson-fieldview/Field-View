@@ -34,6 +34,7 @@ import ReportsPage from "@/pages/reports";
 import ReportEditPage from "@/pages/report-edit";
 import TemplateEditPage from "@/pages/template-edit";
 import GalleryPage from "@/pages/gallery";
+import PublicReportPage from "@/pages/public-report";
 import TasksPage from "@/pages/tasks";
 import AnalyticsPage from "@/pages/analytics";
 import CalendarPage from "@/pages/calendar";
@@ -229,6 +230,9 @@ function App() {
           <Switch>
             <Route path="/gallery/:token">
               {(params) => <GalleryPage token={params.token} />}
+            </Route>
+            <Route path="/report/:token">
+              {(params) => <PublicReportPage token={params.token} />}
             </Route>
             <Route>
               <AppContent />

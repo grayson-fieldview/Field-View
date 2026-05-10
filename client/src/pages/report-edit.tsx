@@ -25,11 +25,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { ArrowLeft, FileText, FileDown, Loader2, Plus, Save, Trash2 } from "lucide-react";
+import { ArrowLeft, FileText, FileDown, Link2, Loader2, Plus, Save, Trash2 } from "lucide-react";
 import type { Media, Report, ReportSection } from "@shared/schema";
 import { CoverEditor } from "@/components/report-editor/cover-editor";
 import { SectionEditor } from "@/components/report-editor/section-editor";
 import { DEFAULT_COVER, type CoverConfig, type Section } from "@/components/report-editor/types";
+import ReportShareDialog from "@/components/report-share-dialog";
 
 type Pane = { kind: "cover" } | { kind: "section"; id: number };
 
@@ -67,6 +68,7 @@ export default function ReportEditPage({ id }: { id: string }) {
   const [pickedCoverId, setPickedCoverId] = useState<number | null>(null);
   const [confirmDeleteSection, setConfirmDeleteSection] = useState<number | null>(null);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+  const [isShareOpen, setIsShareOpen] = useState(false);
   const [confirmDeletePhoto, setConfirmDeletePhoto] = useState<number | null>(null);
   const lastLoadedReportIdRef = useRef<number | null>(null);
 
@@ -285,6 +287,10 @@ export default function ReportEditPage({ id }: { id: string }) {
             <Save className="h-4 w-4 mr-1.5" />
             {saveDraft.isPending ? "Saving..." : "Save Draft"}
           </Button>
+          <Button variant="outline" onClick={() => setIsShareOpen(true)} data-testid="button-share-report">
+            <Link2 className="h-4 w-4 mr-1.5" />
+            {(report as any).shareToken ? "Manage share" : "Share"}
+          </Button>
           <Button
             variant="secondary"
             onClick={async () => {
@@ -445,6 +451,13 @@ export default function ReportEditPage({ id }: { id: string }) {
           )}
         </main>
       </div>
+
+      <ReportShareDialog
+        reportId={reportId}
+        shareToken={(report as any).shareToken ?? null}
+        open={isShareOpen}
+        onOpenChange={setIsShareOpen}
+      />
 
       {/* Pane-switch unsaved guard */}
       <AlertDialog open={!!pendingPane} onOpenChange={(open) => { if (!open) setPendingPane(null); }}>

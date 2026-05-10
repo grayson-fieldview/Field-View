@@ -152,6 +152,9 @@ export interface IStorage {
   createSharedGallery(gallery: InsertSharedGallery): Promise<SharedGallery>;
   getSharedGalleryByToken(token: string): Promise<SharedGallery | undefined>;
 
+  setReportShareToken(id: number, token: string | null): Promise<Report | undefined>;
+  getReportByShareToken(token: string): Promise<Report | undefined>;
+
   getAllChecklistTemplates(accountId: string): Promise<(ChecklistTemplate & { itemCount: number })[]>;
   getChecklistTemplate(id: number): Promise<ChecklistTemplate | undefined>;
   createChecklistTemplate(template: InsertChecklistTemplate): Promise<ChecklistTemplate>;
@@ -882,6 +885,20 @@ export class DatabaseStorage implements IStorage {
   async getSharedGalleryByToken(token: string): Promise<SharedGallery | undefined> {
     const [gallery] = await db.select().from(sharedGalleries).where(eq(sharedGalleries.token, token));
     return gallery;
+  }
+
+  async setReportShareToken(id: number, token: string | null): Promise<Report | undefined> {
+    const [updated] = await db
+      .update(reports)
+      .set({ shareToken: token, updatedAt: new Date() })
+      .where(eq(reports.id, id))
+      .returning();
+    return updated;
+  }
+
+  async getReportByShareToken(token: string): Promise<Report | undefined> {
+    const [row] = await db.select().from(reports).where(eq(reports.shareToken, token)).limit(1);
+    return row;
   }
 
   async getAllChecklistTemplates(accountId: string): Promise<(ChecklistTemplate & { itemCount: number })[]> {
