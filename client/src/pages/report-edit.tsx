@@ -1,14 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
-import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
@@ -30,34 +25,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { ArrowLeft, FileText, FileDown, Image as ImageIcon, Loader2, Plus, Save, Trash2 } from "lucide-react";
-import type { Media, Report, ReportSection, ReportSectionPhoto } from "@shared/schema";
+import { ArrowLeft, FileText, FileDown, Loader2, Plus, Save, Trash2 } from "lucide-react";
+import type { Media, Report, ReportSection } from "@shared/schema";
+import { CoverEditor } from "@/components/report-editor/cover-editor";
+import { SectionEditor } from "@/components/report-editor/section-editor";
+import { DEFAULT_COVER, type CoverConfig, type Section } from "@/components/report-editor/types";
 
 type Pane = { kind: "cover" } | { kind: "section"; id: number };
 
-type CoverConfig = {
-  showCoverPhoto: boolean;
-  showCompanyLogo: boolean;
-  showCompanyName: boolean;
-  showCreatorName: boolean;
-  showPhotoCount: boolean;
-  showDateCreated: boolean;
-  coverPhotoMediaId: number | null;
-};
-
-type SectionPhoto = ReportSectionPhoto & { media: Media };
-type Section = ReportSection & { photos: SectionPhoto[] };
 type ReportTree = Report & { sections: Section[] };
-
-const DEFAULT_COVER: CoverConfig = {
-  showCoverPhoto: true,
-  showCompanyLogo: true,
-  showCompanyName: true,
-  showCreatorName: true,
-  showPhotoCount: true,
-  showDateCreated: true,
-  coverPhotoMediaId: null,
-};
 
 const STATUS_LABEL: Record<string, string> = {
   draft: "Draft",
@@ -418,6 +394,7 @@ export default function ReportEditPage({ id }: { id: string }) {
         <main className="overflow-y-auto p-4 sm:p-6">
           {pane.kind === "cover" && (
             <CoverEditor
+              mode="report"
               title={draftTitle}
               description={draftDescription}
               cover={draftCover}
@@ -441,6 +418,7 @@ export default function ReportEditPage({ id }: { id: string }) {
           )}
           {pane.kind === "section" && activeSection && (
             <SectionEditor
+              mode="report"
               section={activeSection}
               onChange={(updates) => {
                 setDraftSections((prev) => prev.map((s) => (s.id === activeSection.id ? { ...s, ...updates } : s)));
@@ -679,224 +657,3 @@ export default function ReportEditPage({ id }: { id: string }) {
   );
 }
 
-// ─── Cover editor ────────────────────────────────────────────────────────────
-function CoverEditor(props: {
-  title: string;
-  description: string;
-  cover: CoverConfig;
-  coverPhotoUrl: string | null;
-  onTitleChange: (v: string) => void;
-  onDescriptionChange: (v: string) => void;
-  onCoverChange: (c: CoverConfig) => void;
-  onPickCoverPhoto: () => void;
-  onClearCoverPhoto: () => void;
-}) {
-  const {
-    title,
-    description,
-    cover,
-    coverPhotoUrl,
-    onTitleChange,
-    onDescriptionChange,
-    onCoverChange,
-    onPickCoverPhoto,
-    onClearCoverPhoto,
-  } = props;
-  const toggles: { key: keyof CoverConfig; label: string }[] = useMemo(() => [
-    { key: "showCoverPhoto", label: "Cover photo" },
-    { key: "showCompanyLogo", label: "Company logo" },
-    { key: "showCompanyName", label: "Company name" },
-    { key: "showCreatorName", label: "Created by name" },
-    { key: "showPhotoCount", label: "Photo count" },
-    { key: "showDateCreated", label: "Date created" },
-  ], []);
-
-  return (
-    <div className="max-w-3xl mx-auto space-y-6" data-testid="pane-cover">
-      <div>
-        <h2 className="text-lg font-semibold mb-1">Cover Page</h2>
-        <p className="text-sm text-muted-foreground">Title and description always render. Toggle which optional fields appear.</p>
-      </div>
-
-      <Card className="p-4 space-y-4">
-        <div className="space-y-1.5">
-          <Label htmlFor="cover-title">Title</Label>
-          <Input
-            id="cover-title"
-            value={title}
-            onChange={(e) => onTitleChange(e.target.value)}
-            placeholder="Untitled Report"
-            data-testid="input-report-title"
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="cover-description">Description</Label>
-          <Textarea
-            id="cover-description"
-            value={description}
-            onChange={(e) => onDescriptionChange(e.target.value)}
-            placeholder="Add a short description of this report (optional)..."
-            className="min-h-[100px]"
-            data-testid="input-report-description"
-          />
-        </div>
-      </Card>
-
-      <Card className="p-4 space-y-3">
-        <h3 className="text-sm font-semibold">Show on cover</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {toggles.map(({ key, label }) => (
-            <div key={key} className="flex items-center justify-between gap-3 p-3 rounded-md border">
-              <Label htmlFor={`toggle-${key}`} className="text-sm font-normal cursor-pointer">{label}</Label>
-              <Switch
-                id={`toggle-${key}`}
-                checked={Boolean(cover[key])}
-                onCheckedChange={(checked) => onCoverChange({ ...cover, [key]: checked })}
-                data-testid={`switch-${key}`}
-              />
-            </div>
-          ))}
-        </div>
-      </Card>
-
-      <Card className="p-4 space-y-3" data-testid="card-cover-photo-override">
-        <h3 className="text-sm font-semibold">Cover Photo</h3>
-        {cover.coverPhotoMediaId && coverPhotoUrl ? (
-          <div className="flex items-center gap-3">
-            <img
-              src={coverPhotoUrl}
-              alt="Selected cover"
-              className="h-20 w-20 rounded object-cover border"
-              data-testid="img-cover-override-thumb"
-            />
-            <div className="flex flex-wrap gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={onPickCoverPhoto}
-                data-testid="button-change-cover-photo"
-              >
-                Change
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={onClearCoverPhoto}
-                data-testid="button-clear-cover-photo"
-              >
-                Use project default
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <div className="flex items-center gap-3">
-            <p className="text-sm text-muted-foreground flex-1">
-              Will use project default cover photo.
-            </p>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onPickCoverPhoto}
-              data-testid="button-choose-cover-photo"
-            >
-              <ImageIcon className="h-4 w-4 mr-1.5" />
-              Choose cover photo
-            </Button>
-          </div>
-        )}
-      </Card>
-    </div>
-  );
-}
-
-// ─── Section editor ──────────────────────────────────────────────────────────
-function SectionEditor(props: {
-  section: Section;
-  onChange: (updates: Partial<Section>) => void;
-  onPhotoChange: (photoId: number, updates: Partial<SectionPhoto>) => void;
-  onAddPhotos: () => void;
-  onDeletePhoto: (photoId: number) => void;
-  onDeleteSection: () => void;
-}) {
-  const { section, onChange, onPhotoChange, onAddPhotos, onDeletePhoto, onDeleteSection } = props;
-  return (
-    <div className="max-w-3xl mx-auto space-y-6" data-testid={`pane-section-${section.id}`}>
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold mb-1">Section</h2>
-          <p className="text-sm text-muted-foreground">Title, summary, and photos with optional captions.</p>
-        </div>
-        <Button variant="ghost" size="sm" onClick={onDeleteSection} data-testid="button-delete-section">
-          <Trash2 className="h-4 w-4 mr-1.5" />
-          Delete section
-        </Button>
-      </div>
-
-      <Card className="p-4 space-y-4">
-        <div className="space-y-1.5">
-          <Label htmlFor="section-title">Title</Label>
-          <Input
-            id="section-title"
-            value={section.title}
-            onChange={(e) => onChange({ title: e.target.value })}
-            placeholder="Untitled Section"
-            data-testid="input-section-title"
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="section-summary">Summary</Label>
-          <Textarea
-            id="section-summary"
-            value={section.summary ?? ""}
-            onChange={(e) => onChange({ summary: e.target.value })}
-            placeholder="Optional context for this section..."
-            className="min-h-[100px]"
-            data-testid="input-section-summary"
-          />
-        </div>
-      </Card>
-
-      <Card className="p-4 space-y-4">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold">Photos ({section.photos.length})</h3>
-          <Button variant="outline" size="sm" onClick={onAddPhotos} data-testid="button-add-photos">
-            <Plus className="h-4 w-4 mr-1.5" />
-            Add photos
-          </Button>
-        </div>
-        {section.photos.length === 0 ? (
-          <div className="text-center py-8 border-2 border-dashed rounded-md">
-            <ImageIcon className="h-6 w-6 text-muted-foreground mx-auto mb-2" />
-            <p className="text-sm text-muted-foreground">No photos in this section yet.</p>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {section.photos.map((p) => (
-              <div key={p.id} className="flex gap-3 p-3 rounded-md border" data-testid={`row-section-photo-${p.id}`}>
-                <img src={p.media.url} alt="" className="h-24 w-24 object-cover rounded-md shrink-0" />
-                <div className="flex-1 min-w-0 space-y-2">
-                  <Input
-                    value={p.caption ?? ""}
-                    placeholder="Caption (optional)"
-                    onChange={(e) => onPhotoChange(p.id, { caption: e.target.value })}
-                    data-testid={`input-photo-caption-${p.id}`}
-                  />
-                  <Textarea
-                    value={p.description ?? ""}
-                    placeholder="Description (optional)"
-                    onChange={(e) => onPhotoChange(p.id, { description: e.target.value })}
-                    className="min-h-[60px]"
-                    data-testid={`input-photo-description-${p.id}`}
-                  />
-                </div>
-                <Button variant="ghost" size="icon" onClick={() => onDeletePhoto(p.id)} data-testid={`button-delete-photo-${p.id}`}>
-                  <Trash2 className="h-4 w-4 text-muted-foreground" />
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
-    </div>
-  );
-}

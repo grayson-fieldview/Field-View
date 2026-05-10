@@ -1,0 +1,51 @@
+APPROVED for PR-A only.
+
+Goal: extract CoverEditor and SectionEditor from report-edit.tsx into 
+client/src/components/report-editor/{cover-editor,section-editor}.tsx 
+with a mode?: "report" | "template" prop (defaulted "report"). Zero 
+functional changes for now — the prop is wired but unused in this PR. 
+Templates UI in PR-B/C will pass mode="template".
+
+Implementation:
+
+1. New directory client/src/components/report-editor/
+2. Extract CoverEditor → cover-editor.tsx with mode prop (when 
+   "template", future-PR-C will hide the cover-photo override card; 
+   for PR-A, the prop just exists)
+3. Extract SectionEditor → section-editor.tsx with mode prop (when 
+   "template", future-PR-C will hide the photo grid + Add Photos 
+   button; for PR-A, the prop just exists)
+4. report-edit.tsx imports both, passes mode="report" explicitly. 
+   Net change: -250 LOC moved out, +2 imports.
+5. Verify nothing else in the file depends on the extracted 
+   components' internals (e.g., shared types should be exported 
+   from the new files, not duplicated)
+6. Confirm any types referenced by both components (CoverConfig, 
+   ReportSection types) live in @shared/schema or a shared location 
+   the new files can import — don't duplicate type definitions.
+
+Verification before push:
+- TS baseline 34, do NOT drift it. If it drifts, list + categorize 
+  the new errors before pushing.
+- npm run build green
+- Dev workflow boots clean
+- Manual smoke test of report-edit.tsx behavior is intact:
+  * Open existing report → editor renders
+  * Edit cover title, description, toggles → all work
+  * Edit section title, summary → work
+  * Add photos via picker → work
+  * Delete a photo → work
+  * Cover photo override (Choose / Change / Use project default) → work
+  * Save Draft → reload → all values persist
+  * Generate PDF → renders correctly
+  * Unsaved-changes guard (in-editor pane switch) → fires
+  * Browser tab refresh guard → fires
+  
+This is a behavior-preservation refactor. ANY change in observable 
+behavior is a bug. Expect zero diff in user-facing UX.
+
+Single commit. Show me the diff stat + the new component files in 
+full + the report-edit.tsx import section.
+
+Vercel auto-promotion now ON, so push will go live automatically. 
+Smoke-test on prod immediately after deploy flips to Ready.
