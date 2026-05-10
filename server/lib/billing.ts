@@ -1,3 +1,20 @@
+// Stripe env vars expected by the app (Session 3, trial-flow rework):
+//
+//   Server-side (process.env, used by this file + checkout/webhook code):
+//     • STRIPE_PRICE_MONTHLY              — main monthly plan price ID
+//     • STRIPE_PRICE_ANNUAL               — main annual plan price ID
+//     • STRIPE_PRICE_SEAT_ADDON_MONTHLY   — additional-seat add-on, monthly billing
+//     • STRIPE_PRICE_SEAT_ADDON_ANNUAL    — additional-seat add-on, annual billing
+//
+//   Frontend (import.meta.env, baked into the Vite bundle at build time):
+//     • VITE_STRIPE_PRICE_MONTHLY         — used by the trial banner Add Card
+//                                           CTA in client/src/App.tsx; will be
+//                                           removed in Session 3 Commit B when
+//                                           the CTA routes to /subscribe instead
+//
+// All five must be set in Vercel for production. The two SEAT_ADDON vars
+// fall back to legacy product-name string-match (with a warn log) if both
+// are unset, so the app degrades gracefully but mis-counts custom plans.
 import { db } from "../db";
 import { accounts } from "@shared/models/auth";
 import { eq } from "drizzle-orm";
@@ -107,23 +124,29 @@ export async function getAccountBilling(req: any): Promise<BillingState> {
   };
 }
 
-// Session 3 of trial-flow rework: prefer exact priceId compare against
-// STRIPE_PRICE_SEAT_ADDON env var (resolves the pre-existing TECH_DEBT
-// item about string-matching product names). Fall back to the legacy
-// product-name string-match when the env var is not set so we degrade
-// gracefully rather than mis-counting seats — but warn loudly so the
-// missing config gets noticed.
+// Session 3 of trial-flow rework: prefer exact priceId compare against the
+// two STRIPE_PRICE_SEAT_ADDON_{MONTHLY,ANNUAL} env vars (resolves the
+// pre-existing TECH_DEBT item about string-matching product names). Stripe
+// has TWO seat-addon prices — one billed monthly, one billed annually — so
+// we accept either. Fall back to the legacy product-name string-match when
+// BOTH env vars are unset so the app degrades gracefully rather than
+// mis-counting seats — but warn loudly so the missing config gets noticed.
+// Setting just one of the two also works (e.g. monthly-only customers).
 let seatAddonFallbackWarned = false;
 export function isSeatAddonItem(item: any): boolean {
-  const seatAddonPriceId = process.env.STRIPE_PRICE_SEAT_ADDON;
+  const monthlyId = process.env.STRIPE_PRICE_SEAT_ADDON_MONTHLY;
+  const annualId = process.env.STRIPE_PRICE_SEAT_ADDON_ANNUAL;
   const itemPriceId = item?.price?.id;
-  if (seatAddonPriceId) {
-    return itemPriceId === seatAddonPriceId;
+  if (monthlyId || annualId) {
+    return (
+      (!!monthlyId && itemPriceId === monthlyId) ||
+      (!!annualId && itemPriceId === annualId)
+    );
   }
   if (!seatAddonFallbackWarned) {
     seatAddonFallbackWarned = true;
     console.warn(
-      "[billing] STRIPE_PRICE_SEAT_ADDON not set — falling back to product-name string-match for seat-addon detection. Set the env var to remove this fallback."
+      "[billing] Neither STRIPE_PRICE_SEAT_ADDON_MONTHLY nor STRIPE_PRICE_SEAT_ADDON_ANNUAL is set — falling back to product-name string-match for seat-addon detection. Set at least one of the env vars to remove this fallback."
     );
   }
   const product = item?.price?.product;
