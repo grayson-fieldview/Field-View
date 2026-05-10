@@ -1,0 +1,60 @@
+APPROVED for Stage 1 only. Do NOT start Stages 2 or 3 until Stage 1 
+ships, smoke-tests clean, and is verified stable in prod.
+
+Stage 1 scope locked:
+- Schema migration: add enums, checklist_sections table, columns 
+  on checklist_items (section_id, field_type, notes, 
+  assigned_to_user_id, photos_required, value_bool, value_rating, 
+  value_text, selected_option_id, completed_at). Mirror on 
+  checklist_template_items where applicable.
+- Backfill: checked → value_bool, all existing items map to 
+  field_type='yes_no'. Keep `checked` column intact (drop in Stage 
+  1.5).
+- Storage: section CRUD; existing item methods updated to handle 
+  new shape; getAllChecklists/getChecklistsByProject collapse N+1 
+  into grouped queries.
+- Routes: extend POST/PATCH item endpoints to accept new fields; 
+  add section CRUD routes; FIX restricted-user filter on GET 
+  /api/checklists (fold the pre-existing bug fix into this stage).
+- Frontend: rebuild the project-detail Checklists tab + 
+  ChecklistCard with section editor, field-type picker (yes_no, 
+  rating, text — DEFER multiple_choice + photo attach + 
+  photos_required to Stage 2), per-item notes, per-item assignment 
+  picker.
+- Out of Stage 1: Multiple Choice, photo attach, photos_required 
+  toggle, "Hide Completed" / "Show only my items" filters, 
+  templates parity (Stage 3).
+
+Phase 1 — DETAILED STAGE 1 PLAN, no code changes. Output:
+1. Migration script outline with all DDL (use script/migrations/
+   migrate_session22_timesheets.ts as template — same RDS guard, 
+   ALLOW_PROD_MIGRATION=yes gate, transaction wrapper, IF NOT 
+   EXISTS guards, post-commit verification).
+2. Storage method signature changes + new methods.
+3. Endpoint additions + modifications.
+4. Frontend component changes — list every file touched.
+5. LOC estimate per layer.
+6. Risk surface — particularly around the backfill (checked → 
+   value_bool) and the new field_type enum default.
+7. Verification plan after deploy.
+
+Then STOP, await my approval before Phase 2 implementation.
+
+Notes:
+- HARD RULE applies for the migration. After Phase 2 commit, the 
+  sequence is mine: snapshot → whitelist Replit IP → run migration 
+  → verify → push code → un-whitelist.
+- TS baseline 34. The new field_type enum + value columns are easy 
+  TS drift surfaces — verify count after each step (schema → 
+  storage → routes → frontend), not just at the end.
+- Be aware of the pattern: when count drifts, default assumption is 
+  real new error in our code. Don't push through "zero new errors 
+  attributable" framing.
+- Cross-account check on every endpoint touching checklists is 
+  required, not optional. The existing routes already do this 
+  (verifyChecklistAccess pattern). Maintain.
+
+After Phase 1 plan is approved, Phase 2 is single-commit-per-layer 
+or single-commit-total — your call when proposing the plan, but 
+single-commit-total is preferred since the migration ties everything 
+together.
