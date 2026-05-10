@@ -1,0 +1,144 @@
+Goal: PR-B of Stage 4 Templates work. Backend (storage + 5 endpoints) 
++ Templates Tab functional UI on global Reports page. Editor for 
+templates ships in PR-C — for this PR, "Create Template" creates an 
+empty template and the Templates Tab list shows it. Clicking a 
+template navigates to /templates/:id/edit which doesn't exist yet — 
+we'll handle that gracefully.
+
+Two-phase. STOP between phases for approval.
+
+=== Phase 1 — DIAGNOSE only, no code changes ===
+
+1. shared/schema.ts — propose the templateConfigSchema Zod definition. 
+   Format:
+   {
+     version: 1,                                    // literal, future-proofs
+     cover: {
+       description: string | null,
+       coverConfig: { showCoverPhoto: bool, ...all 6 toggles, 
+                      coverPhotoMediaId: omitted (project-specific) }
+     },
+     sections: Array<{
+       title: string (required, max 200),
+       summary: string | null (max 5000),
+       sortOrder: number (int >= 0)
+     }>
+   }
+   Show the proposed Zod definition. Export both the schema and the 
+   inferred type. Place it next to the existing reportTemplates 
+   pgTable export.
+
+2. server/storage.ts — show current IStorage interface for any pattern 
+   we should mirror (e.g., checklistTemplates methods). Then propose 
+   the 5 new methods:
+   - getReportTemplates(accountId): Promise<ReportTemplate[]> ordered 
+     by updatedAt DESC
+   - getReportTemplate(id): Promise<ReportTemplate | undefined>
+   - createReportTemplate(t): Promise<ReportTemplate>
+   - updateReportTemplate(id, patch): Promise<ReportTemplate | undefined>
+     (must bump updatedAt automatically — show how)
+   - deleteReportTemplate(id): Promise<void>
+   Show the planned signatures and roughly how each implementation 
+   maps to db.select / db.insert / etc.
+
+3. server/routes.ts — show:
+   - The placeholder comment from Stage 1 we'll replace
+   - The branding endpoints (PATCH /api/account/branding) as the 
+     reference pattern for requireAdminOrManager + accountId scoping
+   - The checklistTemplates routes if any, for cross-account leakage 
+     check pattern
+   Then propose the 5 new endpoints:
+   - GET /api/report-templates (requireReadAccess + accountId scope)
+   - GET /api/report-templates/:id (requireReadAccess + accountId 
+     ownership check, 403 if mismatched)
+   - POST /api/report-templates (requireWriteAccess + 
+     requireAdminOrManager; body validated by 
+     insertReportTemplateSchema.extend({ templateConfig: 
+     templateConfigSchema }); accountId + createdById injected from 
+     session — never trusted from client)
+   - PATCH /api/report-templates/:id (requireWriteAccess + 
+     requireAdminOrManager + accountId ownership check; partial body)
+   - DELETE /api/report-templates/:id (same auth chain + ownership 
+     check)
+   Show example request/response shapes.
+
+4. client/src/pages/reports.tsx — show the current Templates Tab 
+   placeholder Card (line ~164). What state to add. Where the new 
+   "New Template" button slots in (right side of the page header, 
+   conditional on canCreate, next to or replacing the Create Report 
+   button — or do we surface BOTH? recommend showing one button at a 
+   time based on the active tab, since each is contextual to its tab)
+   
+   Identify the existing Tabs component pattern in this file (looks 
+   like a manual `activeTab` state + conditional rendering, not a 
+   shadcn <Tabs> primitive — confirm).
+
+5. Empty-template default — confirm the body to send when "New 
+   Template" is clicked (POST with empty templateConfig):
+   {
+     title: "Untitled Template",
+     templateConfig: {
+       version: 1,
+       cover: {
+         description: null,
+         coverConfig: { showCoverPhoto: true, showCompanyLogo: true, 
+                        showCompanyName: true, showCreatorName: true, 
+                        showPhotoCount: true, showDateCreated: true }
+       },
+       sections: [
+         { title: "Untitled Section", summary: null, sortOrder: 0 }
+       ]
+     }
+   }
+   
+   Server-side: insert and return the new row. Client-side: invalidate 
+   ["/api/report-templates"], navigate to /templates/:id/edit (which 
+   404's until PR-C — see Q below).
+
+Open question for me to answer:
+- /templates/:id/edit doesn't exist until PR-C. Two options:
+  (a) After Create Template, stay on the Templates Tab and just add 
+      the new template to the list. User can rename via inline kebab 
+      but can't fully edit until PR-C ships.
+  (b) Navigate to /templates/:id/edit, which 404's. PR-C wires up the 
+      route.
+  Recommend (a) — keeps PR-B self-contained and shippable as a 
+  preview ("you can see the templates list and rename/delete; full 
+  editor coming next"). Wait for my call.
+
+Output: numbered findings + Phase 2 plan. No code changes.
+
+=== Phase 2 — implement after my approval ===
+
+Files affected:
+- shared/schema.ts: add templateConfigSchema + inferred type export 
+  (~30 LOC)
+- server/storage.ts: 5 new methods + IStorage interface additions 
+  (~70 LOC)
+- server/routes.ts: 5 new endpoints (~140 LOC) + replace the Stage 1 
+  placeholder comment
+- client/src/pages/reports.tsx: replace placeholder Card with real 
+  list + state + dialogs (~120 LOC modified/added)
+
+Estimated total: ~360 LOC. Single commit.
+
+Verification:
+- TS baseline 34, do NOT drift it
+- npm run build green, dev workflow boots clean
+- Manual smoke test on prod after auto-deploy:
+  * Templates Tab → empty state shows correctly
+  * "New Template" button visible to Admin/Manager only
+  * Click "New Template" → new row appears in list with 
+    "Untitled Template" + "1 section" + "you" attribution
+  * Inline kebab → Rename → updates the title via PATCH
+  * Inline kebab → Delete → confirmation → row disappears
+  * Restricted user: no "New Template" button, no kebab menus 
+    (just listed for read)
+  * Cross-account 403: hit GET /api/report-templates/:id from a 
+    different account, confirm 403
+
+Out of scope (PR-C):
+- Template editor (/templates/:id/edit page)
+- Apply-template flow on Create Report dialogs
+- project-detail.tsx inline card consolidation
+- "Save as template from existing report"
