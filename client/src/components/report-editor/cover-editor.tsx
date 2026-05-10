@@ -30,6 +30,7 @@ export function CoverEditor(props: {
     onCoverChange,
     onPickCoverPhoto,
     onClearCoverPhoto,
+    mode = "report",
   } = props;
   const toggles: { key: keyof CoverConfig; label: string }[] = useMemo(() => [
     { key: "showCoverPhoto", label: "Cover photo" },
@@ -88,6 +89,7 @@ export function CoverEditor(props: {
         </div>
       </Card>
 
+      {mode !== "template" && (
       <Card className="p-4 space-y-3" data-testid="card-cover-photo-override">
         <h3 className="text-sm font-semibold">Cover Photo</h3>
         {cover.coverPhotoMediaId && coverPhotoUrl ? (
@@ -134,6 +136,7 @@ export function CoverEditor(props: {
           </div>
         )}
       </Card>
+      )}
     </div>
   );
 }

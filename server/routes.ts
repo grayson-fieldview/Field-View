@@ -1246,23 +1246,56 @@ export async function registerRoutes(
       if (!(await userCanAccessProject(req, projectId))) return res.status(403).json({ message: "Access denied" });
       const parsed = createReportBodySchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
-      const report = await storage.createReport({
-        projectId,
-        accountId: req.user.accountId,
-        title: parsed.data.title,
-        description: parsed.data.description ?? null,
-        coverConfig: {
-          showCoverPhoto: true,
-          showCompanyLogo: true,
-          showCompanyName: true,
-          showCreatorName: true,
-          showPhotoCount: true,
-          showDateCreated: true,
-          coverPhotoMediaId: null,
-        },
-        status: "draft",
-        createdById: req.user.id,
+
+      // Resolve template (if any) BEFORE the transaction so we fail fast on bad input.
+      let tplCfg: z.infer<typeof templateConfigSchema> | undefined;
+      if (parsed.data.templateId !== undefined) {
+        const template = await storage.getReportTemplate(parsed.data.templateId);
+        if (!template || template.accountId !== req.user.accountId) {
+          return res.status(400).json({ message: "Invalid template" });
+        }
+        const parsedCfg = templateConfigSchema.safeParse(template.templateConfig);
+        if (!parsedCfg.success) {
+          return res.status(400).json({ message: "Template config is invalid (was authored under an incompatible schema version)" });
+        }
+        tplCfg = parsedCfg.data;
+      }
+
+      const defaultCover = {
+        showCoverPhoto: true,
+        showCompanyLogo: true,
+        showCompanyName: true,
+        showCreatorName: true,
+        showPhotoCount: true,
+        showDateCreated: true,
+        coverPhotoMediaId: null as number | null,
+      };
+
+      const report = await db.transaction(async (tx) => {
+        const created = await storage.createReport({
+          projectId,
+          accountId: req.user.accountId,
+          title: parsed.data.title,
+          description: parsed.data.description ?? tplCfg?.cover.description ?? null,
+          coverConfig: tplCfg
+            ? { ...tplCfg.cover.coverConfig, coverPhotoMediaId: null }
+            : defaultCover,
+          status: "draft",
+          createdById: req.user.id,
+        }, tx);
+        if (tplCfg) {
+          for (const s of tplCfg.sections) {
+            await storage.createReportSection({
+              reportId: created.id,
+              title: s.title,
+              summary: s.summary,
+              sortOrder: s.sortOrder,
+            }, tx);
+          }
+        }
+        return created;
       });
+
       res.status(201).json(report);
     } catch (error) {
       console.error("[reports] create error:", error);

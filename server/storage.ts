@@ -62,6 +62,8 @@ import { users, accounts, type User } from "@shared/models/auth";
 import { db } from "./db";
 import { eq, desc, sql, asc, and, inArray, lte } from "drizzle-orm";
 
+type DbOrTx = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 export interface ProjectWithDetails extends Project {
   photoCount: number;
   recentPhotos: { id: number; url: string }[];
@@ -128,12 +130,12 @@ export interface IStorage {
     coverPhoto: Media | null;
     totalPhotos: number;
   } | undefined>;
-  createReport(report: InsertReport): Promise<Report>;
+  createReport(report: InsertReport, tx?: DbOrTx): Promise<Report>;
   updateReport(id: number, data: Partial<InsertReport>): Promise<Report | undefined>;
   deleteReport(id: number): Promise<void>;
 
   getReportSection(id: number): Promise<ReportSection | undefined>;
-  createReportSection(section: { reportId: number; title: string; summary?: string | null }): Promise<ReportSection>;
+  createReportSection(section: { reportId: number; title: string; summary?: string | null; sortOrder?: number }, tx?: DbOrTx): Promise<ReportSection>;
   updateReportSection(id: number, data: Partial<InsertReportSection>): Promise<ReportSection | undefined>;
   deleteReportSection(id: number): Promise<void>;
 
@@ -701,8 +703,9 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
-  async createReport(report: InsertReport): Promise<Report> {
-    const [created] = await db.insert(reports).values(report).returning();
+  async createReport(report: InsertReport, tx?: DbOrTx): Promise<Report> {
+    const dbx = tx ?? db;
+    const [created] = await dbx.insert(reports).values(report).returning();
     return created;
   }
 
@@ -724,15 +727,19 @@ export class DatabaseStorage implements IStorage {
     return s;
   }
 
-  async createReportSection(input: { reportId: number; title: string; summary?: string | null }): Promise<ReportSection> {
-    const [{ maxSort }] = await db
-      .select({ maxSort: sql<number | null>`max(${reportSections.sortOrder})` })
-      .from(reportSections)
-      .where(eq(reportSections.reportId, input.reportId));
-    const nextSort = (maxSort ?? -1) + 1;
-    const [created] = await db
+  async createReportSection(input: { reportId: number; title: string; summary?: string | null; sortOrder?: number }, tx?: DbOrTx): Promise<ReportSection> {
+    const dbx = tx ?? db;
+    let sortOrder = input.sortOrder;
+    if (sortOrder === undefined) {
+      const [{ maxSort }] = await dbx
+        .select({ maxSort: sql<number | null>`max(${reportSections.sortOrder})` })
+        .from(reportSections)
+        .where(eq(reportSections.reportId, input.reportId));
+      sortOrder = (maxSort ?? -1) + 1;
+    }
+    const [created] = await dbx
       .insert(reportSections)
-      .values({ reportId: input.reportId, title: input.title, summary: input.summary ?? null, sortOrder: nextSort })
+      .values({ reportId: input.reportId, title: input.title, summary: input.summary ?? null, sortOrder })
       .returning();
     return created;
   }

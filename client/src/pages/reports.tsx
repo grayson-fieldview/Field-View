@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useSearch, useLocation } from "wouter";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -72,8 +73,22 @@ const EMPTY_TEMPLATE_CONFIG: TemplateConfig = {
 };
 
 export default function ReportsPage() {
-  const [activeTab, setActiveTab] = useState<TabKey>("reports");
+  // Read ?tab= once on mount only — don't reactively re-read on every render.
+  const initialSearch = useSearch();
+  const initialTab: TabKey = (() => {
+    const t = new URLSearchParams(initialSearch).get("tab");
+    return t === "templates" ? "templates" : "reports";
+  })();
+  const [activeTab, setActiveTab] = useState<TabKey>(initialTab);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [, navigate] = useLocation();
+
+  // One-way URL write on tab click — keeps deep-link / back-button parity
+  // without reactively re-reading useSearch on every render (avoids loops).
+  const selectTab = (next: TabKey) => {
+    setActiveTab(next);
+    navigate(next === "templates" ? "/reports?tab=templates" : "/reports", { replace: true });
+  };
   const { user } = useAuth();
   const { toast } = useToast();
   const canCreate = !!user && user.role !== "restricted";
@@ -100,9 +115,10 @@ export default function ReportsPage() {
       });
       return (await res.json()) as ReportTemplateWithCount;
     },
-    onSuccess: () => {
+    onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ["/api/report-templates"] });
       toast({ title: "Template created" });
+      navigate(`/templates/${created.id}/edit`);
     },
     onError: (error: Error) => {
       toast({ title: "Failed to create template", description: error.message, variant: "destructive" });
@@ -190,7 +206,7 @@ export default function ReportsPage() {
         {tabs.map((tab) => (
           <button
             key={tab.key}
-            onClick={() => setActiveTab(tab.key)}
+            onClick={() => selectTab(tab.key)}
             className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
               activeTab === tab.key
                 ? "border-primary text-foreground"
@@ -299,7 +315,12 @@ export default function ReportsPage() {
           ) : (
             <div className="space-y-3">
               {templatesQuery.data.map((t) => (
-                <Card key={t.id} className="p-4" data-testid={`card-template-${t.id}`}>
+                <Card
+                  key={t.id}
+                  className="p-4 cursor-pointer hover-elevate"
+                  data-testid={`card-template-${t.id}`}
+                  onClick={() => navigate(`/templates/${t.id}/edit`)}
+                >
                   <div className="flex items-start gap-3">
                     <div className="flex h-9 w-9 items-center justify-center rounded-md bg-muted shrink-0">
                       <LayoutTemplate className="h-4 w-4 text-muted-foreground" />
@@ -310,38 +331,40 @@ export default function ReportsPage() {
                           {t.title}
                         </span>
                         {canManageTemplates && (
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-7 w-7 shrink-0"
-                                data-testid={`button-template-menu-${t.id}`}
-                              >
-                                <MoreHorizontal className="h-4 w-4" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem
-                                onClick={() => {
-                                  setRenameValue(t.title);
-                                  setRenameTarget(t);
-                                }}
-                                data-testid={`menuitem-rename-template-${t.id}`}
-                              >
-                                <Pencil className="h-4 w-4 mr-2" />
-                                Rename
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                onClick={() => setDeleteTarget(t)}
-                                className="text-destructive focus:text-destructive"
-                                data-testid={`menuitem-delete-template-${t.id}`}
-                              >
-                                <Trash2 className="h-4 w-4 mr-2" />
-                                Delete
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
+                          <div onClick={(e) => e.stopPropagation()}>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7 shrink-0"
+                                  data-testid={`button-template-menu-${t.id}`}
+                                >
+                                  <MoreHorizontal className="h-4 w-4" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuItem
+                                  onClick={() => {
+                                    setRenameValue(t.title);
+                                    setRenameTarget(t);
+                                  }}
+                                  data-testid={`menuitem-rename-template-${t.id}`}
+                                >
+                                  <Pencil className="h-4 w-4 mr-2" />
+                                  Rename
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => setDeleteTarget(t)}
+                                  className="text-destructive focus:text-destructive"
+                                  data-testid={`menuitem-delete-template-${t.id}`}
+                                >
+                                  <Trash2 className="h-4 w-4 mr-2" />
+                                  Delete
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
                         )}
                       </div>
                       <div className="flex flex-wrap items-center gap-2 mt-1">

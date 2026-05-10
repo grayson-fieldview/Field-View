@@ -89,6 +89,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useLocation, Link } from "wouter";
 import { LayoutTemplate } from "lucide-react";
+import ReportFormDialog from "@/components/report-form-dialog";
 import { AddressAutocomplete } from "@/components/address-autocomplete";
 import type { Project, Media, Comment, Task, Checklist, ChecklistItem, Report, ChecklistTemplate, ChecklistTemplateItem, MediaAnnotation, AnnotationStroke } from "@shared/schema";
 import { AnnotationOverlay } from "@/lib/annotation-svg";
@@ -332,7 +333,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const [isAddTaskOpen, setIsAddTaskOpen] = useState(false);
   const [newChecklistTitle, setNewChecklistTitle] = useState("");
   const [newChecklistItems, setNewChecklistItems] = useState<string[]>([""]);
-  const [newReportTitle, setNewReportTitle] = useState("");
+  const [isCreateReportOpen, setIsCreateReportOpen] = useState(false);
   const [expandedChecklist, setExpandedChecklist] = useState<number | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -426,28 +427,6 @@ export default function ProjectDetailPage({ id }: { id: string }) {
       setNewChecklistTitle("");
       setNewChecklistItems([""]);
       toast({ title: "Checklist created" });
-    },
-    onError: (error: Error) => {
-      if (isUnauthorizedError(error)) {
-        toast({ title: "Unauthorized", variant: "destructive" });
-        setTimeout(() => { window.location.href = "/login"; }, 500);
-        return;
-      }
-      toast({ title: "Error", description: error.message, variant: "destructive" });
-    },
-  });
-
-  const createReport = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("POST", `/api/projects/${id}/reports`, { title: newReportTitle });
-      return res.json() as Promise<Report>;
-    },
-    onSuccess: (created) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
-      queryClient.invalidateQueries({ queryKey: ["/api/reports"] });
-      setNewReportTitle("");
-      toast({ title: "Report created" });
-      navigate(`/reports/${created.id}/edit`);
     },
     onError: (error: Error) => {
       if (isUnauthorizedError(error)) {
@@ -1626,29 +1605,12 @@ export default function ProjectDetailPage({ id }: { id: string }) {
 
           {activeTab === "reports" && (
             <div className="px-4 sm:px-6 py-4 space-y-4">
-              <Card className="p-4 space-y-3">
-                <h3 className="text-sm font-semibold">Create Report</h3>
-                <div className="flex flex-wrap items-center gap-3">
-                  <Input
-                    placeholder="Report title..."
-                    value={newReportTitle}
-                    onChange={(e) => setNewReportTitle(e.target.value)}
-                    className="flex-1 min-w-[200px]"
-                    data-testid="input-new-report-title"
-                  />
-                  <Button
-                    onClick={() => { if (newReportTitle.trim()) createReport.mutate(); }}
-                    disabled={createReport.isPending || !newReportTitle.trim()}
-                    data-testid="button-create-report"
-                  >
-                    <FileBarChart className="h-4 w-4 mr-2" />
-                    {createReport.isPending ? "Creating..." : "Create Report"}
-                  </Button>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Create a draft and you'll be taken to the editor to add sections, photos, and a cover page.
-                </p>
-              </Card>
+              <div className="flex justify-end">
+                <Button onClick={() => setIsCreateReportOpen(true)} data-testid="button-add-report">
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Report
+                </Button>
+              </div>
 
               {projectReports.length === 0 ? (
                 <Card className="p-12">
@@ -1658,7 +1620,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                     </div>
                     <h3 className="text-lg font-semibold">No reports yet</h3>
                     <p className="text-sm text-muted-foreground max-w-sm mx-auto">
-                      Create your first report above.
+                      Click Add Report to get started.
                     </p>
                   </div>
                 </Card>
@@ -1952,6 +1914,12 @@ export default function ProjectDetailPage({ id }: { id: string }) {
           })()}
         </DialogContent>
       </Dialog>
+
+      <ReportFormDialog
+        open={isCreateReportOpen}
+        onOpenChange={setIsCreateReportOpen}
+        projectId={parseInt(id)}
+      />
     </div>
   );
 }

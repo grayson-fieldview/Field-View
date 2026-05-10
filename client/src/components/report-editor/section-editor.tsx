@@ -15,7 +15,7 @@ export function SectionEditor(props: {
   onDeleteSection: () => void;
   mode?: EditorMode;
 }) {
-  const { section, onChange, onPhotoChange, onAddPhotos, onDeletePhoto, onDeleteSection } = props;
+  const { section, onChange, onPhotoChange, onAddPhotos, onDeletePhoto, onDeleteSection, mode = "report" } = props;
   return (
     <div className="max-w-3xl mx-auto space-y-6" data-testid={`pane-section-${section.id}`}>
       <div className="flex items-start justify-between gap-3">
@@ -53,6 +53,7 @@ export function SectionEditor(props: {
         </div>
       </Card>
 
+      {mode !== "template" && (
       <Card className="p-4 space-y-4">
         <div className="flex items-center justify-between gap-2">
           <h3 className="text-sm font-semibold">Photos ({section.photos.length})</h3>
@@ -94,6 +95,7 @@ export function SectionEditor(props: {
           </div>
         )}
       </Card>
+      )}
     </div>
   );
 }

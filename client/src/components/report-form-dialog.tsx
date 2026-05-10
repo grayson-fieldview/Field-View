@@ -24,7 +24,7 @@ import {
 import { Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/auth-utils";
-import type { Project, Report } from "@shared/schema";
+import type { Project, Report, ReportTemplate } from "@shared/schema";
 
 interface ReportFormDialogProps {
   open: boolean;
@@ -33,7 +33,10 @@ interface ReportFormDialogProps {
 }
 
 const PROJECT_UNSET = "__unset__";
+const TEMPLATE_NONE = "__none__";
 const MAX_DESCRIPTION = 2000;
+
+type ReportTemplateWithCount = ReportTemplate & { sectionCount: number };
 
 export default function ReportFormDialog({ open, onOpenChange, projectId }: ReportFormDialogProps) {
   const { toast } = useToast();
@@ -41,12 +44,14 @@ export default function ReportFormDialog({ open, onOpenChange, projectId }: Repo
   const isGlobalMode = projectId === undefined;
 
   const [selectedProjectId, setSelectedProjectId] = useState<string>(PROJECT_UNSET);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(TEMPLATE_NONE);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
 
   useEffect(() => {
     if (open) {
       setSelectedProjectId(PROJECT_UNSET);
+      setSelectedTemplateId(TEMPLATE_NONE);
       setTitle("");
       setDescription("");
     }
@@ -57,11 +62,19 @@ export default function ReportFormDialog({ open, onOpenChange, projectId }: Repo
     enabled: open && isGlobalMode,
   });
 
+  const templatesQuery = useQuery<ReportTemplateWithCount[]>({
+    queryKey: ["/api/report-templates"],
+    enabled: open,
+  });
+
   const createReport = useMutation({
     mutationFn: async () => {
       const effectiveProjectId = isGlobalMode ? Number(selectedProjectId) : projectId!;
       const body: Record<string, any> = { title: title.trim() };
       if (description.trim()) body.description = description.trim();
+      if (selectedTemplateId !== TEMPLATE_NONE) {
+        body.templateId = Number(selectedTemplateId);
+      }
       const res = await apiRequest("POST", `/api/projects/${effectiveProjectId}/reports`, body);
       return (await res.json()) as Report;
     },
@@ -130,6 +143,23 @@ export default function ReportFormDialog({ open, onOpenChange, projectId }: Repo
               )}
             </div>
           )}
+
+          <div className="space-y-1.5">
+            <Label htmlFor="report-template">Template (optional)</Label>
+            <Select value={selectedTemplateId} onValueChange={setSelectedTemplateId}>
+              <SelectTrigger id="report-template" data-testid="select-report-template">
+                <SelectValue placeholder="Blank report" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={TEMPLATE_NONE}>Blank report</SelectItem>
+                {(templatesQuery.data ?? []).map((t) => (
+                  <SelectItem key={t.id} value={String(t.id)} data-testid={`option-template-${t.id}`}>
+                    {t.title}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
 
           <div className="space-y-1.5">
             <Label htmlFor="report-title">Title</Label>

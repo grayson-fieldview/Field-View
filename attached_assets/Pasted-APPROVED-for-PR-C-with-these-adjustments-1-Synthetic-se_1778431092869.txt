@@ -1,0 +1,95 @@
+APPROVED for PR-C with these adjustments:
+
+1. Synthetic section id approach: use negative integers (e.g. -(idx+1)) 
+   for the synthetic section.id passed to SectionEditor. Reading 
+   "section-1" vs "section--1" makes it obvious in dev tools / test 
+   output that these are template-mode synthetic IDs, not real 
+   server-issued ones. Pair with stable clientId (UUID) for React 
+   keys and active-pane tracking.
+
+2. Cross-step TS verification: this PR is large (~590 LOC). After 
+   EACH implementation step (shared deps → storage → routes → editor 
+   → routes → reports → dialog → project-detail), run npx tsc --noEmit 
+   and confirm count stays at 34. If count drifts mid-implementation, 
+   STOP and diagnose before continuing. Don't accumulate drift across 
+   steps and try to fix at the end.
+
+3. beforeunload + in-editor pane-switch unsaved-changes guards in 
+   template-edit.tsx must match the report-edit.tsx pattern exactly. 
+   Same AlertDialog component, same isDirty trigger. Critical for 
+   parity since user expectations carry between editors.
+
+4. URL parameter parsing: use wouter's useSearch hook for ?tab= 
+   handling on mount only. Don't reactively re-read on every render — 
+   that creates an infinite-loop risk if the user navigates back to 
+   /reports without a query param after viewing it with one.
+
+5. Storage signature changes (createReport, createReportSection 
+   accepting optional tx? + sortOrder?) — confirm backward 
+   compatibility by reviewing ALL existing call sites BEFORE the 
+   signature change. Show me the call site count for each method 
+   so we know the blast radius.
+
+6. Defensive templateConfig re-parse at instantiation: confirmed. If 
+   parse fails, return 400 with message "Template config is invalid 
+   (was authored under an incompatible schema version)" — be specific 
+   so future-debugging is easier.
+
+7. createReportSection sortOrder default: when not provided, query 
+   max(sort_order) for the section's report and add 1. Match how 
+   POST /api/reports/:id/sections currently computes it. Don't 
+   default to 0 (would collide with first section).
+
+8. After "New Template" click in reports.tsx: POST → on success, 
+   navigate(`/templates/${created.id}/edit`). Match the existing 
+   "Create Report" flow's UX (creating drops you into the editor). 
+   queryClient.invalidateQueries on the templates list so the row 
+   exists when the user clicks "Back to templates" later.
+
+Implementation order as proposed. Single commit at the end. 
+
+Verify before push:
+- TS baseline 34 strictly maintained
+- npm run build green
+- Dev workflow boots clean
+
+Manual smoke test on prod after auto-deploy:
+
+Template editor (the net-new surface):
+- Click "Test Roof" template row → /templates/:id/edit loads
+- Title editable inline, draft persists during edits
+- Cover toggles editable, cover-photo override card NOT visible 
+  (mode=template branching)
+- Add section → splices into local state, appears in left rail
+- Edit section title + summary → in-editor unsaved guard fires on 
+  pane switch with unsaved changes
+- Browser tab refresh with unsaved changes → browser dialog fires
+- Delete section (no confirm) → splice, mark dirty
+- Save → toast → reload → state persists
+- Back button → /reports?tab=templates with Templates tab active
+
+Apply-template flow (the integration test):
+- /reports → Templates tab → "New Template" → editor opens for new 
+  template
+- Add 3 sections with distinct titles, change a couple cover toggles, 
+  Save
+- /reports → All Reports tab → "Create Report" → dialog shows 
+  "Template (optional)" Select with the new template listed
+- Pick the template, pick project, set title → Submit
+- Editor opens with the new report → cover toggles match template, 
+  3 sections from template are present (with their titles + summaries)
+- Sections have NO photos (as expected — photos are project-specific)
+- Cover photo override empty (project default applies)
+
+project-detail consolidation:
+- Open any project → Reports tab
+- "Add Report" button replaces the old inline form
+- Click → ReportFormDialog opens with project pre-selected (no project 
+  picker visible, projectId prop set)
+- Template Select still visible in this mode
+- Submit → editor opens
+
+Cross-account protection:
+- Try POST /api/projects/:id/reports with a templateId from a 
+  different account → 400 "Invalid template" (NOT 403, NOT a 404 
+  that leaks template existence)
