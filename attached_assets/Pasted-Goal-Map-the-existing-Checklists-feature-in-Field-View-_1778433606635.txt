@@ -1,0 +1,108 @@
+Goal: Map the existing Checklists feature in Field View and scope the 
+upgrade to CompanyCam-style. Diagnose only — no code changes. Output 
+becomes the planning input for the actual upgrade work which we'll 
+break into stages.
+
+Target end-state for Checklists (from Grayson's spec + CompanyCam 
+reference):
+- Sections within a checklist (like Reports has)
+- Field types per item: Yes/No, Rating (1-5 stars), Text, 
+  Multiple Choice
+- Per-item assignment to a project user
+- Per-item photo attachment with optional "Photos Required" toggle
+- Per-item notes/instructions
+- Templates (curated by Admin/Manager, instantiated when creating 
+  checklists)
+- Hide Completed Fields toggle (UI filter)
+- Hide Assigned Fields toggle (UI filter — show only "mine"?)
+- Progress indicator (X/Y fields completed)
+
+Phase 1 — DIAGNOSE only:
+
+Schema audit
+1. Show me every checklist-related pgTable in shared/schema.ts. 
+   List columns and types for each. I expect to see at least:
+   - checklists (or similar) — instance per project
+   - checklist_items (or similar) — items within a checklist
+   - checklist_templates (we know this exists from earlier diagnoses)
+   Are there checklist_sections? checklist_item_photos? Confirm what's 
+   present, what's missing.
+
+2. Compare existing schema columns to CompanyCam-style requirements. 
+   What does each existing column store today? Where's the gap?
+   - Sections support? (probably absent)
+   - Field type column? (likely absent — guessing existing items are 
+     just text checkboxes)
+   - Per-item assignment? (assignedToUserId or similar)
+   - Per-item photo storage? (separate table? or array column?)
+   - "Photos required" flag?
+   - Multiple choice options storage?
+   - Rating value storage?
+   - Per-item completion state?
+
+Routes audit
+3. Show me every /api/checklists* and /api/checklist-templates* 
+   route in server/routes.ts. List method + path + auth chain for 
+   each. Mark which would need to be replaced/extended for the new 
+   model.
+
+Storage audit
+4. List every storage method touching checklist tables. Same drill — 
+   what stays, what needs new methods.
+
+Frontend audit
+5. Find the Checklists feature on the web frontend. Most likely:
+   - Page: client/src/pages/checklists.tsx (global) and a tab in 
+     project-detail.tsx
+   - Existing UI components, dialogs, edit flows
+   Show me the structure of the main page and the project-detail 
+   Checklists tab.
+
+6. Is there any sign of CompanyCam-style features partially built? 
+   E.g., a field_type column on items, an assignedTo column, photo 
+   upload on items? If yes, scope reduces meaningfully. If no, we're 
+   essentially rebuilding from a checkbox-list base.
+
+Mobile audit
+7. Are checklists implemented in the mobile app at all 
+   (~/Desktop/Field View Code/Field-View-Mobile)? If yes, what does 
+   it look like? If no, what's the closest analogous mobile feature 
+   to mirror styling/UX from when we build mobile checklists later?
+
+CompanyCam UX reference
+8. Looking at the CompanyCam screenshots: Add Field button + Add 
+   Section button at the bottom of the checklist. Each field has:
+   - Title input
+   - Notes/instructions input
+   - Photos Required toggle
+   - Field type picker (Yes/No, Rating, Text, Multiple Choice)
+   - Three icons in the top-right of the field row (looks like: 
+     assign, attach/copy, delete)
+   What field-type-specific UI does each type need?
+   - Yes/No: two-button toggle when filling out
+   - Rating: 1-5 star picker
+   - Text: text input
+   - Multiple Choice: needs a way to define the choices when authoring 
+     (admin-only?), then radio/select when filling out
+   Confirm this maps cleanly.
+
+Output structure for Phase 1:
+
+Section A: Existing state (what's in the codebase right now, file by 
+file, so I have a complete picture of current Checklists)
+
+Section B: Gap analysis (what's missing per the target end-state, 
+itemized)
+
+Section C: Proposed schema migration (new columns, new tables — 
+draft the migration shape but don't write it yet)
+
+Section D: Stage breakdown — propose how to chunk the upgrade work 
+into 2-4 sequential PRs, each independently shippable. Estimated 
+LOC per stage.
+
+Section E: Open questions you couldn't resolve from the codebase 
+(things that need product decisions from me)
+
+No code changes. Just a thorough discovery document I can review and 
+use to greenlight the first implementation stage.
