@@ -1,0 +1,102 @@
+Goal: Session 1 of trial flow rework — switch from credit-card-required 
+to no-credit-card-required free trial. This session is foundation only:
+- New trial_ends_at column on accounts
+- Subscription status enum extended with 'trialing' (or confirm if 
+  already exists)
+- Signup creates account in trialing status, no Stripe customer, no 
+  Stripe subscription
+- trial_ends_at set to NOW + 14 days at signup
+- NO trial banner / lock-out logic yet (Session 2)
+- NO Stripe Checkout for mid-trial card add (Session 3 — wait, that's 
+  not Session 3, that's Session 2 too. Let me re-scope below)
+- NO customer.io webhooks (Session 3)
+
+Two-phase. STOP between phases for approval.
+
+Re-scoped session breakdown for clarity:
+- Session 1: Schema + signup flow + Stripe customer/subscription 
+  creation moved to "card add" event (NOT signup)
+- Session 2: Trial countdown banner, server-side expiry check, 
+  read-only lock-out enforcement, "Add Card" Stripe Checkout flow
+- Session 3: customer.io webhook integration (signup, first 
+  project, first photo, etc), trial-ending events
+
+=== Phase 1 — DIAGNOSE only, no code changes ===
+
+1. Show me the current accounts table schema in shared/schema.ts. 
+   Specifically:
+   - Does subscriptionStatus exist as a column? What values are 
+     allowed (enum or text)?
+   - Is there already a trialing-related column? Memory mentions 
+     accounts have stripeCustomerId, stripeSubscriptionId fields.
+   - Is there a billing-related migration history I should know about 
+     (per_account_billing per memory)?
+
+2. Show me the current signup flow:
+   - Where is the signup endpoint registered? (likely 
+     /api/register or similar)
+   - What does the handler currently do? Specifically: does it create 
+     a Stripe customer? Does it create a Stripe subscription? Does it 
+     redirect to Stripe Checkout?
+   - Is there a separate "create account" step vs "add billing" step, 
+     or is everything bundled?
+
+3. Show me the email verification flow (memory mentions code-based 
+   verification with verification_code_sent_at column). When does an 
+   account become "usable" — at signup, after email verify, after 
+   billing? Need to know if trial_ends_at should start at signup or 
+   at email verification.
+
+4. Show me how subscriptionStatus is currently consumed:
+   - Server: are there middleware checks like requireActiveSubscription?
+   - Client: are there UI gates like "subscription expired" pages?
+   This tells me what enforcement surface already exists vs what 
+   Session 2 needs to add.
+
+5. Stripe Checkout setup — show me where the existing checkout 
+   creation happens. Memory mentions price IDs already exist 
+   (price_1TMaPlR1AnIJLf9qcJsFWa1w monthly, etc). Confirm the 
+   existing checkout flow can be repurposed for "add card during 
+   trial" rather than "checkout during signup."
+
+6. Memory mentions BETA100 promo code (100% off, 50-redemption cap). 
+   Does this still apply with no-card trials? Probably we keep BETA100 
+   for explicit beta access (admin grants it) but the new default is 
+   "trial without card." Confirm.
+
+7. Memory mentions the comp/dev account (grayson@field-view.com) 
+   with stripeCustomerId: null and subscriptionStatus: "active" set 
+   directly in DB. Confirm this account doesn't break with the new 
+   schema (should keep working since active is a valid status).
+
+Output Phase 1 findings + Phase 2 plan with file diff stat estimate. 
+Migration required (column add + possible enum extension). HARD RULE 
+applies.
+
+=== Phase 2 — implement after my approval ===
+
+Single commit. Migration runs separately per HARD RULE.
+
+Verify:
+- TS baseline 39, do NOT drift it
+- Build green
+- Dev workflow boots clean
+- Architect review pass
+
+After my push (Vercel auto-promote):
+- Sign up a fresh test account → confirm:
+  * Account created with subscriptionStatus = 'trialing'
+  * trial_ends_at = NOW + 14 days
+  * No Stripe customer created (stripeCustomerId remains null)
+  * No Stripe subscription created
+  * User can immediately access the app (no billing wall)
+- Check existing accounts (Grayson Gladu T1, comp account) — confirm 
+  they keep working (no regression on existing active subscriptions)
+
+Out of scope for Session 1:
+- Trial banner UI (Session 2)
+- Server-side expiry check / read-only enforcement (Session 2)
+- Stripe Checkout flow for mid-trial card add (Session 2)
+- customer.io webhooks (Session 3)
+- Existing-user migration (NOT TOUCHING active accounts — they keep 
+  their current state. New signups go through new flow.)
