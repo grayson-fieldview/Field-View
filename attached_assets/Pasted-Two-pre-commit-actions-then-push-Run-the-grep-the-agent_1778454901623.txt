@@ -1,0 +1,26 @@
+Two pre-commit actions, then push:
+
+Run the grep the agent already flagged. Send it back as one prompt:
+
+
+Before committing, grep the client codebase for any references to the old verify-email-code response shape that would break with the new top-level-user shape. Specifically:
+
+already_verified (anywhere in client/)
+\.verified accessed on a response from /api/verify-email-code
+\.user accessed on a response from /api/verify-email-code (the old {verified: true, user} wrapper)
+Any direct fetch to /api/verify-email-code outside of client/src/pages/verify-email.tsx
+
+Paste the grep output verbatim. If the only references are inside the file we're already editing, we're clear. If anything else references the old shape, fix that file in this same commit so the contract change is atomic.
+
+
+Dev-test the full happy path before push. Auto-promote is on per the day 2 notes, so push = prod. We do not skip dev validation on this one:
+
+
+After diffs are committed (but before push), run the dev server in Replit (points at Neon) and walk the full path with a fresh email:
+
+/signup → fill form, submit → should land on /welcome with no blank flash.
+/welcome → fill name + phone + (admin only) industry/size, submit → should land on /verify-email with no blank flash. Watch the console — confirm [welcome] submit success → setQueryData + navigate /verify-email log fires with profileCompletedAt set to a real timestamp and emailVerified: false.
+/verify-email → enter the 6-digit code from Resend inbox (or pull it from the DB if dev doesn't send), submit → should land on /subscribe with no blank flash. Confirm [verify-email] submit success → setQueryData + navigate /subscribe log fires with emailVerified: true.
+Edge case: sign back in as a now-verified user and manually navigate to /verify-email. Should hit the already_verified branch — the gate should immediately redirect to / because the response now seeds emailVerified: true into the cache. No blank flash.
+
+Screenshot the four [appcontent] log sequences (one per transition) and the final URL of each step. If any of the four steps shows a blank flash, a redirect bounce, or a console error, stop and report — do not push. Otherwise, push, let Vercel auto-promote, and we'll smoke-test prod immediately.
