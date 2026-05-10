@@ -1,0 +1,66 @@
+Goal: add "Create Report" button + dialog to the global Reports page 
+(/reports). Click opens a modal with project picker + title, submits 
+to existing POST /api/projects/:id/reports, navigates to /reports/:id/edit 
+on success.
+
+Two-phase. STOP between phases for approval.
+
+=== Phase 1 — DIAGNOSE only, no code changes ===
+
+1. Show me the existing global Tasks page "Add Task" pattern. Find 
+   client/src/pages/tasks.tsx (or whatever the global tasks page is 
+   called) and show:
+   - Where the "Add Task" button lives (header layout)
+   - How its dialog handles project picker (component used, data source 
+     for project list, validation, submit flow)
+   This is the template we'll mirror for Create Report.
+
+2. Show me the existing project Reports tab "Create Blank Report" 
+   flow. Find it in client/src/pages/project-detail.tsx (or wherever) 
+   and show:
+   - Trigger UI
+   - Form/prompt for title
+   - The POST call (endpoint, payload shape)
+   - Post-success navigation to /reports/:id/edit
+   This is the existing single-project flow we're generalizing.
+
+3. Show me the current client/src/pages/reports.tsx in full (the global 
+   Reports page). Identify where the new "Create Report" button slots 
+   into the header.
+
+4. Project list endpoint — what's available? Look for GET /api/projects 
+   (or similar) that returns the user's accessible projects. Confirm:
+   - Auth chain
+   - Whether it filters to projects the user has write access to (or 
+     returns everything)
+   - Response shape (id, name, address?)
+   We need projects the user can WRITE to — restricted users without 
+   write access on a project should not see it as a target. If the 
+   existing endpoint returns all projects regardless of access, flag 
+   it and we'll discuss filtering strategy.
+
+Output findings 1-4. Then propose Phase 2 plan covering:
+- New dialog component (likely a sibling to whatever Add Task uses — 
+  could even be the same component generalized, your call)
+- Where the new button sits in the page header
+- Submission flow (validation → POST → navigate)
+- Loading/error states
+- Empty state: what happens if user has zero accessible projects? Show 
+  a disabled button with tooltip? Show button but error in dialog? 
+  Recommend a reasonable behavior.
+- Test cases to verify after deploy
+
+No code changes yet.
+
+=== Phase 2 — implement after my approval ===
+
+Standard: single commit, TS clean (baseline 34, do NOT drift it), 
+build green, dev workflow boots. Show me the diff stat + the new 
+dialog component + the button mount in reports.tsx.
+
+Out of scope (deferred to Stage 4 templates work):
+- "Use template" option in the dialog
+- Templates Tab actual functionality
+
+Vercel auto-promotion is OFF. After my push, deploy lands Staged. I 
+manually promote.
