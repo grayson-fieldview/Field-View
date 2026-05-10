@@ -1,25 +1,29 @@
 import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Star } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import type { ChecklistItemOption } from "@shared/schema";
 
-export type ChecklistFieldType = "yes_no" | "rating" | "text";
+export type ChecklistFieldType = "yes_no" | "rating" | "text" | "multiple_choice";
 
 export interface ChecklistFieldInputProps {
   fieldType: ChecklistFieldType;
   valueBool: boolean | null;
   valueRating: number | null;
   valueText: string | null;
+  selectedOptionId: number | null;
   itemId: number;
   onChangeBool: (next: boolean | null) => void;
   onChangeRating: (next: number | null) => void;
   onChangeText: (next: string) => void;
+  onChangeOption: (next: number | null) => void;
   disabled?: boolean;
 }
 
 export function ChecklistFieldInput({
-  fieldType, valueBool, valueRating, valueText, itemId,
-  onChangeBool, onChangeRating, onChangeText, disabled,
+  fieldType, valueBool, valueRating, valueText, selectedOptionId, itemId,
+  onChangeBool, onChangeRating, onChangeText, onChangeOption, disabled,
 }: ChecklistFieldInputProps) {
   if (fieldType === "yes_no") {
     return (
@@ -76,6 +80,17 @@ export function ChecklistFieldInput({
     );
   }
 
+  if (fieldType === "multiple_choice") {
+    return (
+      <MultipleChoiceField
+        itemId={itemId}
+        selectedOptionId={selectedOptionId}
+        onChangeOption={onChangeOption}
+        disabled={disabled}
+      />
+    );
+  }
+
   // text
   return (
     <DebouncedTextField
@@ -84,6 +99,58 @@ export function ChecklistFieldInput({
       onCommit={onChangeText}
       disabled={disabled}
     />
+  );
+}
+
+// Lazy fetch — most items in a long checklist are not multiple_choice, so we
+// avoid prefetching options. The PATCH endpoint validates option ownership
+// server-side regardless of what this component renders.
+function MultipleChoiceField({
+  itemId, selectedOptionId, onChangeOption, disabled,
+}: {
+  itemId: number;
+  selectedOptionId: number | null;
+  onChangeOption: (next: number | null) => void;
+  disabled?: boolean;
+}) {
+  const { data: options = [], isLoading } = useQuery<ChecklistItemOption[]>({
+    queryKey: ["/api/checklist-items", itemId, "options"],
+  });
+  if (isLoading) {
+    return <span className="text-xs text-muted-foreground" data-testid={`field-mc-loading-${itemId}`}>Loading...</span>;
+  }
+  if (options.length === 0) {
+    return (
+      <span className="text-xs text-amber-600" data-testid={`field-mc-empty-${itemId}`}>
+        No options defined
+      </span>
+    );
+  }
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap" data-testid={`field-mc-${itemId}`}>
+      {options.map((opt) => {
+        const selected = selectedOptionId === opt.id;
+        return (
+          <button
+            key={opt.id}
+            type="button"
+            disabled={disabled}
+            // Click already-selected option to clear (set to null).
+            onClick={() => onChangeOption(selected ? null : opt.id)}
+            className={cn(
+              "px-3 py-1 text-xs font-medium rounded-full border transition-colors hover-elevate active-elevate-2",
+              selected
+                ? "bg-[#F09000] text-white border-[#F09000]"
+                : "bg-background text-muted-foreground border-border",
+              disabled && "opacity-50 cursor-not-allowed",
+            )}
+            data-testid={`button-mc-option-${itemId}-${opt.id}`}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

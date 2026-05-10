@@ -12,7 +12,7 @@ export const taskStatusEnum = pgEnum("task_status", ["todo", "in_progress", "don
 export const taskPriorityEnum = pgEnum("task_priority", ["low", "medium", "high"]);
 export const checklistStatusEnum = pgEnum("checklist_status", ["not_started", "in_progress", "completed"]);
 // Stage 1 ships yes_no/rating/text. multiple_choice is Stage 2 (ALTER TYPE ADD VALUE).
-export const checklistFieldTypeEnum = pgEnum("checklist_field_type", ["yes_no", "rating", "text"]);
+export const checklistFieldTypeEnum = pgEnum("checklist_field_type", ["yes_no", "rating", "text", "multiple_choice"]);
 export const reportStatusEnum = pgEnum("report_status", ["draft", "submitted", "approved"]);
 export const calendarProviderEnum = pgEnum("calendar_provider", ["google", "outlook", "apple", "ical"]);
 export const eventRepeatEnum = pgEnum("event_repeat", ["none", "daily", "weekly", "monthly", "yearly"]);
@@ -149,12 +149,41 @@ export const checklistItems = pgTable("checklist_items", {
   valueBool: boolean("value_bool"),
   valueRating: integer("value_rating"),
   valueText: text("value_text"),
-  selectedOptionId: integer("selected_option_id"),
+  // FK added in Stage 2 — references checklistItemOptions(id) ON DELETE SET NULL.
+  // Forward-ref via lazy function is fine; Drizzle resolves at codegen time.
+  selectedOptionId: integer("selected_option_id").references((): any => checklistItemOptions.id, { onDelete: "set null" }),
   completedAt: timestamp("completed_at"),
   sortOrder: integer("sort_order").default(0).notNull(),
 }, (table) => [
   index("checklist_items_section_idx").on(table.sectionId),
   index("checklist_items_assigned_idx").on(table.assignedToUserId),
+]);
+
+// Stage 2 — per-item answer options for fieldType='multiple_choice'.
+// Cascade-delete with parent item; selected_option_id on the parent FK
+// nulls out via ON DELETE SET NULL when a chosen option is deleted.
+export const checklistItemOptions = pgTable("checklist_item_options", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  itemId: integer("item_id").references(() => checklistItems.id, { onDelete: "cascade" }).notNull(),
+  label: text("label").notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("checklist_item_options_item_sort_idx").on(table.itemId, table.sortOrder),
+]);
+
+// Stage 2 — per-item photo attachments. Join row only; the underlying media
+// row is not deleted on detach (other things may reference it). No updated_at
+// on purpose — re-attach is delete + create.
+export const checklistItemPhotos = pgTable("checklist_item_photos", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  itemId: integer("item_id").references(() => checklistItems.id, { onDelete: "cascade" }).notNull(),
+  mediaId: integer("media_id").references(() => media.id, { onDelete: "cascade" }).notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("checklist_item_photos_item_sort_idx").on(table.itemId, table.sortOrder),
 ]);
 
 // ─── Reports (new structured shape, session 37 rewrite) ───────────────────────
@@ -506,10 +535,21 @@ export const checklistSectionsRelations = relations(checklistSections, ({ one, m
   items: many(checklistItems),
 }));
 
-export const checklistItemsRelations = relations(checklistItems, ({ one }) => ({
+export const checklistItemsRelations = relations(checklistItems, ({ one, many }) => ({
   checklist: one(checklists, { fields: [checklistItems.checklistId], references: [checklists.id] }),
   section: one(checklistSections, { fields: [checklistItems.sectionId], references: [checklistSections.id] }),
   assignedTo: one(users, { fields: [checklistItems.assignedToUserId], references: [users.id] }),
+  options: many(checklistItemOptions),
+  photos: many(checklistItemPhotos),
+}));
+
+export const checklistItemOptionsRelations = relations(checklistItemOptions, ({ one }) => ({
+  item: one(checklistItems, { fields: [checklistItemOptions.itemId], references: [checklistItems.id] }),
+}));
+
+export const checklistItemPhotosRelations = relations(checklistItemPhotos, ({ one }) => ({
+  item: one(checklistItems, { fields: [checklistItemPhotos.itemId], references: [checklistItems.id] }),
+  media: one(media, { fields: [checklistItemPhotos.mediaId], references: [media.id] }),
 }));
 
 export const reportsRelations = relations(reports, ({ one, many }) => ({
@@ -608,6 +648,20 @@ export const insertChecklistSectionSchema = createInsertSchema(checklistSections
   updatedAt: true,
 });
 
+// Same drizzle-zod {} collapse as the section schema — extra omit keys flip
+// the inferred insert type to {}. Storage uses a local concrete patch type
+// where field-aware writes are needed; route handlers pass parsed.data.
+export const insertChecklistItemOptionSchema = createInsertSchema(checklistItemOptions).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertChecklistItemPhotoSchema = createInsertSchema(checklistItemPhotos).omit({
+  id: true,
+  createdAt: true,
+});
+
 export const insertReportSchema = createInsertSchema(reports).omit({
   id: true,
   createdAt: true,
@@ -642,6 +696,10 @@ export type InsertChecklistItem = z.infer<typeof insertChecklistItemSchema>;
 export type ChecklistItem = typeof checklistItems.$inferSelect;
 export type InsertChecklistSection = z.infer<typeof insertChecklistSectionSchema>;
 export type ChecklistSection = typeof checklistSections.$inferSelect;
+export type InsertChecklistItemOption = z.infer<typeof insertChecklistItemOptionSchema>;
+export type ChecklistItemOption = typeof checklistItemOptions.$inferSelect;
+export type InsertChecklistItemPhoto = z.infer<typeof insertChecklistItemPhotoSchema>;
+export type ChecklistItemPhoto = typeof checklistItemPhotos.$inferSelect;
 export type InsertReport = z.infer<typeof insertReportSchema>;
 export type Report = typeof reports.$inferSelect;
 export type InsertReportSection = z.infer<typeof insertReportSectionSchema>;

@@ -7,6 +7,8 @@ import {
   checklists,
   checklistItems,
   checklistSections,
+  checklistItemOptions,
+  checklistItemPhotos,
   reports,
   reportSections,
   reportSectionPhotos,
@@ -32,6 +34,10 @@ import {
   type InsertChecklistItem,
   type ChecklistSection,
   type InsertChecklistSection,
+  type ChecklistItemOption,
+  type InsertChecklistItemOption,
+  type ChecklistItemPhoto,
+  type InsertChecklistItemPhoto,
   type Report,
   type InsertReport,
   type ReportSection,
@@ -70,11 +76,14 @@ type DbOrTx = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 // drizzle-zod's createInsertSchema(...).omit() collapses inferred insert types
 // to `{}` (see shared/schema.ts comments). This concrete view is used by the
 // checklist-item methods for field-type-aware writes.
+type ChecklistFieldType = "yes_no" | "rating" | "text" | "multiple_choice";
 type ChecklistItemPatch = {
-  fieldType?: "yes_no" | "rating" | "text";
+  fieldType?: ChecklistFieldType;
   valueBool?: boolean | null;
   valueRating?: number | null;
   valueText?: string | null;
+  selectedOptionId?: number | null;
+  photosRequired?: boolean;
   checked?: boolean;
 };
 
@@ -135,6 +144,21 @@ export interface IStorage {
   updateChecklistSection(id: number, data: Partial<InsertChecklistSection>): Promise<ChecklistSection | undefined>;
   deleteChecklistSection(id: number): Promise<void>;
   reorderChecklistSections(checklistId: number, orderedIds: number[]): Promise<void>;
+
+  // ── Stage 2: per-item options (multiple_choice) ────────────────────────────
+  getChecklistItemOptions(itemId: number): Promise<ChecklistItemOption[]>;
+  getChecklistItemOption(id: number): Promise<ChecklistItemOption | undefined>;
+  createChecklistItemOption(option: InsertChecklistItemOption): Promise<ChecklistItemOption>;
+  updateChecklistItemOption(id: number, data: { label?: string; sortOrder?: number }): Promise<ChecklistItemOption | undefined>;
+  deleteChecklistItemOption(id: number): Promise<void>;
+  reorderChecklistItemOptions(itemId: number, orderedIds: number[]): Promise<void>;
+
+  // ── Stage 2: per-item photos ───────────────────────────────────────────────
+  getChecklistItemPhotos(itemId: number): Promise<(ChecklistItemPhoto & { media: Media })[]>;
+  getChecklistItemPhoto(id: number): Promise<ChecklistItemPhoto | undefined>;
+  attachChecklistItemPhotos(itemId: number, mediaIds: number[]): Promise<ChecklistItemPhoto[]>;
+  detachChecklistItemPhoto(id: number): Promise<void>;
+  reorderChecklistItemPhotos(itemId: number, orderedIds: number[]): Promise<void>;
 
   // ── Reports (structured shape, session 37) ──────────────────────────────
   getReportsByProject(projectId: number): Promise<(Report & { createdBy?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } })[]>;
@@ -661,103 +685,265 @@ export class DatabaseStorage implements IStorage {
     // to `{}` in the inferred type — see comment in shared/schema.ts. Cast
     // through a locally-typed view so the field-type-aware logic stays sound.
     const i = item as ChecklistItemPatch;
-    const ft = (i.fieldType ?? "yes_no") as "yes_no" | "rating" | "text";
     const valueBool = i.valueBool !== undefined ? i.valueBool : (i.checked ? true : i.valueBool);
-    const completedAt = this._computeCompletedAt(ft, {
-      valueBool: valueBool ?? null,
-      valueRating: i.valueRating ?? null,
-      valueText: i.valueText ?? null,
+    return await db.transaction(async (tx) => {
+      const [created] = await tx.insert(checklistItems).values({
+        ...item,
+        valueBool,
+      } as InsertChecklistItem).returning();
+      // No photos at insert time, so the photos_required gate is the only
+      // thing that can hold completion off — the recompute handles it.
+      await this._recomputeItemCompletion(created.id, tx);
+      const [final] = await tx.select().from(checklistItems).where(eq(checklistItems.id, created.id)).limit(1);
+      return final;
     });
-    const [created] = await db.insert(checklistItems).values({
-      ...item,
-      valueBool,
-      completedAt,
-    } as InsertChecklistItem).returning();
-    return created;
+  }
+
+  async updateChecklistItem(id: number, data: Partial<InsertChecklistItem> & { checked?: boolean }): Promise<ChecklistItem | undefined> {
+    // Same drizzle-zod {} collapse — re-view through a concrete patch shape.
+    const d = data as ChecklistItemPatch;
+
+    // Read `current` INSIDE the tx with FOR UPDATE so two concurrent PATCHes
+    // racing a fieldType change can't both make their wipe-or-merge decision
+    // off the same pre-write snapshot. The row lock serialises them.
+    const updated = await db.transaction(async (tx) => {
+      const lockRes = await tx.execute(
+        sql`SELECT id, field_type AS "fieldType" FROM ${checklistItems} WHERE id = ${id} FOR UPDATE`,
+      );
+      const current = (lockRes.rows[0] as { id: number; fieldType: string } | undefined);
+      if (!current) return undefined;
+
+      const patch: Record<string, unknown> = { ...data };
+      if (d.fieldType !== undefined && d.fieldType !== current.fieldType) {
+        // Field-type change wipes all value_* columns AND selected_option_id.
+        // completed_at is recomputed by _recomputeItemCompletion afterwards.
+        patch.valueBool = null;
+        patch.valueRating = null;
+        patch.valueText = null;
+        patch.selectedOptionId = null;
+        patch.checked = false;
+      } else {
+        // Legacy `checked` write-through. PATCH { checked: true } from old
+        // mobile builds mirrors to value_bool=true; { checked: false } maps
+        // to value_bool=NULL (not false). Legacy "unchecked" meant
+        // "unanswered", not a deliberate "No" — mapping to false here would
+        // mark the row complete under the new yes_no state machine.
+        if (d.checked !== undefined && d.valueBool === undefined) {
+          patch.valueBool = d.checked ? true : null;
+        }
+        // And vice-versa: new clients writing value_bool keep `checked` in
+        // sync until the column is dropped in Stage 1.5. Only value_bool=true
+        // counts as legacy-checked; both null and false → checked=false.
+        if (d.valueBool !== undefined && d.checked === undefined) {
+          patch.checked = d.valueBool === true;
+        }
+      }
+
+      await tx
+        .update(checklistItems)
+        .set(patch as Partial<InsertChecklistItem>)
+        .where(eq(checklistItems.id, id));
+      await this._recomputeItemCompletion(id, tx);
+      const [row] = await tx.select().from(checklistItems).where(eq(checklistItems.id, id)).limit(1);
+      return row;
+    });
+    return updated;
   }
 
   /**
    * State machine for completed_at. Centralised here so future callers cannot
-   * bypass it.
+   * bypass it. Stage 2 adds:
+   *   - multiple_choice → completed when selectedOptionId is non-null
+   *   - photos_required gate → if true AND photoCount === 0, completed_at
+   *     stays NULL even if the value field is "answered"
    *
-   *   yes_no  → completed when value_bool is non-null (true OR false count
-   *             as "answered" — both are deliberate answers).
-   *   rating  → completed when value_rating is between 1 and 5 inclusive.
-   *   text    → completed when value_text is non-null AND .trim().length > 0.
+   *   yes_no          → answered when value_bool is non-null (true OR false)
+   *   rating          → answered when value_rating is between 1 and 5 inclusive
+   *   text            → answered when value_text trim().length > 0
+   *   multiple_choice → answered when selected_option_id is a positive integer
    *
-   * When fieldType changes via PATCH, all three value_* columns AND
-   * completed_at are nulled simultaneously — we do not coerce a prior bool
-   * into a rating, etc.
-   *
-   * Legacy `checked` column is mirrored to/from value_bool for one release;
-   * value_bool is the source of truth for completed_at on yes_no items.
+   * When fieldType changes via PATCH, all value_*, selected_option_id, AND
+   * completed_at are nulled simultaneously (handled by updateChecklistItem,
+   * not here).
    */
-  async updateChecklistItem(id: number, data: Partial<InsertChecklistItem> & { checked?: boolean }): Promise<ChecklistItem | undefined> {
-    const [current] = await db.select().from(checklistItems).where(eq(checklistItems.id, id)).limit(1);
-    if (!current) return undefined;
-
-    // Same drizzle-zod {} collapse — re-view through a concrete patch shape.
-    const d = data as ChecklistItemPatch;
-    const patch: Record<string, unknown> = { ...data };
-
-    // Field-type change wipes all values + completed_at.
-    if (d.fieldType !== undefined && d.fieldType !== current.fieldType) {
-      patch.valueBool = null;
-      patch.valueRating = null;
-      patch.valueText = null;
-      patch.checked = false;
-      patch.completedAt = null;
-    } else {
-      // Legacy `checked` write-through. PATCH { checked: true } from old
-      // mobile builds mirrors to value_bool=true; { checked: false } maps to
-      // value_bool=NULL (not false). Legacy "unchecked" semantics meant
-      // "unanswered", not a deliberate "No" answer — mapping to false here
-      // would mark the row complete under the new yes_no state machine.
-      if (d.checked !== undefined && d.valueBool === undefined) {
-        patch.valueBool = d.checked ? true : null;
-      }
-      // And vice-versa: new clients writing value_bool keep `checked` in sync
-      // until the column is dropped in Stage 1.5. Only value_bool=true counts
-      // as legacy-checked; both null and false → checked=false.
-      if (d.valueBool !== undefined && d.checked === undefined) {
-        patch.checked = d.valueBool === true;
-      }
-
-      const ft = (d.fieldType ?? current.fieldType) as "yes_no" | "rating" | "text";
-      const next = {
-        valueBool: patch.valueBool !== undefined ? (patch.valueBool as boolean | null) : current.valueBool,
-        valueRating: patch.valueRating !== undefined ? (patch.valueRating as number | null) : current.valueRating,
-        valueText: patch.valueText !== undefined ? (patch.valueText as string | null) : current.valueText,
-      };
-      patch.completedAt = this._computeCompletedAt(ft, next);
-    }
-
-    const [updated] = await db
-      .update(checklistItems)
-      .set(patch as Partial<InsertChecklistItem>)
-      .where(eq(checklistItems.id, id))
-      .returning();
-    return updated;
-  }
-
   private _computeCompletedAt(
-    fieldType: "yes_no" | "rating" | "text",
-    v: { valueBool: boolean | null; valueRating: number | null; valueText: string | null },
+    fieldType: ChecklistFieldType,
+    v: {
+      valueBool: boolean | null;
+      valueRating: number | null;
+      valueText: string | null;
+      selectedOptionId: number | null;
+    },
+    gates: { photosRequired: boolean; photoCount: number },
   ): Date | null {
+    let answered: boolean;
     switch (fieldType) {
       case "yes_no":
-        return v.valueBool !== null && v.valueBool !== undefined ? new Date() : null;
+        answered = v.valueBool !== null && v.valueBool !== undefined;
+        break;
       case "rating":
-        return typeof v.valueRating === "number" && v.valueRating >= 1 && v.valueRating <= 5 ? new Date() : null;
+        answered = typeof v.valueRating === "number" && v.valueRating >= 1 && v.valueRating <= 5;
+        break;
       case "text":
-        return typeof v.valueText === "string" && v.valueText.trim().length > 0 ? new Date() : null;
+        answered = typeof v.valueText === "string" && v.valueText.trim().length > 0;
+        break;
+      case "multiple_choice":
+        answered = typeof v.selectedOptionId === "number" && v.selectedOptionId > 0;
+        break;
       default:
         return null;
     }
+    if (!answered) return null;
+    if (gates.photosRequired && gates.photoCount === 0) return null;
+    return new Date();
+  }
+
+  /**
+   * Single source of truth for re-deriving completed_at after any side-effect
+   * that can change it: value PATCH, fieldType change, photo attach/detach,
+   * option delete (when the deleted option was the selected one). Touches
+   * only completed_at on the items row — value_* / checked are owned by
+   * updateChecklistItem.
+   */
+  private async _recomputeItemCompletion(itemId: number, executor: DbOrTx = db): Promise<void> {
+    const [item] = await executor.select().from(checklistItems).where(eq(checklistItems.id, itemId)).limit(1);
+    if (!item) return;
+    const [{ photoCount }] = await executor
+      .select({ photoCount: sql<number>`count(*)::int` })
+      .from(checklistItemPhotos)
+      .where(eq(checklistItemPhotos.itemId, itemId));
+    const completedAt = this._computeCompletedAt(
+      item.fieldType as ChecklistFieldType,
+      {
+        valueBool: item.valueBool,
+        valueRating: item.valueRating,
+        valueText: item.valueText,
+        selectedOptionId: item.selectedOptionId,
+      },
+      { photosRequired: item.photosRequired, photoCount },
+    );
+    await executor.update(checklistItems).set({ completedAt }).where(eq(checklistItems.id, itemId));
   }
 
   async deleteChecklistItem(id: number): Promise<void> {
     await db.delete(checklistItems).where(eq(checklistItems.id, id));
+  }
+
+  // ── Stage 2: per-item options (multiple_choice) ──────────────────────────
+  async getChecklistItemOptions(itemId: number): Promise<ChecklistItemOption[]> {
+    return db.select().from(checklistItemOptions)
+      .where(eq(checklistItemOptions.itemId, itemId))
+      .orderBy(asc(checklistItemOptions.sortOrder), asc(checklistItemOptions.id));
+  }
+
+  async getChecklistItemOption(id: number): Promise<ChecklistItemOption | undefined> {
+    const [row] = await db.select().from(checklistItemOptions).where(eq(checklistItemOptions.id, id)).limit(1);
+    return row;
+  }
+
+  async createChecklistItemOption(option: InsertChecklistItemOption): Promise<ChecklistItemOption> {
+    const [created] = await db.insert(checklistItemOptions).values(option).returning();
+    return created;
+  }
+
+  async updateChecklistItemOption(id: number, data: { label?: string; sortOrder?: number }): Promise<ChecklistItemOption | undefined> {
+    const patch: Record<string, unknown> = { ...data, updatedAt: new Date() };
+    const [updated] = await db.update(checklistItemOptions).set(patch).where(eq(checklistItemOptions.id, id)).returning();
+    return updated;
+  }
+
+  async deleteChecklistItemOption(id: number): Promise<void> {
+    // FK ON DELETE SET NULL clears selectedOptionId on parent items
+    // automatically. We capture the parent itemId BEFORE delete so we can
+    // recompute its completion state (the row is now unanswered if the
+    // deleted option was the selected one).
+    await db.transaction(async (tx) => {
+      const [opt] = await tx.select({ itemId: checklistItemOptions.itemId })
+        .from(checklistItemOptions)
+        .where(eq(checklistItemOptions.id, id))
+        .limit(1);
+      await tx.delete(checklistItemOptions).where(eq(checklistItemOptions.id, id));
+      if (opt) await this._recomputeItemCompletion(opt.itemId, tx);
+    });
+  }
+
+  async reorderChecklistItemOptions(itemId: number, orderedIds: number[]): Promise<void> {
+    await db.transaction(async (tx) => {
+      const existing = await tx.select({ id: checklistItemOptions.id })
+        .from(checklistItemOptions)
+        .where(eq(checklistItemOptions.itemId, itemId));
+      const existingIds = new Set(existing.map((r) => r.id));
+      if (orderedIds.length !== existingIds.size || !orderedIds.every((id) => existingIds.has(id))) {
+        throw new Error("orderedIds does not match item options exactly");
+      }
+      for (let i = 0; i < orderedIds.length; i++) {
+        await tx.update(checklistItemOptions)
+          .set({ sortOrder: i, updatedAt: new Date() })
+          .where(eq(checklistItemOptions.id, orderedIds[i]));
+      }
+    });
+  }
+
+  // ── Stage 2: per-item photos ─────────────────────────────────────────────
+  async getChecklistItemPhotos(itemId: number): Promise<(ChecklistItemPhoto & { media: Media })[]> {
+    const rows = await db
+      .select({ photo: checklistItemPhotos, media })
+      .from(checklistItemPhotos)
+      .innerJoin(media, eq(checklistItemPhotos.mediaId, media.id))
+      .where(eq(checklistItemPhotos.itemId, itemId))
+      .orderBy(asc(checklistItemPhotos.sortOrder), asc(checklistItemPhotos.id));
+    return rows.map((r) => ({ ...r.photo, media: r.media }));
+  }
+
+  async getChecklistItemPhoto(id: number): Promise<ChecklistItemPhoto | undefined> {
+    const [row] = await db.select().from(checklistItemPhotos).where(eq(checklistItemPhotos.id, id)).limit(1);
+    return row;
+  }
+
+  async attachChecklistItemPhotos(itemId: number, mediaIds: number[]): Promise<ChecklistItemPhoto[]> {
+    if (mediaIds.length === 0) return [];
+    return db.transaction(async (tx) => {
+      const [{ maxSort }] = await tx
+        .select({ maxSort: sql<number | null>`max(${checklistItemPhotos.sortOrder})` })
+        .from(checklistItemPhotos)
+        .where(eq(checklistItemPhotos.itemId, itemId));
+      const start = (maxSort ?? -1) + 1;
+      const rows = mediaIds.map((mediaId, i) => ({ itemId, mediaId, sortOrder: start + i }));
+      const created = await tx.insert(checklistItemPhotos).values(rows).returning();
+      // Attaching the first photo to a photos_required item is what trips
+      // it complete — recompute now.
+      await this._recomputeItemCompletion(itemId, tx);
+      return created;
+    });
+  }
+
+  async detachChecklistItemPhoto(id: number): Promise<void> {
+    await db.transaction(async (tx) => {
+      const [row] = await tx.select({ itemId: checklistItemPhotos.itemId })
+        .from(checklistItemPhotos)
+        .where(eq(checklistItemPhotos.id, id))
+        .limit(1);
+      await tx.delete(checklistItemPhotos).where(eq(checklistItemPhotos.id, id));
+      // Removing the last photo from a photos_required item un-completes it.
+      if (row) await this._recomputeItemCompletion(row.itemId, tx);
+    });
+  }
+
+  async reorderChecklistItemPhotos(itemId: number, orderedIds: number[]): Promise<void> {
+    await db.transaction(async (tx) => {
+      const existing = await tx.select({ id: checklistItemPhotos.id })
+        .from(checklistItemPhotos)
+        .where(eq(checklistItemPhotos.itemId, itemId));
+      const existingIds = new Set(existing.map((r) => r.id));
+      if (orderedIds.length !== existingIds.size || !orderedIds.every((id) => existingIds.has(id))) {
+        throw new Error("orderedIds does not match item photos exactly");
+      }
+      for (let i = 0; i < orderedIds.length; i++) {
+        await tx.update(checklistItemPhotos)
+          .set({ sortOrder: i })
+          .where(eq(checklistItemPhotos.id, orderedIds[i]));
+      }
+    });
   }
 
   async getChecklistSections(checklistId: number): Promise<ChecklistSection[]> {

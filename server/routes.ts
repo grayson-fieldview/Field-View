@@ -7,7 +7,7 @@ import { getAccountBilling, isAccountBillingEnabled, overlayAccountBillingOnUser
 import { requireAdmin, requireAdminOrManager } from "./middleware/auth";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
-import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistSectionSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, checklistSections, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, pendingGeofenceExits, templateConfigSchema } from "@shared/schema";
+import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistSectionSchema, insertChecklistItemOptionSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, checklistItems, checklistSections, checklistItemOptions, checklistItemPhotos, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, pendingGeofenceExits, templateConfigSchema } from "@shared/schema";
 import { executeAutoClockOut } from "./lib/timesheets";
 import { users, invitations, accounts } from "@shared/models/auth";
 import { computeSeatUsage } from "./lib/seats";
@@ -114,6 +114,42 @@ async function verifyChecklistSectionAccess(sectionId: number, accountId: string
     .limit(1);
   if (!row || row.accountId !== accountId) return { ok: false };
   return { ok: true, checklistId: row.checklistId };
+}
+
+// Stage 2 — 4-table chain: option → item → checklist → project → account.
+async function verifyChecklistItemAccess(itemId: number, accountId: string): Promise<{ ok: boolean; projectId?: number; checklistId?: number }> {
+  const [row] = await db.select({ accountId: projects.accountId, projectId: projects.id, checklistId: checklists.id })
+    .from(checklistItems)
+    .innerJoin(checklists, eq(checklistItems.checklistId, checklists.id))
+    .innerJoin(projects, eq(checklists.projectId, projects.id))
+    .where(eq(checklistItems.id, itemId))
+    .limit(1);
+  if (!row || row.accountId !== accountId) return { ok: false };
+  return { ok: true, projectId: row.projectId, checklistId: row.checklistId };
+}
+
+async function verifyChecklistOptionAccess(optionId: number, accountId: string): Promise<{ ok: boolean; itemId?: number }> {
+  const [row] = await db.select({ accountId: projects.accountId, itemId: checklistItemOptions.itemId })
+    .from(checklistItemOptions)
+    .innerJoin(checklistItems, eq(checklistItemOptions.itemId, checklistItems.id))
+    .innerJoin(checklists, eq(checklistItems.checklistId, checklists.id))
+    .innerJoin(projects, eq(checklists.projectId, projects.id))
+    .where(eq(checklistItemOptions.id, optionId))
+    .limit(1);
+  if (!row || row.accountId !== accountId) return { ok: false };
+  return { ok: true, itemId: row.itemId };
+}
+
+async function verifyChecklistItemPhotoAccess(joinId: number, accountId: string): Promise<{ ok: boolean; itemId?: number }> {
+  const [row] = await db.select({ accountId: projects.accountId, itemId: checklistItemPhotos.itemId })
+    .from(checklistItemPhotos)
+    .innerJoin(checklistItems, eq(checklistItemPhotos.itemId, checklistItems.id))
+    .innerJoin(checklists, eq(checklistItems.checklistId, checklists.id))
+    .innerJoin(projects, eq(checklists.projectId, projects.id))
+    .where(eq(checklistItemPhotos.id, joinId))
+    .limit(1);
+  if (!row || row.accountId !== accountId) return { ok: false };
+  return { ok: true, itemId: row.itemId };
 }
 
 async function verifyTaskAccess(taskId: number, accountId: string): Promise<boolean> {
@@ -466,7 +502,9 @@ export async function registerRoutes(
           if (typeof f.fileSize !== "number" || !Number.isFinite(f.fileSize) || f.fileSize <= 0 || f.fileSize > sizeLimit) {
             throw new Error(`File size must be between 1 byte and ${Math.round(sizeLimit / (1024 * 1024))} MB: ${f.originalName}`);
           }
-          const folder = f.folder === "branding" ? "branding" : "photos";
+          const folder = f.folder === "branding" ? "branding"
+                       : f.folder === "checklists" ? "checklists"
+                       : "photos";
           return getPresignedPutUrl(f.originalName, f.mimeType, folder, f.fileSize);
         })
       );
@@ -1274,12 +1312,40 @@ export async function registerRoutes(
         const check = await assertSectionInChecklist(req.body.sectionId, item[0].checklistId);
         if (!check.ok) return res.status(400).json({ message: check.reason });
       }
-      // `checked` retained for legacy mobile clients — storage mirrors it to value_bool.
-      const allowed = ["label", "checked", "sortOrder", "sectionId", "fieldType", "notes",
-                       "assignedToUserId", "valueBool", "valueRating", "valueText", "photosRequired"];
-      const filtered: Record<string, any> = {};
-      for (const key of allowed) {
-        if (key in req.body) filtered[key] = req.body[key];
+      // Strict Zod parse: rejects unknown keys + bad types with a clean 400
+      // instead of falling through to a 500 from the DB layer. `checked` is
+      // retained for legacy mobile clients — storage mirrors it to value_bool.
+      const patchSchema = z.object({
+        label: z.string().min(1).max(500).optional(),
+        checked: z.boolean().optional(),
+        sortOrder: z.number().int().nonnegative().optional(),
+        sectionId: z.number().int().positive().nullable().optional(),
+        fieldType: z.enum(["yes_no", "rating", "text", "multiple_choice"]).optional(),
+        notes: z.string().nullable().optional(),
+        assignedToUserId: z.string().nullable().optional(),
+        valueBool: z.boolean().nullable().optional(),
+        valueRating: z.number().int().min(1).max(5).nullable().optional(),
+        valueText: z.string().nullable().optional(),
+        photosRequired: z.boolean().optional(),
+        selectedOptionId: z.number().int().positive().nullable().optional(),
+      }).strict();
+      const parsed = patchSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: "Invalid patch", errors: parsed.error.errors });
+      const filtered = parsed.data as Record<string, unknown>;
+      // Stage 2 — selectedOptionId ownership + fieldType-MC guard. NEVER
+      // auto-coerce fieldType: caller must explicitly PATCH both keys
+      // together if they want to switch type AND pick an option.
+      if ("selectedOptionId" in filtered && filtered.selectedOptionId !== null) {
+        const [currentItem] = await db.select({ fieldType: checklistItems.fieldType })
+          .from(checklistItems).where(eq(checklistItems.id, id)).limit(1);
+        const nextFt = filtered.fieldType ?? currentItem?.fieldType;
+        if (nextFt !== "multiple_choice") {
+          return res.status(400).json({ message: "Cannot select an option on a non-multiple-choice item" });
+        }
+        const opt = await storage.getChecklistItemOption(filtered.selectedOptionId as number);
+        if (!opt || opt.itemId !== id) {
+          return res.status(400).json({ message: "Option does not belong to this item" });
+        }
       }
       const updated = await storage.updateChecklistItem(id, filtered);
       if (!updated) return res.status(404).json({ message: "Item not found" });
@@ -1374,6 +1440,158 @@ export async function registerRoutes(
       res.json({ message: "Deleted" });
     } catch (error) {
       res.status(500).json({ message: "Failed to delete checklist item" });
+    }
+  });
+
+  // ── Stage 2: Per-item options (multiple_choice answer source) ──────────
+  app.get("/api/checklist-items/:id/options", requireReadAccess, async (req: any, res) => {
+    try {
+      const itemId = parseInt(req.params.id as string);
+      if (!Number.isInteger(itemId) || itemId <= 0) return res.status(400).json({ message: "Invalid item id" });
+      const access = await verifyChecklistItemAccess(itemId, req.user.accountId);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
+      const options = await storage.getChecklistItemOptions(itemId);
+      res.json(options);
+    } catch {
+      res.status(500).json({ message: "Failed to fetch options" });
+    }
+  });
+
+  app.post("/api/checklist-items/:id/options", requireWriteAccess, async (req: any, res) => {
+    try {
+      const itemId = parseInt(req.params.id as string);
+      if (!Number.isInteger(itemId) || itemId <= 0) return res.status(400).json({ message: "Invalid item id" });
+      const access = await verifyChecklistItemAccess(itemId, req.user.accountId);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
+      // Force the URL itemId — never trust body's itemId.
+      const parsed = insertChecklistItemOptionSchema.safeParse({ ...req.body, itemId });
+      if (!parsed.success) return res.status(400).json({ message: "Invalid option", errors: parsed.error.errors });
+      const created = await storage.createChecklistItemOption(parsed.data as any);
+      res.status(201).json(created);
+    } catch {
+      res.status(500).json({ message: "Failed to create option" });
+    }
+  });
+
+  app.patch("/api/checklist-options/:id", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ message: "Invalid id" });
+      const access = await verifyChecklistOptionAccess(id, req.user.accountId);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
+      const optionPatchSchema = z.object({
+        label: z.string().min(1).max(500).optional(),
+        sortOrder: z.number().int().nonnegative().optional(),
+      }).strict();
+      const parsed = optionPatchSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: "Invalid patch", errors: parsed.error.errors });
+      const updated = await storage.updateChecklistItemOption(id, parsed.data);
+      if (!updated) return res.status(404).json({ message: "Not found" });
+      res.json(updated);
+    } catch {
+      res.status(500).json({ message: "Failed to update option" });
+    }
+  });
+
+  app.delete("/api/checklist-options/:id", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ message: "Invalid id" });
+      const access = await verifyChecklistOptionAccess(id, req.user.accountId);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
+      // Storage handles FK SET NULL on parent + recompute completion.
+      await storage.deleteChecklistItemOption(id);
+      res.json({ message: "Deleted" });
+    } catch {
+      res.status(500).json({ message: "Failed to delete option" });
+    }
+  });
+
+  app.post("/api/checklist-items/:id/options/reorder", requireWriteAccess, async (req: any, res) => {
+    try {
+      const itemId = parseInt(req.params.id as string);
+      if (!Number.isInteger(itemId) || itemId <= 0) return res.status(400).json({ message: "Invalid item id" });
+      const access = await verifyChecklistItemAccess(itemId, req.user.accountId);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
+      const orderedIds = req.body?.orderedIds;
+      if (!Array.isArray(orderedIds) || !orderedIds.every((n) => Number.isInteger(n) && n > 0)) {
+        return res.status(400).json({ message: "orderedIds must be array of positive integers" });
+      }
+      await storage.reorderChecklistItemOptions(itemId, orderedIds);
+      res.json({ message: "Reordered" });
+    } catch (e: any) {
+      const msg = e?.message?.includes("does not match") ? e.message : "Failed to reorder options";
+      res.status(e?.message?.includes("does not match") ? 400 : 500).json({ message: msg });
+    }
+  });
+
+  // ── Stage 2: Per-item photo joins ──────────────────────────────────────
+  app.get("/api/checklist-items/:id/photos", requireReadAccess, async (req: any, res) => {
+    try {
+      const itemId = parseInt(req.params.id as string);
+      if (!Number.isInteger(itemId) || itemId <= 0) return res.status(400).json({ message: "Invalid item id" });
+      const access = await verifyChecklistItemAccess(itemId, req.user.accountId);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
+      const photos = await storage.getChecklistItemPhotos(itemId);
+      res.json(photos);
+    } catch {
+      res.status(500).json({ message: "Failed to fetch photos" });
+    }
+  });
+
+  app.post("/api/checklist-items/:id/photos", requireWriteAccess, async (req: any, res) => {
+    try {
+      const itemId = parseInt(req.params.id as string);
+      if (!Number.isInteger(itemId) || itemId <= 0) return res.status(400).json({ message: "Invalid item id" });
+      const access = await verifyChecklistItemAccess(itemId, req.user.accountId);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
+      const mediaIds = req.body?.mediaIds;
+      if (!Array.isArray(mediaIds) || mediaIds.length === 0 || !mediaIds.every((n) => Number.isInteger(n) && n > 0)) {
+        return res.status(400).json({ message: "mediaIds must be a non-empty array of positive integers" });
+      }
+      // Cross-account guard: every media row must belong to the same account.
+      const owned = await db.select({ id: media.id })
+        .from(media)
+        .innerJoin(projects, eq(media.projectId, projects.id))
+        .where(and(inArray(media.id, mediaIds), eq(projects.accountId, req.user.accountId)));
+      if (owned.length !== mediaIds.length) {
+        return res.status(403).json({ message: "One or more media rows are not in your account" });
+      }
+      const created = await storage.attachChecklistItemPhotos(itemId, mediaIds);
+      res.status(201).json(created);
+    } catch {
+      res.status(500).json({ message: "Failed to attach photos" });
+    }
+  });
+
+  app.delete("/api/checklist-item-photos/:id", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ message: "Invalid id" });
+      const access = await verifyChecklistItemPhotoAccess(id, req.user.accountId);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
+      await storage.detachChecklistItemPhoto(id);
+      res.json({ message: "Detached" });
+    } catch {
+      res.status(500).json({ message: "Failed to detach photo" });
+    }
+  });
+
+  app.post("/api/checklist-items/:id/photos/reorder", requireWriteAccess, async (req: any, res) => {
+    try {
+      const itemId = parseInt(req.params.id as string);
+      if (!Number.isInteger(itemId) || itemId <= 0) return res.status(400).json({ message: "Invalid item id" });
+      const access = await verifyChecklistItemAccess(itemId, req.user.accountId);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
+      const orderedIds = req.body?.orderedIds;
+      if (!Array.isArray(orderedIds) || !orderedIds.every((n) => Number.isInteger(n) && n > 0)) {
+        return res.status(400).json({ message: "orderedIds must be array of positive integers" });
+      }
+      await storage.reorderChecklistItemPhotos(itemId, orderedIds);
+      res.json({ message: "Reordered" });
+    } catch (e: any) {
+      const msg = e?.message?.includes("does not match") ? e.message : "Failed to reorder photos";
+      res.status(e?.message?.includes("does not match") ? 400 : 500).json({ message: msg });
     }
   });
 

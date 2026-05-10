@@ -1,0 +1,93 @@
+APPROVED for Stage 2.
+
+Confirmations / additional locks:
+
+1. Migration script: split into two top-level steps. Pre-flight 
+   read of pg_enum + conditional ALTER TYPE ADD VALUE 'multiple_choice' 
+   OUTSIDE any transaction. Then single tx for tables, FK, indexes. 
+   Idempotent re-run safe.
+
+2. Photo count read on every item PATCH: option (a) — count(*) per 
+   write. Don't denormalize. Hot writes are not the concern here; 
+   correctness is.
+
+3. Extract _recomputeItemCompletion(itemId, tx) helper. Called from:
+   - updateChecklistItem (after value/fieldType/photosRequired change)
+   - attachChecklistItemPhotos (after each batch)
+   - detachChecklistItemPhoto (after delete)
+   - deleteChecklistItemOption (when the option was the selected one)
+   Single source of truth for completion logic.
+
+4. selectedOptionId validation in PATCH /api/checklist-items/:id:
+   - If provided non-null, look up option, verify option.item_id === 
+     item.id (ownership)
+   - Verify item.fieldType === 'multiple_choice'. If not, return 400 
+     "Cannot select an option on a non-multiple-choice item." NO 
+     auto-coercion of fieldType.
+   - Field-type-change wipe block extends to clear selectedOptionId 
+     when fieldType changes away from multiple_choice
+
+5. MC validation: client-side warning if author has multiple_choice + 
+   < 2 options ("Multiple choice fields need at least 2 options"). NO 
+   server-side block — graceful degradation: fill UI shows "This 
+   question hasn't been fully set up yet" if < 2 options.
+
+6. Photo upload uses the existing 3-step flow:
+   - POST /api/uploads/sign with folder: "checklists"
+   - PUT to S3 directly  
+   - POST /api/projects/:id/media to create media rows
+   - POST /api/checklist-items/:id/photos {mediaIds} to attach
+   New client helper: upload-checklist-photos.ts wrapping the flow.
+
+7. S3 folder whitelist: f.folder === "branding" → "branding" : 
+   f.folder === "checklists" → "checklists" : "photos". Strict 
+   ternary, no fallthrough. Verify the S3 helper doesn't restrict 
+   the prefix (or flag if it does).
+
+8. Cross-account verify helpers: verifyChecklistOptionAccess + 
+   verifyChecklistItemPhotoAccess matching Stage 1's 
+   verifyChecklistSectionAccess pattern.
+
+9. NOT auto-setting fieldType to multiple_choice — the route 
+   explicitly rejects that case with 400. Reinforced.
+
+10. Out of Stage 2: template options mirror, template page rebuild, 
+    drop legacy `checked` column (Stage 1.5 follow-up), drag-to-
+    reorder on options.
+
+TS drift expectation: +2 to +3 (matching Stage 1 pattern — new 
+createInsertSchema → No-overload, new omit → "type 'never'"). If 
+drift exceeds 3, list and verify each new error is the same 
+documented pattern before pushing.
+
+Verify before push:
+- TS count <= 39 (current 36 + max 3)
+- Build green
+- Dev workflow boots clean
+- Architect review pass
+
+Migration HARD RULE applies. After commit:
+1. RDS snapshot (pre-session40-checklists-stage2-2026-05-10)
+2. Whitelist Replit IP
+3. Run migration (note: split into 2 top-level statements per 
+   ALTER TYPE caveat)
+4. Verify enum has 4 labels, FK constraint exists, both new tables + 
+   indexes present
+5. Push code, Vercel auto-promotes
+6. Un-whitelist Replit IP
+
+Smoke test on prod after deploy:
+- Existing yes_no/rating/text items still work (regression check)
+- Create new MC item: define 3 options, save, fill out, selected 
+  option persists
+- MC with < 2 options: fill UI degrades gracefully
+- photos_required item: answer without photos → progress doesn't 
+  count → attach photo → progress fires
+- Detach last photo from photos_required item → progress un-fires
+- Hide completed toggle (per-card): completed items hide
+- Show only my items toggle: items assigned to others disappear, 
+  unassigned items still show
+- Cross-account: PATCH /api/checklist-options/<other-account-id> → 403
+- Multi-photo upload: attach 3, all show, remove one, reorder
+
+Single commit total (per Stage 1 pattern). Run.
