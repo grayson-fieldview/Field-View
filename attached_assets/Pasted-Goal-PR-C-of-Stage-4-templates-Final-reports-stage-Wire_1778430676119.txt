@@ -1,0 +1,128 @@
+Goal: PR-C of Stage 4 templates. Final reports stage. Wires up the 
+template editor page, makes template rows in the list clickable, 
+adds apply-template flow to Create Report dialogs (global + project), 
+consolidates project-detail's inline create card with ReportFormDialog.
+
+Two-phase as usual.
+
+=== Phase 1 — DIAGNOSE only, no code changes ===
+
+1. Show me the current state of:
+   - client/src/components/report-editor/cover-editor.tsx (the mode 
+     prop is wired but unused — confirm where the conditional logic 
+     should branch when mode === "template")
+   - client/src/components/report-editor/section-editor.tsx (same)
+   - client/src/pages/report-edit.tsx (the report editor page) — show 
+     the structure (state, queries, mutations, render). We're 
+     building a parallel template-edit.tsx that mirrors the structure 
+     but with a much simpler save model.
+
+2. For the template editor:
+   - Save model: the WHOLE templateConfig is saved as a single PATCH 
+     /api/report-templates/:id payload. No per-section endpoints 
+     (templates aren't huge, payload stays small, no concurrent edit 
+     scenarios). Confirm the existing PATCH endpoint accepts the 
+     full templateConfig per the schema we just shipped.
+   - Sections in template editor are pure client-side state until 
+     Save (add/delete/reorder all just mutate local state). On Save, 
+     the entire templateConfig blob is shipped.
+   - Cover editor in template mode hides the cover photo override 
+     card (no project context, no media picker)
+   - Section editor in template mode hides the photo grid and Add 
+     Photos button (no project media to pick from)
+   - Title is editable inline at the top (like report editor), saved 
+     as part of the PATCH
+
+3. ReportFormDialog template selector:
+   - Show me the current ReportFormDialog (client/src/components/
+     report-form-dialog.tsx). Identify where the new template Select 
+     slots in (above the title input).
+   - Confirm the existing GET /api/report-templates endpoint can be 
+     used for the dropdown options. Lazy-load with 
+     enabled: open. Sentinel "__none__" = blank report.
+   - When a templateId is selected and submitted, POST 
+     /api/projects/:id/reports body becomes 
+     { title, description?, templateId: number }
+
+4. Server-side template instantiation in POST /api/projects/:id/reports:
+   - Show me the current handler (server/routes.ts). The schema 
+     already accepts optional templateId but ignores it (Stage 1 
+     placeholder).
+   - Wire it: if templateId provided, load template, verify 
+     accountId matches, then within a single transaction:
+     a) Create the report with templateConfig.cover.coverConfig 
+        as the report's coverConfig, and templateConfig.cover.description 
+        as fallback if request body has no description
+     b) For each section in templateConfig.sections, create a 
+        report_section row with title, summary, sortOrder
+     c) Return the created report (with sections nested if your 
+        existing return shape includes them, otherwise just the 
+        report)
+   - If templateId is provided but doesn't exist or account mismatches, 
+     return 400 (not 404 — the report itself isn't found-or-not, the 
+     template reference is invalid). Or 403 for cross-account. Your 
+     judgment.
+   - Atomic: if section creation fails halfway, the whole thing 
+     rolls back. Use db.transaction.
+
+5. project-detail.tsx consolidation:
+   - Show me the existing inline "Create Report" Card (lines ~1627 
+     per earlier diagnosis).
+   - Replace the inline form with: an "Add Report" button (top-right 
+     of Reports tab section) that opens 
+     <ReportFormDialog projectId={id} />. Same component, different 
+     props (projectId set, so the Select for project is hidden).
+   - Remove: newReportTitle state, createReport mutation, the inline 
+     Card render. Net code reduction.
+   
+6. Navigation behaviors:
+   - "New Template" button → POST /api/report-templates → on success 
+     navigate(`/templates/${created.id}/edit`)
+   - Template list row click → navigate(`/templates/${id}/edit`) 
+     (remove the non-clickable spec from PR-B)
+   - In template editor, "Back to templates" → navigate(`/reports?tab=templates`)
+   - In ReportFormDialog when a template is selected and submitted: 
+     same flow as no-template, navigate to /reports/:id/edit
+
+7. Open question for me: how should the template editor's "delete 
+   section" work given there's no per-section endpoint? Just splice 
+   it from local templateConfig.sections array, mark dirty, save 
+   later. Confirm this is fine — no need for a confirm dialog like 
+   the report editor has, since deleting a section in a template 
+   has zero data loss (no photos attached).
+
+Output: numbered findings + Phase 2 plan with file diff stat estimate. 
+No code changes.
+
+=== Phase 2 — implement after my approval ===
+
+Single commit. TS baseline 34, do NOT drift it. Build green. Dev 
+workflow boots clean. Show me:
+- Diff stat
+- New template-edit.tsx in full (~350-400 LOC expected)
+- Diff for App.tsx (route registration)
+- Diff for routes.ts (template instantiation in POST 
+  /api/projects/:id/reports)
+- Diff for ReportFormDialog (template selector)
+- Diff for project-detail.tsx (consolidation)
+- Diff for reports.tsx (row clickable + post-create navigation)
+- Diff for cover-editor.tsx and section-editor.tsx (mode="template" 
+  branching)
+
+Verification on prod after auto-deploy:
+- Click existing "Test Roof" template row → /templates/:id/edit loads
+- Edit template title, cover toggles, add sections, save → reload, 
+  state persists
+- Generate PDF button NOT shown in template editor (no project 
+  context)
+- Photo picker NOT shown in section editor (mode=template branching)
+- New Template → editor opens immediately
+- Back button → /reports?tab=templates
+- Create Report from global Reports page → template Select shows 
+  "Test Roof" → select → submit → new report has cover toggles 
+  matching template, section "Untitled Section" exists
+- project-detail Reports tab now has "Add Report" button instead 
+  of inline form → click → dialog opens with project pre-selected 
+  (no project picker visible)
+- Cross-account protection: a template from a different account 
+  cannot be applied
