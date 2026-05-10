@@ -1,0 +1,53 @@
+APPROVED for PR-B with the following adjustments:
+
+1. Template rows in the list are NOT clickable. No onClick, no hover 
+   pointer styling. Only the kebab menu actions work (Rename, Delete). 
+   PR-C will wire row click to navigate to /templates/:id/edit.
+
+2. Empty-state copy: "No templates yet. Templates save the structure 
+   of a report (cover settings + section titles) so you can reuse it. 
+   Full editing coming in next update." Plus the conditional "Click 
+   New Template to create one." for canManageTemplates users.
+
+3. After "New Template" click, the list refreshes to include the new 
+   row. No navigation. User can immediately rename via kebab if they 
+   want.
+
+4. Confirmed templateConfigSchema strictness: version: z.literal(1), 
+   sections cap at 50, title trim+min(1)+max(200), summary 
+   nullable+max(5000), description nullable+max(2000).
+
+5. updatedAt bump: explicit .set({ ...patch, updatedAt: new Date() }) 
+   in updateReportTemplate. Add a brief comment in the storage method 
+   noting "pgTable defaultNow() only fires on INSERT; this manual bump 
+   is required."
+
+6. Cross-account leakage check on GET-by-id, PATCH, DELETE. Pattern 
+   matches checklistTemplates and branding endpoints.
+
+Implementation order as proposed: schema → storage → routes → UI. 
+Single commit.
+
+Verify before push:
+- TS baseline 34, do NOT drift it. If count drifts, list and 
+  categorize new errors before pushing.
+- npm run build green
+- Dev workflow boots clean
+
+Manual smoke test on prod after auto-deploy:
+- Templates Tab → empty state with new copy ✓
+- Admin/Manager: "New Template" button visible; click → row appears 
+  with "Untitled Template", "1 section", "you" attribution
+- Kebab menu → Rename → AlertDialog with input → save → row title 
+  updates
+- Kebab menu → Delete → destructive AlertDialog → confirm → row 
+  disappears
+- Restricted user: no New Template button, no kebab menus on rows 
+  (read-only list)
+- Standard user: same — only Admin/Manager see kebab + button
+- Cross-account 403 verified via direct API call to a template owned 
+  by another account (use TablePlus to find an ID, hit GET 
+  /api/report-templates/<id> with your session)
+
+Out of scope (PR-C): /templates/:id/edit page, apply-template flow, 
+project-detail consolidation, save-as-template.

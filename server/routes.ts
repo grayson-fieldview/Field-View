@@ -7,7 +7,7 @@ import { getAccountBilling, isAccountBillingEnabled, overlayAccountBillingOnUser
 import { requireAdmin, requireAdminOrManager } from "./middleware/auth";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
-import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, pendingGeofenceExits } from "@shared/schema";
+import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, pendingGeofenceExits, templateConfigSchema } from "@shared/schema";
 import { executeAutoClockOut } from "./lib/timesheets";
 import { users, invitations, accounts } from "@shared/models/auth";
 import { computeSeatUsage } from "./lib/seats";
@@ -3439,8 +3439,100 @@ export async function registerRoutes(
     }
   });
 
-  // Report Templates: Stage 1 ships the table only. Authoring/apply UI + API
-  // land in Stage 4 of the reports rewrite.
+  // ─── Report Templates (Stage 4 PR-B) ────────────────────────────────────────
+  // List = readers; create/update/delete = Admin/Manager. Cross-account
+  // ownership check on every per-id route. accountId + createdById injected
+  // from session — never trusted from client.
+
+  app.get("/api/report-templates", requireReadAccess, async (req: any, res) => {
+    try {
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const templates = await storage.getReportTemplates(accountId);
+      res.json(templates);
+    } catch (error) {
+      console.error("[report-templates] list error:", error);
+      res.status(500).json({ message: "Failed to list templates" });
+    }
+  });
+
+  app.get("/api/report-templates/:id", requireReadAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid id" });
+      const t = await storage.getReportTemplate(id);
+      if (!t || t.accountId !== req.user.accountId)
+        return res.status(403).json({ message: "Access denied" });
+      res.json(t);
+    } catch (error) {
+      console.error("[report-templates] get error:", error);
+      res.status(500).json({ message: "Failed to load template" });
+    }
+  });
+
+  const createReportTemplateBodySchema = z.object({
+    title: z.string().trim().min(1).max(200),
+    templateConfig: templateConfigSchema,
+  }).strict();
+
+  app.post("/api/report-templates", requireWriteAccess, requireAdminOrManager, async (req: any, res) => {
+    try {
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const parsed = createReportTemplateBodySchema.safeParse(req.body);
+      if (!parsed.success)
+        return res.status(400).json({ message: "Invalid body", errors: parsed.error.flatten() });
+      const created = await storage.createReportTemplate({
+        accountId,
+        createdById: req.user.id,
+        title: parsed.data.title,
+        templateConfig: parsed.data.templateConfig,
+      });
+      res.status(201).json({ ...created, sectionCount: parsed.data.templateConfig.sections.length });
+    } catch (error) {
+      console.error("[report-templates] create error:", error);
+      res.status(500).json({ message: "Failed to create template" });
+    }
+  });
+
+  const patchReportTemplateBodySchema = z.object({
+    title: z.string().trim().min(1).max(200).optional(),
+    templateConfig: templateConfigSchema.optional(),
+  }).strict();
+
+  app.patch("/api/report-templates/:id", requireWriteAccess, requireAdminOrManager, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid id" });
+      const existing = await storage.getReportTemplate(id);
+      if (!existing || existing.accountId !== req.user.accountId)
+        return res.status(403).json({ message: "Access denied" });
+      const parsed = patchReportTemplateBodySchema.safeParse(req.body);
+      if (!parsed.success)
+        return res.status(400).json({ message: "Invalid body", errors: parsed.error.flatten() });
+      const updated = await storage.updateReportTemplate(id, parsed.data);
+      if (!updated) return res.status(404).json({ message: "Template not found" });
+      res.json(updated);
+    } catch (error) {
+      console.error("[report-templates] patch error:", error);
+      res.status(500).json({ message: "Failed to update template" });
+    }
+  });
+
+  app.delete("/api/report-templates/:id", requireWriteAccess, requireAdminOrManager, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid id" });
+      const existing = await storage.getReportTemplate(id);
+      if (!existing || existing.accountId !== req.user.accountId)
+        return res.status(403).json({ message: "Access denied" });
+      await storage.deleteReportTemplate(id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      console.error("[report-templates] delete error:", error);
+      res.status(500).json({ message: "Failed to delete template" });
+    }
+  });
 
   app.post("/api/galleries", requireWriteAccess, async (req: any, res) => {
     try {

@@ -41,6 +41,10 @@ import {
   type InsertChecklistTemplate,
   type ChecklistTemplateItem,
   type InsertChecklistTemplateItem,
+  reportTemplates,
+  type ReportTemplate,
+  type InsertReportTemplate,
+  type TemplateConfig,
   type AccountTag,
   type InsertAccountTag,
   type CalendarConnection,
@@ -152,6 +156,12 @@ export interface IStorage {
   deleteChecklistTemplate(id: number): Promise<void>;
   getChecklistTemplateItems(templateId: number): Promise<ChecklistTemplateItem[]>;
   createChecklistTemplateItem(item: InsertChecklistTemplateItem): Promise<ChecklistTemplateItem>;
+
+  getReportTemplates(accountId: string): Promise<(ReportTemplate & { sectionCount: number })[]>;
+  getReportTemplate(id: number): Promise<ReportTemplate | undefined>;
+  createReportTemplate(template: InsertReportTemplate): Promise<ReportTemplate>;
+  updateReportTemplate(id: number, patch: Partial<InsertReportTemplate>): Promise<ReportTemplate | undefined>;
+  deleteReportTemplate(id: number): Promise<void>;
 
 
   getCalendarConnections(userId: string): Promise<CalendarConnection[]>;
@@ -902,7 +912,44 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
-  // Report templates (Stage 1: table exists, storage CRUD ships in Stage 4).
+  // Report templates — Stage 4. Hard delete (matches checklistTemplates).
+  // No rows reference report_templates yet; templateId on createReport is wired
+  // in PR-C and falls back to defaults if the template is missing.
+
+  async getReportTemplates(accountId: string): Promise<(ReportTemplate & { sectionCount: number })[]> {
+    const rows = await db.select().from(reportTemplates)
+      .where(eq(reportTemplates.accountId, accountId))
+      .orderBy(desc(reportTemplates.updatedAt));
+    return rows.map((t) => {
+      const cfg = (t.templateConfig ?? {}) as Partial<TemplateConfig>;
+      const sectionCount = Array.isArray(cfg.sections) ? cfg.sections.length : 0;
+      return { ...t, sectionCount };
+    });
+  }
+
+  async getReportTemplate(id: number): Promise<ReportTemplate | undefined> {
+    const [item] = await db.select().from(reportTemplates).where(eq(reportTemplates.id, id));
+    return item;
+  }
+
+  async createReportTemplate(template: InsertReportTemplate): Promise<ReportTemplate> {
+    const [created] = await db.insert(reportTemplates).values(template as any).returning();
+    return created;
+  }
+
+  async updateReportTemplate(id: number, patch: Partial<InsertReportTemplate>): Promise<ReportTemplate | undefined> {
+    // pgTable defaultNow() only fires on INSERT; this manual bump is required
+    // so the Templates list (ordered by updatedAt DESC) reflects edits.
+    const [updated] = await db.update(reportTemplates)
+      .set({ ...patch, updatedAt: new Date() } as any)
+      .where(eq(reportTemplates.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteReportTemplate(id: number): Promise<void> {
+    await db.delete(reportTemplates).where(eq(reportTemplates.id, id));
+  }
 
   async getCalendarConnections(userId: string): Promise<CalendarConnection[]> {
     return db.select().from(calendarConnections).where(eq(calendarConnections.userId, userId)).orderBy(desc(calendarConnections.createdAt));

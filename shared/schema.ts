@@ -204,6 +204,38 @@ export const reportTemplates = pgTable("report_templates", {
   index("report_templates_account_id_idx").on(table.accountId),
 ]);
 
+// Shape of report_templates.template_config jsonb. version bumps as the shape
+// evolves; keep server-side parse strict and migrate stored rows lazily on read.
+// coverPhotoMediaId intentionally OMITTED from the cover toggles — it is
+// project-specific and cannot be carried by a template.
+export const templateCoverConfigSchema = z.object({
+  showCoverPhoto: z.boolean(),
+  showCompanyLogo: z.boolean(),
+  showCompanyName: z.boolean(),
+  showCreatorName: z.boolean(),
+  showPhotoCount: z.boolean(),
+  showDateCreated: z.boolean(),
+}).strict();
+
+export const templateSectionSchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  summary: z.string().max(5000).nullable(),
+  sortOrder: z.number().int().min(0),
+}).strict();
+
+export const templateConfigSchema = z.object({
+  version: z.literal(1),
+  cover: z.object({
+    description: z.string().max(2000).nullable(),
+    coverConfig: templateCoverConfigSchema,
+  }).strict(),
+  sections: z.array(templateSectionSchema).max(50),
+}).strict();
+
+export type TemplateCoverConfig = z.infer<typeof templateCoverConfigSchema>;
+export type TemplateSection = z.infer<typeof templateSectionSchema>;
+export type TemplateConfig = z.infer<typeof templateConfigSchema>;
+
 export const sharedGalleries = pgTable("shared_galleries", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   token: varchar("token", { length: 32 }).notNull().unique(),
