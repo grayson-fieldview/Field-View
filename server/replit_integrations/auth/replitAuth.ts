@@ -882,14 +882,19 @@ export async function setupAuth(app: Express) {
 
   app.post("/api/resend-verification", resendVerificationLimiter, async (req, res) => {
     try {
-      const { email } = req.body;
-      if (!email) return res.status(400).json({ error: "Email required" });
-
-      const [user] = await db.select().from(users).where(eq(users.email, email));
+      const { email: rawEmail } = req.body;
+      if (!rawEmail) return res.status(400).json({ error: "Email required" });
+      // Session 3 BUG 4 fix: normalize to match how /api/register stores
+      // emails (trim+lowercase) so case-variant resend requests still find
+      // the row. Use authStorage.getUserByEmail for a single source of truth.
+      const user = await authStorage.getUserByEmail(rawEmail);
 
       if (!user || user.emailVerified) {
         return res.json({ message: "If an unverified account exists, a new verification code has been sent." });
       }
+      // Reuse the normalized email throughout the rest of the handler so
+      // outbound mail goes to the canonical address, not the raw input.
+      const email = user.email!;
 
       if (user.verificationCodeSentAt) {
         const elapsed = Date.now() - user.verificationCodeSentAt.getTime();

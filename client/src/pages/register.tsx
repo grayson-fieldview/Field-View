@@ -117,10 +117,13 @@ export default function RegisterPage() {
       setLocation("/welcome");
     },
     onError: (error: any) => {
-      // Session 3 BUG 1 fix: 409 = email already registered. Show an
-      // inline error under the email input (with a Sign in link) instead
-      // of a generic toast — easier to spot, easier to act on.
-      if (error?.status === 409) {
+      // Session 3 BUG 1 fix: 409 = email already registered. On the
+      // trial-signup branch, show an inline error under the email input
+      // (with a Sign in link) instead of a generic toast — easier to spot,
+      // easier to act on. On the invite branch the email field is readOnly
+      // (pre-filled from the invite), so the inline UI never renders;
+      // fall through to the toast so the user still sees the failure.
+      if (error?.status === 409 && !inviteToken) {
         setEmailInUseError(true);
         return;
       }
