@@ -3,10 +3,13 @@ import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { FileBarChart, FileText, Send, CheckCircle2, LayoutTemplate } from "lucide-react";
+import { FileBarChart, FileText, Send, CheckCircle2, LayoutTemplate, Plus } from "lucide-react";
 import { Link } from "wouter";
 import type { Report } from "@shared/schema";
+import { useAuth } from "@/hooks/use-auth";
+import ReportFormDialog from "@/components/report-form-dialog";
 
 type ReportListItem = Report & {
   project?: { name: string };
@@ -23,6 +26,9 @@ type TabKey = "reports" | "templates";
 
 export default function ReportsPage() {
   const [activeTab, setActiveTab] = useState<TabKey>("reports");
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const { user } = useAuth();
+  const canCreate = !!user && user.role !== "restricted";
 
   const { data: allReports, isLoading } = useQuery<ReportListItem[]>({
     queryKey: ["/api/reports"],
@@ -51,12 +57,20 @@ export default function ReportsPage() {
 
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-4xl mx-auto">
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight" data-testid="text-reports-title">Reports</h1>
           <p className="text-sm text-muted-foreground mt-1">View reports across all projects.</p>
         </div>
+        {canCreate && (
+          <Button onClick={() => setIsCreateOpen(true)} data-testid="button-create-report">
+            <Plus className="h-4 w-4 mr-2" />
+            Create Report
+          </Button>
+        )}
       </div>
+
+      <ReportFormDialog open={isCreateOpen} onOpenChange={setIsCreateOpen} />
 
       <div className="flex gap-1 border-b">
         {tabs.map((tab) => (
@@ -90,7 +104,7 @@ export default function ReportsPage() {
                 </div>
                 <h3 className="text-lg font-semibold">No reports yet</h3>
                 <p className="text-sm text-muted-foreground max-w-sm mx-auto">
-                  Reports are created within projects. Open a project and switch to the Reports tab to create one.
+                  {canCreate ? "Click Create Report to get started." : "Reports will appear here once your team creates them."}
                 </p>
               </div>
             </Card>
