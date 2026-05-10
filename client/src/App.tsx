@@ -1,5 +1,10 @@
 import { Switch, Route, Redirect, useSearch, useLocation } from "wouter";
 import { queryClient, apiRequest } from "./lib/queryClient";
+// Session 3 Commit B: MONTHLY_PRICE_ID + throw removed (was used only by
+// BillingBanner.startCheckout). Trial-active and trial-expired Add Card
+// CTAs now route to /subscribe (plan picker) instead of POSTing directly
+// to /api/create-checkout-session. Past-due banner still uses apiRequest
+// → /api/create-portal-session, so the apiRequest import stays.
 import { QueryClientProvider } from "@tanstack/react-query";
 import { GoogleReCaptchaProvider } from "react-google-recaptcha-v3";
 import { Toaster } from "@/components/ui/toaster";
@@ -41,25 +46,10 @@ import TasksPage from "@/pages/tasks";
 import AnalyticsPage from "@/pages/analytics";
 import CalendarPage from "@/pages/calendar";
 
-// Session 3 BUG 5 fix: monthly default plan for the direct-Checkout
-// banner CTA. Sourced from VITE_STRIPE_PRICE_MONTHLY (set in Vercel env)
-// instead of the previous hardcoded `price_1TMaPl…` which did not exist
-// in the live Stripe account and 500'd on POST /api/create-checkout-session.
-// Throw at module load so a missing env var is caught immediately at boot
-// rather than at the moment a user clicks "Add Card".
-// Note: in Session 3 Commit B this CTA will be replaced by a route to
-// /subscribe (plan picker), at which point this env var becomes unused
-// and can be removed from Vercel.
-const MONTHLY_PRICE_ID = import.meta.env.VITE_STRIPE_PRICE_MONTHLY as string;
-if (!MONTHLY_PRICE_ID) {
-  throw new Error(
-    "VITE_STRIPE_PRICE_MONTHLY is not set. Add it to your Vercel/Replit environment so the trial banner Add Card CTA can open Stripe Checkout."
-  );
-}
-
 function BillingBanner() {
   const { user } = useAuth();
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const accessLevel = (user as any)?.accessLevel;
   const status = (user as any)?.subscriptionStatus;
   const trialEndsAtRaw = (user as any)?.trialEndsAt;
@@ -85,21 +75,12 @@ function BillingBanner() {
   else if (isTrial && accessLevel === "read_only") mode = "trial-expired";
   else if (status === "past_due" && accessLevel === "read_only") mode = "past-due";
 
-  const startCheckout = async () => {
-    try {
-      const res = await apiRequest("POST", "/api/create-checkout-session", {
-        lineItems: [{ priceId: MONTHLY_PRICE_ID, quantity: 1 }],
-      });
-      const data = await res.json();
-      if (data.url) {
-        window.location.href = data.url;
-      } else {
-        toast({ title: "Error", description: "Could not open checkout", variant: "destructive" });
-      }
-    } catch (error: any) {
-      toast({ title: "Error", description: error.message || "Could not open checkout", variant: "destructive" });
-    }
-  };
+  // Session 3 Commit B: trial Add Card CTAs route to /subscribe (plan
+  // picker) instead of opening Stripe Checkout directly with a hardcoded
+  // monthly single-seat line item. Lets users pick monthly/annual + team
+  // size before committing a card. Past-due banner still uses openPortal
+  // → Stripe Customer Portal (correct destination for failed payment).
+  const goToSubscribe = () => setLocation("/subscribe");
 
   const openPortal = async () => {
     try {
@@ -131,7 +112,7 @@ function BillingBanner() {
         <Button
           variant="outline"
           size="sm"
-          onClick={startCheckout}
+          onClick={goToSubscribe}
           className="border-orange-300 dark:border-orange-700 bg-white dark:bg-orange-900 hover:bg-orange-100 dark:hover:bg-orange-800 text-orange-900 dark:text-orange-100"
           data-testid="button-add-card-trial"
         >
@@ -158,7 +139,7 @@ function BillingBanner() {
         <Button
           variant="outline"
           size="sm"
-          onClick={startCheckout}
+          onClick={goToSubscribe}
           className="border-red-300 dark:border-red-700 bg-white dark:bg-red-900 hover:bg-red-100 dark:hover:bg-red-800 text-red-900 dark:text-red-100"
           data-testid="button-add-card-expired"
         >
@@ -250,6 +231,12 @@ function AuthenticatedLayout() {
               <Route path="/team" component={TeamPage} />
               <Route path="/manager/timesheets" component={ManagerTimesheetsPage} />
               <Route path="/settings" component={SettingsPage} />
+              {/* Session 3 Commit B: /subscribe is now a real route inside
+                  AuthenticatedLayout. Previously SubscribePage rendered
+                  only via SubscriptionGate's locked-access fallback, so
+                  any setLocation("/subscribe") from a trialing user
+                  (accessLevel: "full") fell through to NotFound. */}
+              <Route path="/subscribe" component={SubscribePage} />
               <Route component={NotFound} />
             </Switch>
           </main>

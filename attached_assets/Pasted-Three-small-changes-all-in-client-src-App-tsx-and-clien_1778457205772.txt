@@ -1,0 +1,30 @@
+Three small changes, all in client/src/App.tsx and client/src/pages/subscribe.tsx. No schema, no server, no design rebuild. Surgical wiring only.
+Change 1 — register /subscribe as a Route in AuthenticatedLayout.
+In client/src/App.tsx, inside AuthenticatedLayout's <Switch> block, add <Route path="/subscribe" component={SubscribePage} /> near the other top-level page routes, before the final <Route component={NotFound} />. Import SubscribePage at the top if not already imported.
+Change 2 — point both trial Add Card buttons at /subscribe instead of Stripe Checkout.
+In BillingBanner (same file):
+a. Import useLocation from wouter if not already imported. Add const [, setLocation] = useLocation(); near the top of the component.
+b. Replace the entire startCheckout async helper with const goToSubscribe = () => setLocation("/subscribe");.
+c. Change the trial-active banner's Add Card onClick={startCheckout} to onClick={goToSubscribe}.
+d. Change the trial-expired banner's Add Card onClick={startCheckout} to onClick={goToSubscribe} — same treatment.
+e. Do NOT touch the past-due banner's openPortal handler. Past-due goes to Stripe Customer Portal, which is the correct destination.
+f. Remove now-unused top-of-file declarations:
+
+const MONTHLY_PRICE_ID = import.meta.env.VITE_STRIPE_PRICE_MONTHLY ...
+The if (!MONTHLY_PRICE_ID) throw new Error(...) block
+Any apiRequest import in this file that was only used by startCheckout — verify it has no other consumer in this file before removing.
+
+Change 3 — add a conditional "Maybe later" link to SubscribePage.
+In client/src/pages/subscribe.tsx, below the "Start Free Trial — $X/mo after trial" CTA button, add a small "Maybe later" text link. Render the link only if (user as any)?.accessLevel === "full" (user still has trial access and can dismiss the paywall). For accessLevel === "locked" users, do NOT render the link — they can't dismiss. On click: setLocation("/"). Use existing muted-link styling conventions in this codebase (small, slate-500-ish, hover underline). Add useLocation from wouter if it's not already imported in this file.
+After all three changes:
+
+Paste a unified diff of both files.
+Confirm TS error count is at baseline (these are pure routing/wiring; no schema touched).
+Walk the four-step flow in Replit dev with a fresh email (use the migrated dev DB from the previous commit):
+a. signup → welcome → verify → should land on /subscribe rendering the existing SubscribePage (NOT 404). ✓
+b. From SubscribePage with active trial, click "Maybe later" → land on / Dashboard. ✓
+c. From Dashboard, click "Add Card" in the trial-active banner → land on /subscribe (NOT Stripe Checkout). ✓
+d. From SubscribePage, click "Start Free Trial" CTA → opens Stripe Checkout normally (this path uses the unchanged checkoutMutation, not startCheckout). ✓
+Screenshot the four landings. Do NOT push until I see the diffs and confirm the dev walk-through.
+
+Post-push cleanup (don't do this yet, just note it): once this lands in prod and we've verified the trial banner never calls /api/create-checkout-session with VITE_STRIPE_PRICE_MONTHLY again, that env var becomes dead in client code. Remove it from Vercel (All Environments) and Replit dev secrets — that's BUG 5 cleanup from the original Commit B queue.

@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,6 +20,7 @@ export default function SubscribePage() {
   const { user, logout } = useAuth();
   const { toast } = useToast();
   const qc = useQueryClient();
+  const [, setLocation] = useLocation();
   const [billingCycle, setBillingCycle] = useState<"annual" | "monthly">("monthly");
   const [teamSize, setTeamSize] = useState(3);
 
@@ -326,6 +328,22 @@ export default function SubscribePage() {
             <p className="text-xs text-center text-muted-foreground">
               14-day free trial — your card won't be charged until the trial ends. Cancel anytime.
             </p>
+
+            {/* Session 3 Commit B: "Maybe later" dismiss link. Only
+                rendered for users who still have full access (active
+                trial) — they can defer adding a card and continue using
+                the app. Locked users (trial expired / no access) cannot
+                dismiss; they must subscribe to proceed. */}
+            {(user as any)?.accessLevel === "full" && (
+              <button
+                type="button"
+                onClick={() => setLocation("/")}
+                className="block mx-auto text-sm text-muted-foreground hover:text-foreground hover:underline"
+                data-testid="link-maybe-later"
+              >
+                Maybe later
+              </button>
+            )}
           </CardContent>
         </Card>
       </div>
