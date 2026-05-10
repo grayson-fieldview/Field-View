@@ -378,6 +378,35 @@ function BillingCard() {
     },
   });
 
+  // Session 2 trial-flow rework: trialing users without a Stripe
+  // customer yet need a way to add a card from Settings (in addition
+  // to the in-app banner). Same monthly default as the banner CTA;
+  // annual upgrades happen later via the Stripe portal.
+  const SETTINGS_MONTHLY_PRICE_ID = "price_1TMaPlR1AnIJLf9qcJsFWa1w";
+  const checkoutMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/create-checkout-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          lineItems: [{ priceId: SETTINGS_MONTHLY_PRICE_ID, quantity: 1 }],
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.message || "Failed to start checkout");
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      if (data.url) window.location.href = data.url;
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
   const status = user?.subscriptionStatus || "none";
   const statusLabel: Record<string, string> = {
     active: "Active",
@@ -410,14 +439,14 @@ function BillingCard() {
               <Badge className={statusColor[status] || statusColor.none}>
                 {statusLabel[status] || status}
               </Badge>
-              {status === "trial" && user?.trialEndsAt && (
-                <span className="text-xs text-muted-foreground">
+              {(status === "trialing" || status === "trial") && user?.trialEndsAt && (
+                <span className="text-xs text-muted-foreground" data-testid="text-trial-ends-at">
                   Ends {new Date(user.trialEndsAt).toLocaleDateString()}
                 </span>
               )}
             </div>
           </div>
-          {user?.stripeCustomerId && (
+          {user?.stripeCustomerId ? (
             <Button
               variant="outline"
               onClick={() => portalMutation.mutate()}
@@ -430,7 +459,23 @@ function BillingCard() {
                 "Manage Billing"
               )}
             </Button>
-          )}
+          ) : (status === "trialing" || status === "trial") ? (
+            <Button
+              onClick={() => checkoutMutation.mutate()}
+              disabled={checkoutMutation.isPending}
+              className="bg-[#F09000] hover:bg-[#d98000] text-white"
+              data-testid="button-add-payment-method"
+            >
+              {checkoutMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <>
+                  <CreditCard className="h-4 w-4 mr-2" />
+                  Add payment method
+                </>
+              )}
+            </Button>
+          ) : null}
         </div>
       </div>
     </Card>

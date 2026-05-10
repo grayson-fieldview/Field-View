@@ -937,19 +937,28 @@ export const requireActiveSubscription: RequestHandler = async (req: any, res, n
 
   const billing = await getAccountBilling(req);
   const status = billing.subscriptionStatus;
-  if (status === "active" || status === "trialing") {
+  if (status === "active") {
     return next();
   }
 
-  if (status === "trial") {
+  // Session 2 trial-flow rework: 'trialing' (and the legacy 'trial')
+  // honour the app-side trialEndsAt deadline. Future → write allowed.
+  // Expired → 402 with error:'trial_expired' so the client global
+  // interceptor can surface a single debounced "Add a card" toast and
+  // the BillingBanner can render the red expired-trial state.
+  if (status === "trialing" || status === "trial") {
     const trialEndsAt = billing.trialEndsAt ? new Date(billing.trialEndsAt) : null;
     if (trialEndsAt && trialEndsAt > new Date()) {
       return next();
     }
-    return res.status(403).json({ message: "Trial expired" });
+    return res.status(402).json({
+      error: "trial_expired",
+      message: "Your trial has ended. Add a card to continue.",
+      accessLevel: "read_only",
+    });
   }
 
-  return res.status(403).json({ message: "Subscription required" });
+  return res.status(402).json({ message: "Subscription required", accessLevel: "locked" });
 };
 
 export const requireReadAccess: RequestHandler = async (req: any, res, next) => {
@@ -988,6 +997,21 @@ export const requireWriteAccess: RequestHandler = async (req: any, res, next) =>
   );
   if (level === "full") {
     return next();
+  }
+  // Session 2 trial-flow rework: distinguish expired-trial from
+  // generic-locked so the client global interceptor (queryClient.ts)
+  // can fire a single debounced "Add a card" toast and the
+  // BillingBanner can render the red trial-expired state.
+  const status = billing.subscriptionStatus;
+  if (
+    level === "read_only" &&
+    (status === "trialing" || status === "trial")
+  ) {
+    return res.status(402).json({
+      error: "trial_expired",
+      message: "Your trial has ended. Add a card to continue.",
+      accessLevel: "read_only",
+    });
   }
   return res.status(402).json({ message: "Subscription required", accessLevel: level });
 };

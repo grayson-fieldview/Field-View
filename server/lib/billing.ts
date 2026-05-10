@@ -18,10 +18,16 @@ export function computeAccessLevel(
   lapsedAt: Date | null,
   trialEndsAt: Date | null = null,
 ): AccessLevel {
-  if (status === "active" || status === "trialing") return "full";
-  if (status === "trial") {
+  if (status === "active") return "full";
+  // Session 2 of trial-flow rework: 'trialing' (and the legacy 'trial')
+  // now honour trialEndsAt. Future deadline → full access. Expired →
+  // read_only (NOT locked) so the user keeps a recovery path: they can
+  // browse their data and click "Add Card" from the banner. Behavior
+  // change for legacy 'trial' status: previously expired-trial was
+  // 'locked'; now it is 'read_only' (intentional, recovery-friendly).
+  if (status === "trialing" || status === "trial") {
     if (trialEndsAt && new Date(trialEndsAt) > new Date()) return "full";
-    return "locked";
+    return "read_only";
   }
   if (status === "past_due") {
     if (lapsedAt == null) return "read_only";

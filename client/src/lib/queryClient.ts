@@ -1,7 +1,41 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
+// Session 2 trial-flow rework: when the server returns 402
+// {error:"trial_expired"}, surface a single global toast (debounced)
+// directing the user to add a card. Per spec: at most one trial-expired
+// toast per 30 seconds to avoid spam from repeated mutation attempts.
+const TRIAL_EXPIRED_TOAST_DEBOUNCE_MS = 30_000;
+let lastTrialExpiredToastAt = 0;
+type TrialExpiredHandler = (message: string) => void;
+let trialExpiredHandler: TrialExpiredHandler | null = null;
+
+export function registerTrialExpiredHandler(handler: TrialExpiredHandler | null) {
+  trialExpiredHandler = handler;
+}
+
+async function maybeNotifyTrialExpired(res: Response): Promise<Response> {
+  if (res.status !== 402) return res;
+  const cloned = res.clone();
+  try {
+    const body = await cloned.json();
+    if (body?.error === "trial_expired") {
+      const now = Date.now();
+      if (now - lastTrialExpiredToastAt >= TRIAL_EXPIRED_TOAST_DEBOUNCE_MS) {
+        lastTrialExpiredToastAt = now;
+        trialExpiredHandler?.(
+          body.message || "Your trial has ended. Add a card to continue."
+        );
+      }
+    }
+  } catch {
+    // Non-JSON 402 — ignore, let the original error path handle it.
+  }
+  return res;
+}
+
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
+    await maybeNotifyTrialExpired(res);
     const text = (await res.text()) || res.statusText;
     throw new Error(`${res.status}: ${text}`);
   }

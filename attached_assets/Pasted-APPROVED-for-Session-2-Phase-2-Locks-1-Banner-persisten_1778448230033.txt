@@ -1,0 +1,65 @@
+APPROVED for Session 2 Phase 2.
+
+Locks:
+1. Banner persistent the whole trial (no day-threshold for showing)
+2. Per-button gating DEFERRED to Session 2.1 (out of scope this commit)
+3. Legacy 'trial' status expired → read_only (was locked) — confirmed 
+   behavior change, recovery-friendly
+4. Banner CTA: direct Checkout with monthly default ($79/mo, 
+   price_1TMaPlR1AnIJLf9qcJsFWa1w). Annual upgrade path stays in 
+   Settings.
+
+Additional locks/concerns:
+
+5. Global 402 toast in queryClient.ts: DEBOUNCE so a user mashing 
+   create buttons doesn't get spammed. Recommend: at most one trial-
+   expired toast per 30 seconds. Use a module-level lastShownAt 
+   timestamp.
+
+6. Banner visibility for invitees: when invitee inherits parent's 
+   'active' status, the banner should NOT show (status check 
+   excludes them). Verify by reading the parent account's status 
+   path in the banner component.
+
+7. BETA100 promo code: confirm allow_promotion_codes: true is 
+   preserved on the new Checkout call so existing beta access keeps 
+   working ($0/mo via the 100% off coupon).
+
+8. Stripe trial_end value: must be Math.floor(trialEndsAt.getTime() / 
+   1000) — Unix SECONDS not milliseconds. Stripe rejects ms 
+   timestamps with a confusing error. Triple-check this.
+
+9. Persist stripeCustomerId on BOTH accounts AND users when lazily 
+   created (per agent's plan item). The accounts-source fallback 
+   relies on accounts.stripeCustomerId — easy to miss.
+
+Verify before push:
+- TS baseline 39, do NOT drift
+- Build green, dev workflow boots clean
+- Architect review pass
+
+After push (Vercel auto-promote — no migration):
+- Fresh test account → see orange banner "Trial: 14 days remaining" 
+  with "Add Card" CTA
+- App fully usable, no 402s on create/edit
+- Click "Add Card" → Stripe Checkout opens with $79/mo, BETA100 
+  promo field visible, trial_end set to ~14 days out (verify in 
+  Stripe Dashboard → upcoming sub if you trust the flow enough to 
+  complete; otherwise just verify Checkout page loads correctly)
+- Manually set trial_ends_at = NOW - 1 day in TablePlus → reload 
+  app → banner turns RED "Trial ended. Add a card to continue" → 
+  app is browseable (reads work) but create/edit returns 402 with 
+  trial_expired error → global toast fires once
+- Hit create button again within 30s → no second toast (debounce 
+  works)
+- Existing 'active' accounts: no banner, no behavior change
+- Existing 'past_due' accounts: amber banner with portal CTA (legacy 
+  flow, unchanged)
+- Invitee of an active-sub account: no banner (inherited 'active' 
+  status)
+
+Out of scope:
+- Per-button gating tooltips (Session 2.1)
+- customer.io webhooks (Session 3)
+- Demo / Calendly UI (Session 3 or follow-up)
+- Existing 'trialing'/'trial' user sweep (defer)

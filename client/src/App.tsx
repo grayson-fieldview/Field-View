@@ -12,7 +12,9 @@ import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Clock, CreditCard } from "lucide-react";
+import { useEffect } from "react";
+import { registerTrialExpiredHandler } from "@/lib/queryClient";
 import NotFound from "@/pages/not-found";
 import LoginPage from "@/pages/login";
 import RegisterPage from "@/pages/register";
@@ -39,35 +41,123 @@ import TasksPage from "@/pages/tasks";
 import AnalyticsPage from "@/pages/analytics";
 import CalendarPage from "@/pages/calendar";
 
-function SubscriptionLapsedBanner() {
+// Session 2 trial-flow rework: monthly default plan for direct-Checkout
+// CTAs from the trial banner. Annual upgrades stay in Settings → Billing.
+const MONTHLY_PRICE_ID = "price_1TMaPlR1AnIJLf9qcJsFWa1w";
+
+function BillingBanner() {
   const { user } = useAuth();
   const { toast } = useToast();
   const accessLevel = (user as any)?.accessLevel;
+  const status = (user as any)?.subscriptionStatus;
+  const trialEndsAtRaw = (user as any)?.trialEndsAt;
 
-  if (accessLevel !== "read_only") return null;
+  // Determine which of three modes (if any) to render.
+  // - trial-active: status is trialing/trial AND access is full → orange,
+  //   persistent for the entire trial. Direct-Checkout "Add Card" CTA.
+  // - trial-expired: status is trialing/trial AND access is read_only →
+  //   red, "Add a card to continue". Direct-Checkout CTA.
+  // - past-due: access is read_only AND status past_due → amber, opens
+  //   the existing Stripe Billing Portal (legacy payment-failed flow).
+  // Invitees inherit the parent account's 'active' status, so the
+  // status-based check naturally excludes them — they never see this
+  // banner.
+  const isTrial = status === "trialing" || status === "trial";
+  const trialEndsAt = trialEndsAtRaw ? new Date(trialEndsAtRaw) : null;
+  const daysLeft = trialEndsAt
+    ? Math.max(0, Math.ceil((trialEndsAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
+    : 0;
 
-  const handleUpdatePaymentMethod = async () => {
+  let mode: "trial-active" | "trial-expired" | "past-due" | null = null;
+  if (isTrial && accessLevel === "full") mode = "trial-active";
+  else if (isTrial && accessLevel === "read_only") mode = "trial-expired";
+  else if (status === "past_due" && accessLevel === "read_only") mode = "past-due";
+
+  const startCheckout = async () => {
     try {
-      const res = await apiRequest("POST", "/api/create-portal-session", {});
+      const res = await apiRequest("POST", "/api/create-checkout-session", {
+        lineItems: [{ priceId: MONTHLY_PRICE_ID, quantity: 1 }],
+      });
       const data = await res.json();
       if (data.url) {
         window.location.href = data.url;
       } else {
-        toast({
-          title: "Error",
-          description: "Could not open billing portal",
-          variant: "destructive",
-        });
+        toast({ title: "Error", description: "Could not open checkout", variant: "destructive" });
       }
     } catch (error: any) {
-      toast({
-        title: "Error",
-        description: error.message || "Could not open billing portal",
-        variant: "destructive",
-      });
+      toast({ title: "Error", description: error.message || "Could not open checkout", variant: "destructive" });
     }
   };
 
+  const openPortal = async () => {
+    try {
+      const res = await apiRequest("POST", "/api/create-portal-session", {});
+      const data = await res.json();
+      if (data.url) window.location.href = data.url;
+      else toast({ title: "Error", description: "Could not open billing portal", variant: "destructive" });
+    } catch (error: any) {
+      toast({ title: "Error", description: error.message || "Could not open billing portal", variant: "destructive" });
+    }
+  };
+
+  if (!mode) return null;
+
+  if (mode === "trial-active") {
+    const label = daysLeft === 1 ? "1 day remaining" : `${daysLeft} days remaining`;
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        className="w-full flex items-center gap-3 px-4 py-3 bg-orange-50 dark:bg-orange-950/30 text-orange-900 dark:text-orange-100 border-b border-orange-200 dark:border-orange-800"
+        data-testid="banner-trial-active"
+      >
+        <Clock className="h-5 w-5 flex-shrink-0" aria-hidden="true" />
+        <p className="flex-1 text-sm" data-testid="text-trial-active-message">
+          <span className="font-medium">Trial: {label}.</span>{" "}
+          Add a card now to keep your team running after your trial ends.
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={startCheckout}
+          className="border-orange-300 dark:border-orange-700 bg-white dark:bg-orange-900 hover:bg-orange-100 dark:hover:bg-orange-800 text-orange-900 dark:text-orange-100"
+          data-testid="button-add-card-trial"
+        >
+          <CreditCard className="h-4 w-4 mr-1.5" />
+          Add Card
+        </Button>
+      </div>
+    );
+  }
+
+  if (mode === "trial-expired") {
+    return (
+      <div
+        role="alert"
+        aria-live="polite"
+        className="w-full flex items-center gap-3 px-4 py-3 bg-red-50 dark:bg-red-950/30 text-red-900 dark:text-red-100 border-b border-red-200 dark:border-red-800"
+        data-testid="banner-trial-expired"
+      >
+        <AlertTriangle className="h-5 w-5 flex-shrink-0" aria-hidden="true" />
+        <p className="flex-1 text-sm" data-testid="text-trial-expired-message">
+          <span className="font-medium">Your trial has ended.</span>{" "}
+          Your account is read-only — add a card to continue creating and editing.
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={startCheckout}
+          className="border-red-300 dark:border-red-700 bg-white dark:bg-red-900 hover:bg-red-100 dark:hover:bg-red-800 text-red-900 dark:text-red-100"
+          data-testid="button-add-card-expired"
+        >
+          <CreditCard className="h-4 w-4 mr-1.5" />
+          Add Card
+        </Button>
+      </div>
+    );
+  }
+
+  // mode === "past-due"
   return (
     <div
       role="alert"
@@ -82,7 +172,7 @@ function SubscriptionLapsedBanner() {
       <Button
         variant="outline"
         size="sm"
-        onClick={handleUpdatePaymentMethod}
+        onClick={openPortal}
         className="border-amber-300 dark:border-amber-700 bg-white dark:bg-amber-900 hover:bg-amber-100 dark:hover:bg-amber-800 text-amber-900 dark:text-amber-100"
         data-testid="button-update-payment-method"
       >
@@ -100,7 +190,7 @@ function AuthenticatedLayout() {
 
   return (
     <div className="flex flex-col h-screen w-full overflow-hidden">
-      <SubscriptionLapsedBanner />
+      <BillingBanner />
       <SidebarProvider
         style={style as React.CSSProperties}
         className="!min-h-0 flex-1"
@@ -162,6 +252,25 @@ function SubscriptionGate() {
   }
 
   return <SubscribePage />;
+}
+
+// Bridges the apiRequest 402 trial_expired interceptor (defined in
+// queryClient.ts) into the React toast system. Mounted once near the
+// top of the tree so non-React fetch wrappers can still surface a
+// debounced toast when a write is rejected post-trial.
+function TrialExpiredToastBridge() {
+  const { toast } = useToast();
+  useEffect(() => {
+    registerTrialExpiredHandler((message) => {
+      toast({
+        title: "Trial ended",
+        description: message,
+        variant: "destructive",
+      });
+    });
+    return () => registerTrialExpiredHandler(null);
+  }, [toast]);
+  return null;
 }
 
 function CatchAllRedirect() {
@@ -227,6 +336,7 @@ function App() {
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <Toaster />
+          <TrialExpiredToastBridge />
           <Switch>
             <Route path="/gallery/:token">
               {(params) => <GalleryPage token={params.token} />}

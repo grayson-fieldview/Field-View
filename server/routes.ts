@@ -4556,19 +4556,38 @@ export async function registerRoutes(
       const user = await authStorage.getUser(req.user.id);
       if (!user) return res.status(404).json({ message: "User not found" });
 
-      let customerId = user.stripeCustomerId;
+      // Session 2 of trial-flow rework: read billing from the
+      // accounts-source path so trialEndsAt reflects the app-side
+      // deadline anchored at signup. getAccountBilling falls back to
+      // the user row when ACCOUNT_BILLING_ENABLED is off.
+      const billing = await getAccountBilling(req);
+
+      let customerId = billing.stripeCustomerId ?? user.stripeCustomerId;
       if (!customerId) {
         const customer = await stripe.customers.create({
           email: user.email || undefined,
           name: [user.firstName, user.lastName].filter(Boolean).join(" ") || undefined,
-          metadata: { userId: user.id },
+          metadata: { userId: user.id, accountId: user.accountId || "" },
         });
         customerId = customer.id;
+        // Persist on BOTH user and account so the accounts-source
+        // billing path (when ACCOUNT_BILLING_ENABLED=on) picks it up
+        // and we don't create a duplicate Stripe customer next time.
         await authStorage.updateUser(user.id, { stripeCustomerId: customerId });
+        if (user.accountId) {
+          await db
+            .update(accounts)
+            .set({ stripeCustomerId: customerId })
+            .where(eq(accounts.id, user.accountId));
+        }
       }
 
       const baseUrl = `${req.protocol}://${req.get("host")}`;
-      const hasSubscription = user.subscriptionStatus === "active" || user.stripeSubscriptionId;
+      const hasSubscription =
+        billing.subscriptionStatus === "active" ||
+        !!billing.stripeSubscriptionId ||
+        user.subscriptionStatus === "active" ||
+        !!user.stripeSubscriptionId;
       const sessionConfig: any = {
         customer: customerId,
         mode: "subscription",
@@ -4576,12 +4595,23 @@ export async function registerRoutes(
         success_url: `${baseUrl}/?checkout=success`,
         cancel_url: `${baseUrl}/?checkout=canceled`,
         payment_method_collection: "always",
+        // BETA100 (100% off, 50-redemption cap) and any future promo
+        // codes are surfaced via this flag — DO NOT remove.
         allow_promotion_codes: true,
       };
       if (!hasSubscription) {
-        sessionConfig.subscription_data = {
-          trial_period_days: 14,
-        };
+        // Mid-trial card add: anchor Stripe's trial_end to OUR app-side
+        // trialEndsAt so the user gets ONLY their remaining trial time,
+        // not a fresh 14 days on top. Stripe expects Unix SECONDS
+        // (not milliseconds — ms produces a confusing parse error).
+        const trialEnd = billing.trialEndsAt ? new Date(billing.trialEndsAt) : null;
+        if (trialEnd && trialEnd.getTime() > Date.now()) {
+          sessionConfig.subscription_data = {
+            trial_end: Math.floor(trialEnd.getTime() / 1000),
+          };
+        }
+        // Else: trial expired or no trial → no trial_end, charge
+        // immediately on Checkout completion.
       }
       const session = await stripe.checkout.sessions.create(sessionConfig);
 
