@@ -1,0 +1,199 @@
+Goal: Stage 2 of Checklists v2. Multiple choice field type + per-item 
+photo attachment + photos_required completion gate + "Hide Completed" 
++ "Show only my items" filters + server-side progress recompute.
+
+Two-phase. STOP between phases for approval. Realistic estimate: 
+~1,150 LOC, second migration. NO Stage 3 work mixed in (templates 
+parity is its own PR).
+
+=== Phase 1 — DIAGNOSE only, no code changes ===
+
+Migration shape
+1. Show me the current checklist_field_type enum on prod via the 
+   schema. Confirm currently has: yes_no, rating, text. Stage 2 adds 
+   multiple_choice. ALTER TYPE ADD VALUE syntax — must be OUTSIDE a 
+   transaction in Postgres (this is a known gotcha). Migration needs 
+   to handle this — propose: run the ALTER TYPE separately before 
+   the main transaction, OR use a different strategy (drop + recreate 
+   enum with all 4 values is destructive — avoid).
+
+2. Two new tables to propose:
+   - checklist_item_options: id (PK), item_id (FK cascade), label 
+     (text NOT NULL), sort_order (int default 0), created_at, 
+     updated_at. Index on (item_id, sort_order).
+   - checklist_item_photos: id (PK), item_id (FK cascade), media_id 
+     (FK to existing media table, cascade), sort_order (int default 
+     0), created_at. Index on (item_id, sort_order). NO updated_at 
+     (photos are immutable once attached — re-attach = delete + 
+     create).
+
+3. FK constraint on checklist_items.selected_option_id (currently 
+   plain integer from Stage 1) — add FK pointing to 
+   checklist_item_options(id) ON DELETE SET NULL. Constraint must 
+   not fail to add even if any row currently has a value (Stage 1 
+   doesn't write to this column, so all rows are NULL).
+
+4. Mirror new tables for templates:
+   - checklist_template_item_options (no values, just authoring)
+   - NO checklist_template_item_photos (templates can't reference 
+     project-specific media)
+   Defer to Stage 3? Or include in Stage 2 since the schema change 
+   is so tightly related? Recommend: include the options mirror in 
+   Stage 2 since multiple_choice authoring on a per-checklist instance 
+   is what Stage 2 enables — the template version naturally pairs.
+
+Storage layer
+5. Show me the current updateChecklistItem completion state machine. 
+   Stage 2 needs to extend it:
+   - Photos required gate: if item.photos_required === true AND no 
+     photos attached, completed_at remains NULL even if value field 
+     is set
+   - Multiple choice: completed when selected_option_id is non-null 
+     (option exists in this item's options)
+   Output the current logic + the proposed change.
+
+6. New storage methods needed:
+   - getChecklistItemOptions(itemId) → ordered list
+   - createChecklistItemOption(option)
+   - updateChecklistItemOption(id, patch) — title, sortOrder
+   - deleteChecklistItemOption(id) — cascade-clears selected_option_id 
+     on the parent item if it pointed there
+   - reorderChecklistItemOptions(itemId, orderedIds)
+   - getChecklistItemPhotos(itemId) → ordered list with media joined 
+     (presigned URLs for client display)
+   - attachChecklistItemPhoto(itemId, mediaId) → returns the row
+   - detachChecklistItemPhoto(id) → hard delete the join row, leaves 
+     media intact (other things may reference it)
+   - reorderChecklistItemPhotos(itemId, orderedIds)
+
+7. Photos via existing S3 presigned PUT pattern: confirm the agent 
+   knows /api/uploads/sign accepts a folder param now (we extended 
+   it during branding work to whitelist "photos" | "branding"). 
+   Stage 2 needs to add "checklists" to the whitelist for per-item 
+   photos. Strict ternary preserved: f.folder === "branding" → 
+   "branding", "checklists" → "checklists", else "photos".
+
+Routes
+8. New endpoints needed:
+   - GET /api/checklist-items/:id/options — requireReadAccess + 
+     verifyChecklistAccess (via item lookup chain)
+   - POST /api/checklist-items/:id/options — requireWriteAccess + 
+     verify
+   - PATCH /api/checklist-options/:id — requireWriteAccess + verify 
+     (cross-account check via item → checklist → project chain)
+   - DELETE /api/checklist-options/:id — same
+   - POST /api/checklist-items/:id/options/reorder — body 
+     {orderedIds: number[]} with server validation that all IDs 
+     belong to this item
+   
+   - GET /api/checklist-items/:id/photos — list with presigned URLs
+   - POST /api/checklist-items/:id/photos — body 
+     {mediaIds: number[]} (bulk attach matching the report photo 
+     pattern); validate each mediaId belongs to the same project as 
+     the item's checklist
+   - DELETE /api/checklist-item-photos/:id — detach a single join row
+   - POST /api/checklist-items/:id/photos/reorder — body 
+     {orderedIds: number[]}
+
+9. Modified existing routes:
+   - PATCH /api/checklist-items/:id — accept selectedOptionId in 
+     allowed list. Validate: if provided, the option ID must belong 
+     to this item (ownership check). Set fieldType = 'multiple_choice' 
+     when an option is selected if not already.
+   - GET /api/checklists/:id and getChecklistsByProject return shapes: 
+     consider whether to eager-load options/photos on item rows. 
+     Recommend: do NOT eager-load by default (N+M scaling). The 
+     editor lazy-loads options + photos per item when authoring/
+     viewing. The list view (X/Y count badge) doesn't need them.
+
+Frontend
+10. New filter UI in the project-detail Checklists tab:
+    - Two toggles above the checklist cards (or inline in each card 
+      when expanded?): "Hide completed" and "Show only my items"
+    - Both are CLIENT-side filters (no API change). Filter applies 
+      to the items rendered in the expanded card view.
+    - "Hide completed" → hides items where completed_at IS NOT NULL
+    - "Show only my items" → shows items where assignedToUserId === 
+      currentUserId OR assignedToUserId IS NULL
+    - Toggle state persists in component state (not localStorage for 
+      now — defer)
+
+11. Multiple Choice authoring UI:
+    - Field type picker now has 4 options (yes_no, rating, text, 
+      multiple_choice)
+    - When multiple_choice selected: show editable list of option 
+      rows below the item. Each row: text input + delete button. 
+      "+ Add option" button at bottom. Drag-to-reorder defer.
+    - Min 2 options to be valid (validate on save). If user picks 
+      multiple_choice but adds no options, show inline warning.
+
+12. Multiple Choice fill UI (when answering, not authoring):
+    - Render as radio group from the item's options array
+    - Selecting an option fires PATCH selectedOptionId
+    - Clearing (clicking again, or a "Clear" link) sets to null
+    - Disabled if user is read-only on the project
+
+13. Per-item photo UI:
+    - Below the item's value control, a "Photos" subsection:
+      - Empty state: dashed dropzone "Attach photos" + "Photos 
+        required" badge if photos_required true
+      - With photos: small thumbnail grid (3-col), click to lightbox, 
+        X to remove
+    - Drag-drop AND click-to-upload (mirror branding card)
+    - 5MB cap, image/* only (jpg/png/webp), reject SVG client-side
+    - Multi-file upload supported (the existing presigned flow handles 
+      one-at-a-time, so loop sequentially)
+    - After upload: bulk POST to /api/checklist-items/:id/photos 
+      with array of mediaIds returned from /api/uploads/sign + S3 PUT
+
+14. Photos required UI:
+    - In authoring mode (item edit): toggle row "Photos required" 
+      (checkbox/switch) below the field-type picker
+    - In fill mode: visual indicator (small camera icon + "Photos 
+      required" label) next to the item title if photos_required + 
+      no photos attached. Replaces the "completed" check icon if it 
+      would otherwise show.
+    - Soft gate: user can still answer the value question. 
+      completed_at only fires when both value answered AND 
+      (photos_required false OR photos attached).
+
+Permissions
+15. Same auth chain as Stage 1: requireWriteAccess + verifyChecklistAccess 
+    chains down through item → checklist → project ownership. 
+    Cross-account 403 on every option/photo endpoint.
+
+Output Phase 1 findings + Phase 2 plan with file diff stat estimate. 
+No code changes.
+
+=== Phase 2 — implement after my approval ===
+
+Single commit total. Migration follows HARD RULE (snapshot, whitelist 
+Replit IP, run migration, verify, push, un-whitelist). Migration has 
+the ALTER TYPE ADD VALUE caveat — script must handle that correctly.
+
+Verify before push:
+- TS baseline 36 (current after Stage 1)
+- npm run build green
+- Dev workflow boots clean
+- After EACH layer (migration draft → schema → storage → routes → 
+  frontend), check TS count. Stop and diagnose if drift exceeds 
+  patterns.
+
+After deploy, smoke test:
+- Existing yes_no/rating/text items still work (no regression)
+- New checklist with one MC item: define 3 options, save, fill out, 
+  selected option persists
+- Item with photos_required: answer it without photos → progress 
+  doesn't count it complete → attach a photo → progress fires
+- Hide completed toggle: completed items hide from view
+- Show only my items toggle: items assigned to others disappear
+- Cross-account: PATCH /api/checklist-options/<id-from-other-account> 
+  → 403
+- Multi-photo upload: attach 3 photos to one item, all show, remove 
+  one, reorder
+
+Out of scope for Stage 2 (Stage 3):
+- Template parity for new fields (template MC options, template-item 
+  photos_required)
+- Admin/Manager gating on template routes
+- /checklists global page rebuild
