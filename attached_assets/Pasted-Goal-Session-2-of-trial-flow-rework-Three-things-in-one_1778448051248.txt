@@ -1,0 +1,105 @@
+Goal: Session 2 of trial flow rework. Three things in one commit:
+
+1. Trial countdown banner — persistent UI showing days remaining in 
+   trial with CTA to add card
+2. Server-side expiry check — extend computeAccessLevel so 'trialing' 
+   status honors trialEndsAt (currently grants full access forever)
+3. Read-only lock-out enforcement when trial expired without card
+4. "Add Card" Stripe Checkout flow with computed trial_end Unix 
+   timestamp (so user gets full 14 days, doesn't lose remaining trial 
+   when they add a card mid-trial)
+
+Two-phase. STOP between phases for approval.
+
+=== Phase 1 — DIAGNOSE only ===
+
+1. computeAccessLevel current state (lib/billing.ts:16):
+   - Show me the function. Specifically the branch for 'trialing' 
+     status. Per Phase 1 of Session 1, 'trialing' → full forever 
+     (doesn't check trialEndsAt). 
+   - Show me the 'trial' branch which already does the trialEndsAt 
+     check — propose extending the same pattern to 'trialing'.
+   - Show me the 'past_due' branch (≤14d → read_only, then locked) — 
+     same pattern Session 2 will use for expired trials.
+
+2. requireReadAccess + requireWriteAccess middleware in 
+   server/replit_integrations/auth/replitAuth.ts:
+   - Show current behavior for accessLevel === 'read_only' — does it 
+     allow GET requests through and 403 mutations? Or does it block 
+     everything?
+   - The read-only lockout I want: GET works (user can browse their 
+     data), POST/PATCH/DELETE return 403 with body 
+     {error: "trial_expired", message: "Your trial has ended. Add a 
+     card to continue."}
+
+3. Client-side accessLevel consumption:
+   - Where does the client read user.accessLevel? Show me the overlay 
+     function and any conditional UI that branches on it.
+   - For the banner, I want: persistent yellow/orange banner at top 
+     of the app when accessLevel === 'full' AND status === 'trialing' 
+     AND trialEndsAt within next 14 days. Banner shows "Your trial 
+     ends in X days" with "Add card" CTA.
+   - For lockout, I want: when accessLevel === 'read_only' due to 
+     trial expiry, all create/edit/delete buttons disabled with 
+     tooltip "Trial ended — add a card to continue", and a modal 
+     prompt shown on attempted action.
+
+4. Existing Stripe Checkout flow at POST /api/create-checkout-session 
+   (routes.ts:4538):
+   - Show the current implementation. 
+   - I want a new flow: when account is 'trialing' with future 
+     trialEndsAt, pass subscription_data.trial_end = 
+     Math.floor(account.trialEndsAt.getTime() / 1000) (Unix seconds) 
+     so Stripe respects our app-side deadline. Drop trial_period_days.
+   - When account is 'past_due' or expired trialing, don't pass 
+     trial_end — start charging immediately.
+   - When account already has stripeSubscriptionId, this endpoint 
+     shouldn't be hit (existing customer goes to Stripe portal). 
+     Confirm the existing logic handles this.
+
+5. "Add Card" CTA placement:
+   - Where in the UI should "Add Card" button live? Options: 
+     (a) banner CTA only, (b) banner + Settings page, (c) banner + 
+     Settings + dedicated /upgrade route
+   - Recommend (b) — banner everywhere, Settings page has the full 
+     subscription panel
+   - Show me current Settings → Billing page to confirm it has a 
+     hook for the new "Add Card" CTA
+
+6. Calendly / demo booking:
+   - Just need to know: is there a /demo route or similar planned? 
+     For Session 2, defer demo booking UI to Session 3 or a small 
+     follow-up. Banner CTA goes to "Add Card" Checkout, not to demo.
+
+Output Phase 1 findings + Phase 2 plan with file diff stat estimate. 
+No migration expected (columns all exist). HARD RULE check.
+
+=== Phase 2 — implement after my approval ===
+
+Single commit. No migration.
+
+Verify:
+- TS baseline 39, do NOT drift it
+- Build green, dev workflow boots clean  
+- Architect review pass
+
+After push (Vercel auto-promote):
+- Sign up a fresh test account → see banner with "14 days remaining" 
+  → app fully usable
+- Manually set trial_ends_at to NOW - 1 day in TablePlus on that test 
+  account → log in → see expired state, all create/edit blocked with 
+  "Trial ended" messaging
+- Try to create a project → 403 from server, modal client-side
+- Click "Add Card" → Stripe Checkout opens with $79/mo or $588/yr 
+  options, BETA100 promo code field available
+- (Don't actually complete Checkout — costs money; just verify the 
+  page loads and shows correct pricing)
+- Existing 'active' account (Grayson comp) → no banner, no lockout, 
+  works normally
+- Existing 'past_due' or trial accounts → unchanged behavior
+
+Out of scope:
+- customer.io webhooks (Session 3)
+- Demo booking UI (Session 3 or follow-up)
+- Existing trialing user migration (defer — only new signups go 
+  through new flow until they hit expiry)
