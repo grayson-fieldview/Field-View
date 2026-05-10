@@ -1,0 +1,57 @@
+APPROVED for Session 1 Phase 2.
+
+Confirmations:
+1. Anchor trial_ends_at + status = 'trialing' at signup (not 
+   email-verify) — yes, prevents the unverified-and-locked floating 
+   state
+2. Status value: "trialing" (matches Stripe vocab + existing first-
+   class branch in computeAccessLevel)
+3. Stripe Checkout trial_period_days: LEAVE AS-IS for Session 1. Defer 
+   the change to Session 2 where the Add Card flow gets fully reworked 
+   with trial_end (Unix timestamp) computed from trialEndsAt. Don't 
+   touch routes.ts:4581 in this commit.
+
+Edits this commit (single file):
+- server/replit_integrations/auth/replitAuth.ts POST /api/register, 
+  trial branch only (the non-invitee path):
+  - INSERT INTO accounts: add subscriptionStatus: "trialing", 
+    trialEndsAt: new Date(Date.now() + 14 * 86400 * 1000)
+  - authStorage.upsertUser: same two fields, mirroring the legacy 
+    duplication
+- Invitee branch: untouched (inherits account's existing status)
+- Default in line 124's upsertUser({subscriptionStatus:"none"}): 
+  untouched (only the /api/register callsite changes)
+
+Verify before push:
+- TS baseline 39 (no drift expected — adding two field values to an 
+  insert object)
+- Build green
+- Dev workflow boots clean
+- Architect review pass
+
+After deploy (Vercel auto-promote — NO migration this commit):
+- Sign up a fresh test account at app.field-view.com:
+  * Verify in TablePlus: 
+    SELECT id, name, subscription_status, trial_ends_at, 
+           stripe_customer_id, stripe_subscription_id 
+    FROM accounts ORDER BY created_at DESC LIMIT 5;
+  * Expect new row: subscription_status='trialing', 
+    trial_ends_at = ~14 days from NOW, stripe_customer_id IS NULL
+  * Same fields on users table (legacy duplication)
+- User can immediately access the app (no billing wall, no welcome-
+  loop trap)
+- Existing accounts (Grayson Gladu T1, comp account) untouched — 
+  spot check by logging in
+- Invitee flow: invite from existing account, signup via invite link, 
+  confirm new user inherits account's status (NOT 'trialing')
+
+Out of scope (Sessions 2+3):
+- Trial countdown banner UI
+- computeAccessLevel honoring trialEndsAt for 'trialing' status (lock-
+  out enforcement)
+- Add Card Stripe Checkout flow rework
+- customer.io webhooks
+- Sweep of any existing subscription_status='none' users into trialing 
+  (deferred — check after deploy if any exist)
+
+Single commit. Run.

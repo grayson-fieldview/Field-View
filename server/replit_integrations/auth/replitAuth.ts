@@ -87,6 +87,8 @@ async function findOrCreateOAuthUser(opts: {
 
   let accountId: string;
   let role: string;
+  let initialSubscriptionStatus: string;
+  let initialTrialEndsAt: Date | null;
 
   // TODO: Terms acceptance gate for OAuth signups. Users signing up via Google
   // currently bypass the terms checkbox on /register. Consider adding a
@@ -103,10 +105,32 @@ async function findOrCreateOAuthUser(opts: {
     }
     accountId = invitation.accountId;
     role = invitation.role;
+    // Mirror the parent account's billing onto the new user row so that
+    // getAccountBilling's user-fallback path (when ACCOUNT_BILLING_ENABLED
+    // is off) does not lock OAuth invitees joining active/trialing accounts.
+    // Same fix as the password-invite branch in /api/register.
+    const [acct] = await db
+      .select({
+        subscriptionStatus: accounts.subscriptionStatus,
+        trialEndsAt: accounts.trialEndsAt,
+      })
+      .from(accounts)
+      .where(eq(accounts.id, accountId))
+      .limit(1);
+    initialSubscriptionStatus = acct?.subscriptionStatus ?? "none";
+    initialTrialEndsAt = acct?.trialEndsAt ?? null;
     await db.update(invitations).set({ status: "accepted" }).where(eq(invitations.id, invitation.id));
   } else {
+    // Session 1 trial-flow rework: OAuth self-serve signups also start in
+    // a 14-day no-card trial, mirroring the /api/register trial branch.
+    initialSubscriptionStatus = "trialing";
+    initialTrialEndsAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
     const accountName = [opts.firstName, opts.lastName].filter(Boolean).join(" ") || opts.email;
-    const [account] = await db.insert(accounts).values({ name: accountName + "'s Team" }).returning();
+    const [account] = await db.insert(accounts).values({
+      name: accountName + "'s Team",
+      subscriptionStatus: initialSubscriptionStatus,
+      trialEndsAt: initialTrialEndsAt,
+    }).returning();
     accountId = account.id;
     role = "admin";
   }
@@ -121,8 +145,8 @@ async function findOrCreateOAuthUser(opts: {
     role,
     accountId,
     emailVerified: true,
-    subscriptionStatus: "none",
-    trialEndsAt: null,
+    subscriptionStatus: initialSubscriptionStatus,
+    trialEndsAt: initialTrialEndsAt,
   } as any);
   return { user: created, isNewSignup: true };
 }
@@ -434,8 +458,8 @@ export async function setupAuth(app: Express) {
 
       const hashedPassword = await bcrypt.hash(password, 12);
 
-      let accountId: string;
-      let role: string;
+      let accountId: string = "";
+      let role: string = "standard";
       let firstName: string | null = null;
       let lastName: string | null = null;
 
@@ -454,9 +478,40 @@ export async function setupAuth(app: Express) {
         firstName = invitation.firstName ?? null;
         lastName = invitation.lastName ?? null;
         await db.update(invitations).set({ status: "accepted" }).where(eq(invitations.id, invitation.id));
+      }
+
+      // Session 1 of trial-flow rework: new self-serve signups start in a
+      // 14-day no-card trial. Anchor at signup (not email-verify) so the user
+      // never floats in the "none"→locked state during onboarding.
+      // computeAccessLevel already grants `full` for status="trialing", so no
+      // gate change is needed this session. Stripe customer/subscription are
+      // NOT created here — that moves to the "Add Card" flow in Session 2.
+      let initialSubscriptionStatus: string;
+      let initialTrialEndsAt: Date | null;
+
+      if (inviteToken) {
+        // Invitee path: copy the EXISTING account's billing fields onto the
+        // user row so getAccountBilling's user-fallback path (when
+        // ACCOUNT_BILLING_ENABLED is off) does not lock out invitees joining
+        // active/trialing accounts. Without this, users.subscriptionStatus
+        // defaults to "none" → computeAccessLevel returns "locked".
+        const [acct] = await db
+          .select({
+            subscriptionStatus: accounts.subscriptionStatus,
+            trialEndsAt: accounts.trialEndsAt,
+          })
+          .from(accounts)
+          .where(eq(accounts.id, accountId))
+          .limit(1);
+        initialSubscriptionStatus = acct?.subscriptionStatus ?? "none";
+        initialTrialEndsAt = acct?.trialEndsAt ?? null;
       } else {
+        initialSubscriptionStatus = "trialing";
+        initialTrialEndsAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
         const [account] = await db.insert(accounts).values({
           name: companyName.trim().slice(0, 200),
+          subscriptionStatus: initialSubscriptionStatus,
+          trialEndsAt: initialTrialEndsAt,
         }).returning();
         accountId = account.id;
         role = "admin";
@@ -470,8 +525,10 @@ export async function setupAuth(app: Express) {
         role,
         accountId,
         emailVerified: false,
-        subscriptionStatus: "none",
-        trialEndsAt: null,
+        // Mirror billing onto the user row to keep getAccountBilling's
+        // user-fallback path consistent with the account-source path.
+        subscriptionStatus: initialSubscriptionStatus,
+        trialEndsAt: initialTrialEndsAt,
         termsAcceptedAt: new Date(),
         termsVersion: CURRENT_TERMS_VERSION,
         // Invitees skip the /welcome step (their account is already configured
