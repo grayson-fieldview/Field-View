@@ -1,0 +1,126 @@
+Multiple bugs and one UX change to address. Two-phase. Diagnose all 
+six first, then propose commit groupings.
+
+=== Bug list ===
+
+BUG 1 (existing prompt, not yet shipped): Signup with email already 
+in use shows generic "Registration failed" instead of specific 
+"This email is already registered. Try logging in instead." with 
+inline error near email field + "Sign in instead" link to /login. 
+Email casing should be case-insensitive in the duplicate check.
+
+BUG 2 (CRITICAL): After clicking "Create account" on signup form, 
+page goes BLANK instead of navigating to verification code page. 
+The signup API call succeeds (POST /api/register → 201 in Vercel 
+logs) but the client doesn't route to the verify page. Reproduces 
+on fresh signup. User can navigate to /verify-email manually as 
+workaround but the redirect-after-signup is broken.
+
+BUG 3: Verification code page (/verify-email) — right column 
+content (heading, subtitle, "Logged in as", code input, "Didn't 
+get it?") is not visually centered vertically/horizontally within 
+its column. Left column with branding + testimonial is fine. The 
+right side floats too high/off-center. Should match the left 
+column's vertical center alignment.
+
+BUG 4: Trial countdown banner at top of app is being CUT OFF at 
+the left edge — visible text starts mid-sentence with "card now to 
+keep your team running after your trial ends." The "Your trial 
+ends in X days. Add a" prefix is hidden behind/under the left 
+sidebar. The banner needs to either start after the sidebar 
+(left: <sidebar-width>) or wrap/respect the sidebar's z-index and 
+layout.
+
+BUG 5 (CRITICAL): Clicking "Add Card" in the banner returns 500 
+error from POST /api/create-checkout-session. Server log: 
+"Checkout session error: No such price: 
+'price_1TMaPlR1AnIJLf9qcJsFWa1w' at Bc". The hardcoded Stripe 
+price IDs in the codebase don't exist in the live Stripe account, 
+OR they're test-mode IDs being used in live mode. 
+
+Fix: move ALL Stripe price IDs out of hardcoded values into 
+environment variables:
+- STRIPE_PRICE_MONTHLY
+- STRIPE_PRICE_ANNUAL
+- STRIPE_PRICE_SEAT_ADDON
+
+Read them from process.env. Grayson will set the correct values 
+in Vercel env vars AFTER you ship the code change. List the env 
+vars he needs to set in your final report.
+
+This addresses pre-existing TECH_DEBT.md item: "Stripe seat addon 
+string-matching (move to env/constants)."
+
+UX CHANGE 6: Currently the banner's "Add Card" button goes 
+directly to Stripe Checkout with the hardcoded monthly price. 
+This is wrong UX. The CTA should open a plan picker first where 
+the user selects:
+- Monthly ($79/mo) OR Annual ($588/yr) 
+- Number of seats (default 3, current user count from seatCount 
+  if higher)
+- THEN proceed to Stripe Checkout with the correct line items
+
+Investigate the existing SubscribePage (memory says it exists as 
+the locked-out fallback at the gate). Question: can we reuse it 
+as the trial Add Card flow, or does it need a different layout 
+(modal vs full page)? Recommend the most pragmatic option.
+
+=== Phase 1 — DIAGNOSE only, no code changes ===
+
+For each of the 6 issues:
+
+1. Email-in-use: show current handler, error response, client 
+   error display. Same investigation as before.
+
+2. Blank page: read the signup form mutation onSuccess, where 
+   does it navigate? Compare to what the welcome wizard / verify 
+   page expects on mount. Show the routing logic.
+
+3. Verify page layout: show the JSX + CSS for /verify-email 
+   page right column. Identify why it's not centered.
+
+4. Banner cutoff: show the BillingBanner component CSS/layout 
+   and where it mounts in App.tsx relative to the sidebar.
+
+5. Stripe price IDs: grep the codebase for every hardcoded 
+   price_1T... ID. List every callsite. Confirm the proposed 
+   env var approach handles all of them or if there are special 
+   cases (e.g., webhook handlers checking which price was used).
+
+6. Plan picker: 
+   - Show the current SubscribePage component (path, structure)
+   - Does it already have plan + seat selection, or just a single 
+     Subscribe button?
+   - Proposal: extend SubscribePage to be the plan picker, then 
+     route the banner Add Card CTA to SubscribePage instead of 
+     directly to Checkout? OR build a separate modal?
+   - Recommend approach
+
+After all 6 diagnostics, propose commit groupings. My suggested split:
+- Commit A (critical bugs): 1 (email-in-use), 2 (blank page), 4 
+  (banner cutoff), 5 (Stripe env vars)
+- Commit B (UX + polish): 3 (verify page alignment), 6 (plan 
+  picker)
+
+But adjust if the diagnosis reveals tighter coupling.
+
+=== Phase 2 — implement after my approval ===
+
+Run each commit in sequence:
+- TS baseline 39, do not drift
+- Build green per commit
+- Architect review per commit
+- Stop and confirm with me between commits if anything surprising 
+
+After commit A pushes (Vercel auto-promote):
+- I'll set the Stripe env vars in Vercel based on your output
+- Verify signup → no blank page, banner full text visible, Add 
+  Card opens Checkout (with new env-driven price)
+- Email collision test
+
+After commit B pushes:
+- Verify plan picker opens on Add Card
+- Verify verification page is centered
+
+No migration. No new tables. Pure frontend + server logic + env 
+var wiring.
