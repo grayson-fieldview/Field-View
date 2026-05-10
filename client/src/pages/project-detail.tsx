@@ -37,6 +37,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/auth-utils";
@@ -333,7 +334,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const [selectedMedia, setSelectedMedia] = useState<(Media & { uploadedBy?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } }) | null>(null);
   const [isAddTaskOpen, setIsAddTaskOpen] = useState(false);
   const [newChecklistTitle, setNewChecklistTitle] = useState("");
-  const [newChecklistItems, setNewChecklistItems] = useState<string[]>([""]);
+  const [createChecklistDialogOpen, setCreateChecklistDialogOpen] = useState(false);
   const [isCreateReportOpen, setIsCreateReportOpen] = useState(false);
   const [expandedChecklist, setExpandedChecklist] = useState<number | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -393,40 +394,54 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     },
   });
 
+  // With the legacy inline create form removed, "Use Template" now creates
+  // the checklist directly (POST with templated items) and auto-expands the
+  // new card into the Stage 1+2 editor. Server's POST checklists endpoint
+  // accepts an array of {label} seeds via its backward-compat path.
   const applyChecklistTemplate = useCallback(async (templateId: number) => {
     try {
-      const res = await apiRequest("GET", `/api/checklist-templates/${templateId}/items`);
-      const items: ChecklistTemplateItem[] = await res.json();
+      const itemsRes = await apiRequest("GET", `/api/checklist-templates/${templateId}/items`);
+      const tplItems: ChecklistTemplateItem[] = await itemsRes.json();
       const template = checklistTemplates?.find(t => t.id === templateId);
-      if (template) {
-        setNewChecklistTitle(template.title);
-        setNewChecklistItems(items.length > 0 ? items.map(i => i.label) : [""]);
-        toast({ title: `Template "${template.title}" applied` });
-      }
+      if (!template) return;
+      const createRes = await apiRequest("POST", `/api/projects/${id}/checklists`, {
+        title: template.title,
+        items: tplItems.map(i => ({ label: i.label })),
+      });
+      const created = await createRes.json() as { id: number };
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/checklists"] });
+      if (created?.id) setExpandedChecklist(created.id);
+      toast({ title: `Created from "${template.title}"` });
     } catch (error) {
       if (isUnauthorizedError(error as Error)) {
         toast({ title: "Unauthorized", variant: "destructive" });
         setTimeout(() => { window.location.href = "/login"; }, 500);
         return;
       }
-      toast({ title: "Failed to load template", variant: "destructive" });
+      toast({ title: "Failed to apply template", variant: "destructive" });
     }
-  }, [checklistTemplates, toast]);
+  }, [checklistTemplates, id, toast]);
 
+  // Create-empty + auto-expand flow. POST /api/projects/:id/checklists
+  // accepts items=[] per Stage 1; the new checklist's id is captured from
+  // the response and pushed into expandedChecklist so the freshly-created
+  // card opens straight into the Stage 1+2 ChecklistSectionEditor on the
+  // next render of projectChecklists.map.
   const createChecklist = useMutation({
-    mutationFn: async () => {
-      const items = newChecklistItems.filter(i => i.trim());
+    mutationFn: async (title: string) => {
       const res = await apiRequest("POST", `/api/projects/${id}/checklists`, {
-        title: newChecklistTitle,
-        items,
+        title,
+        items: [],
       });
-      return res.json();
+      return res.json() as Promise<{ id: number }>;
     },
-    onSuccess: () => {
+    onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
       queryClient.invalidateQueries({ queryKey: ["/api/checklists"] });
+      if (created?.id) setExpandedChecklist(created.id);
+      setCreateChecklistDialogOpen(false);
       setNewChecklistTitle("");
-      setNewChecklistItems([""]);
       toast({ title: "Checklist created" });
     },
     onError: (error: Error) => {
@@ -1479,92 +1494,88 @@ export default function ProjectDetailPage({ id }: { id: string }) {
 
           {activeTab === "checklists" && (
             <div className="px-4 sm:px-6 py-4 space-y-4">
-              <Card className="p-4 space-y-3">
-                <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-sm font-semibold">Create Checklist</h3>
-                  {checklistTemplates && checklistTemplates.length > 0 && (
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="sm" data-testid="button-apply-checklist-template">
-                          <LayoutTemplate className="h-3.5 w-3.5 mr-1.5" />
-                          Use Template
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        {checklistTemplates.map((t) => (
-                          <DropdownMenuItem
-                            key={t.id}
-                            onClick={() => applyChecklistTemplate(t.id)}
-                            data-testid={`menu-apply-checklist-template-${t.id}`}
-                          >
-                            <LayoutTemplate className="h-3.5 w-3.5 mr-2 text-muted-foreground" />
-                            {t.title}
-                            <Badge variant="secondary" className="ml-auto text-xs no-default-hover-elevate no-default-active-elevate">{t.itemCount}</Badge>
-                          </DropdownMenuItem>
-                        ))}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  )}
-                </div>
-                <Input
-                  placeholder="Checklist title..."
-                  value={newChecklistTitle}
-                  onChange={(e) => setNewChecklistTitle(e.target.value)}
-                  data-testid="input-new-checklist-title"
-                />
-                <div className="space-y-2">
-                  {newChecklistItems.map((item, idx) => (
-                    <div key={idx} className="flex items-center gap-2">
-                      <Circle className="h-4 w-4 text-muted-foreground shrink-0" />
-                      <Input
-                        placeholder={`Item ${idx + 1}...`}
-                        value={item}
-                        onChange={(e) => {
-                          const updated = [...newChecklistItems];
-                          updated[idx] = e.target.value;
-                          setNewChecklistItems(updated);
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            setNewChecklistItems([...newChecklistItems, ""]);
-                          }
-                        }}
-                        className="flex-1"
-                        data-testid={`input-checklist-item-${idx}`}
-                      />
-                      {newChecklistItems.length > 1 && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => setNewChecklistItems(newChecklistItems.filter((_, i) => i !== idx))}
+              {/* Stage 2 fix — replaced legacy inline create form with a
+                  single button + dialog. The freshly-created checklist
+                  auto-expands via createChecklist.onSuccess setting
+                  expandedChecklist, which the map below already honours. */}
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  onClick={() => setCreateChecklistDialogOpen(true)}
+                  data-testid="button-open-create-checklist"
+                >
+                  <Plus className="h-3.5 w-3.5 mr-1.5" />
+                  Create Checklist
+                </Button>
+                {checklistTemplates && checklistTemplates.length > 0 && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" size="sm" data-testid="button-apply-checklist-template">
+                        <LayoutTemplate className="h-3.5 w-3.5 mr-1.5" />
+                        Use Template
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      {checklistTemplates.map((t) => (
+                        <DropdownMenuItem
+                          key={t.id}
+                          onClick={() => applyChecklistTemplate(t.id)}
+                          data-testid={`menu-apply-checklist-template-${t.id}`}
                         >
-                          <X className="h-3.5 w-3.5" />
-                        </Button>
-                      )}
-                    </div>
-                  ))}
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-primary"
-                    onClick={() => setNewChecklistItems([...newChecklistItems, ""])}
-                    data-testid="button-add-checklist-item"
-                  >
-                    <Plus className="h-3.5 w-3.5 mr-1" />
-                    Add Item
-                  </Button>
-                </div>
-                <div className="flex justify-end">
-                  <Button
-                    onClick={() => { if (newChecklistTitle.trim()) createChecklist.mutate(); }}
-                    disabled={createChecklist.isPending || !newChecklistTitle.trim()}
-                    data-testid="button-create-checklist"
-                  >
-                    <ClipboardCheck className="h-4 w-4 mr-2" />
-                    Create Checklist
-                  </Button>
-                </div>
-              </Card>
+                          <LayoutTemplate className="h-3.5 w-3.5 mr-2 text-muted-foreground" />
+                          {t.title}
+                          <Badge variant="secondary" className="ml-auto text-xs no-default-hover-elevate no-default-active-elevate">{t.itemCount}</Badge>
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+              </div>
+
+              <Dialog
+                open={createChecklistDialogOpen}
+                onOpenChange={(open) => {
+                  setCreateChecklistDialogOpen(open);
+                  if (!open) setNewChecklistTitle("");
+                }}
+              >
+                <DialogContent data-testid="dialog-create-checklist">
+                  <DialogHeader>
+                    <DialogTitle>Create Checklist</DialogTitle>
+                  </DialogHeader>
+                  <Input
+                    autoFocus
+                    placeholder="Checklist title..."
+                    value={newChecklistTitle}
+                    onChange={(e) => setNewChecklistTitle(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && newChecklistTitle.trim() && !createChecklist.isPending) {
+                        createChecklist.mutate(newChecklistTitle.trim());
+                      }
+                    }}
+                    data-testid="input-create-checklist-title"
+                  />
+                  <DialogFooter>
+                    <Button
+                      variant="ghost"
+                      onClick={() => setCreateChecklistDialogOpen(false)}
+                      data-testid="button-cancel-create-checklist"
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        if (newChecklistTitle.trim()) createChecklist.mutate(newChecklistTitle.trim());
+                      }}
+                      disabled={createChecklist.isPending || !newChecklistTitle.trim()}
+                      data-testid="button-submit-create-checklist"
+                    >
+                      <ClipboardCheck className="h-4 w-4 mr-2" />
+                      Create
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
 
               {projectChecklists.length === 0 ? (
                 <Card className="p-12">
