@@ -1,0 +1,56 @@
+Goal: fix the scope gap on the Checklists tab create flow. The 
+ChecklistSectionEditor (Stage 1+2 rebuild) renders only inside an 
+expanded ChecklistCard. The Create Checklist form at the top of the 
+tab still uses the legacy flat-text-input flow.
+
+Replace it with a "create empty + auto-expand into new editor" flow 
+matching CompanyCam UX:
+
+User flow:
+1. Click "Create Checklist" button (replaces the inline form)
+2. Brief modal/dialog for the checklist title (one input + Submit/Cancel)
+3. On submit: POST creates an empty checklist with no items
+4. Newly-created card appears in the list, AUTO-EXPANDED, focus on 
+   "Add section" or first new item
+5. User authors sections + fields inline using the new editor
+
+Implementation:
+1. Replace the existing inline Create Checklist Card (lines ~1480-1567 
+   in client/src/pages/project-detail.tsx) with a single button "+ Create 
+   Checklist" matching the style of the report editor's create UX.
+2. Add small dialog component (use shadcn Dialog, can be inline in 
+   project-detail.tsx since it's a simple title input).
+3. On Submit, POST /api/projects/:id/checklists with body 
+   { title, items: [] } — server already accepts empty items array per 
+   Stage 1.
+4. On success: 
+   - queryClient.invalidateQueries on the project's checklists query
+   - Set the new checklist's id to a state variable that ChecklistCard 
+     watches to auto-expand
+   - Optional: scroll the new card into view
+5. Remove the now-dead state: newChecklistTitle, newChecklistItems, 
+   the createChecklist mutation tied to the old flow.
+
+Phase 1 — DIAGNOSE only:
+- Show me current state (lines 1480-1567 + related state declarations 
+  + the createChecklist mutation)
+- Identify where ChecklistCard tracks its expanded state — does it 
+  use local state, or is it lifted? If local state, need to add a 
+  way for parent to signal "auto-expand on mount"
+- Propose component contract for auto-expand (e.g., autoExpand?: boolean 
+  prop on ChecklistCard, or shared expandedIds: Set<number> in parent)
+
+Phase 2 — implement after my approval:
+- Single commit
+- TS baseline 39 (current)
+- Build green
+- Dev workflow boots clean
+- Architect review pass before final state
+
+Verification on prod after deploy:
+- Click Create Checklist button → dialog
+- Enter title → Submit → new card appears auto-expanded
+- New editor renders inside the card with all Stage 1+2 features 
+  (sections, field types, MC, photos, photos required, filters)
+- Old "Test" checklist still works the same way (regression check)
+- Cross-account: try via direct API call → confirm 403 enforcement
