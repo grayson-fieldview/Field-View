@@ -11,6 +11,8 @@ export const projectStatusEnum = pgEnum("project_status", ["active", "completed"
 export const taskStatusEnum = pgEnum("task_status", ["todo", "in_progress", "done"]);
 export const taskPriorityEnum = pgEnum("task_priority", ["low", "medium", "high"]);
 export const checklistStatusEnum = pgEnum("checklist_status", ["not_started", "in_progress", "completed"]);
+// Stage 1 ships yes_no/rating/text. multiple_choice is Stage 2 (ALTER TYPE ADD VALUE).
+export const checklistFieldTypeEnum = pgEnum("checklist_field_type", ["yes_no", "rating", "text"]);
 export const reportStatusEnum = pgEnum("report_status", ["draft", "submitted", "approved"]);
 export const calendarProviderEnum = pgEnum("calendar_provider", ["google", "outlook", "apple", "ical"]);
 export const eventRepeatEnum = pgEnum("event_repeat", ["none", "daily", "weekly", "monthly", "yearly"]);
@@ -113,13 +115,47 @@ export const checklists = pgTable("checklists", {
   index("checklists_project_id_idx").on(table.projectId),
 ]);
 
+// Sections group items within a single checklist. Sort order persists; deleting
+// a section sets owning items.section_id NULL (they fall into the "Untitled"
+// virtual group in the UI). Stage 1 — instances only; templates get sections in Stage 3.
+export const checklistSections = pgTable("checklist_sections", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  checklistId: integer("checklist_id").references(() => checklists.id, { onDelete: "cascade" }).notNull(),
+  title: text("title").notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("checklist_sections_checklist_sort_idx").on(table.checklistId, table.sortOrder),
+]);
+
+// Stage 1 shape. Field-type-specific value columns (value_bool/value_rating/
+// value_text) are nullable and only one applies based on `fieldType`.
+// `completed_at` is computed in storage.updateChecklistItem — see state machine
+// doc on that method. `checked` is kept for Stage 1 backward-compat (legacy
+// mobile clients still send it); writes go through to value_bool. Drop in Stage 1.5.
+// `selectedOptionId` lands as a plain integer placeholder — FK + options table
+// arrive in Stage 2 alongside multiple_choice support.
 export const checklistItems = pgTable("checklist_items", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   checklistId: integer("checklist_id").references(() => checklists.id, { onDelete: "cascade" }).notNull(),
+  sectionId: integer("section_id").references(() => checklistSections.id, { onDelete: "set null" }),
   label: text("label").notNull(),
+  fieldType: checklistFieldTypeEnum("field_type").default("yes_no").notNull(),
+  notes: text("notes"),
+  assignedToUserId: varchar("assigned_to_user_id").references(() => users.id),
+  photosRequired: boolean("photos_required").default(false).notNull(),
   checked: boolean("checked").default(false).notNull(),
+  valueBool: boolean("value_bool"),
+  valueRating: integer("value_rating"),
+  valueText: text("value_text"),
+  selectedOptionId: integer("selected_option_id"),
+  completedAt: timestamp("completed_at"),
   sortOrder: integer("sort_order").default(0).notNull(),
-});
+}, (table) => [
+  index("checklist_items_section_idx").on(table.sectionId),
+  index("checklist_items_assigned_idx").on(table.assignedToUserId),
+]);
 
 // ─── Reports (new structured shape, session 37 rewrite) ───────────────────────
 // coverConfig jsonb shape (Stage 1):
@@ -183,10 +219,17 @@ export const checklistTemplates = pgTable("checklist_templates", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// Mirror of checklist_items minus value_*/assigned_to/completed_at. sectionId is
+// a plain integer placeholder for Stage 1 — checklist_template_sections + the FK
+// arrive in Stage 3 when template parity lands.
 export const checklistTemplateItems = pgTable("checklist_template_items", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   templateId: integer("template_id").references(() => checklistTemplates.id, { onDelete: "cascade" }).notNull(),
+  sectionId: integer("section_id"),
   label: text("label").notNull(),
+  fieldType: checklistFieldTypeEnum("field_type").default("yes_no").notNull(),
+  notes: text("notes"),
+  photosRequired: boolean("photos_required").default(false).notNull(),
   sortOrder: integer("sort_order").default(0).notNull(),
 });
 
@@ -455,10 +498,18 @@ export const checklistsRelations = relations(checklists, ({ one, many }) => ({
   assignedTo: one(users, { fields: [checklists.assignedToId], references: [users.id] }),
   createdBy: one(users, { fields: [checklists.createdById], references: [users.id] }),
   items: many(checklistItems),
+  sections: many(checklistSections),
+}));
+
+export const checklistSectionsRelations = relations(checklistSections, ({ one, many }) => ({
+  checklist: one(checklists, { fields: [checklistSections.checklistId], references: [checklists.id] }),
+  items: many(checklistItems),
 }));
 
 export const checklistItemsRelations = relations(checklistItems, ({ one }) => ({
   checklist: one(checklists, { fields: [checklistItems.checklistId], references: [checklists.id] }),
+  section: one(checklistSections, { fields: [checklistItems.sectionId], references: [checklistSections.id] }),
+  assignedTo: one(users, { fields: [checklistItems.assignedToUserId], references: [users.id] }),
 }));
 
 export const reportsRelations = relations(reports, ({ one, many }) => ({
@@ -543,8 +594,18 @@ export const insertChecklistSchema = createInsertSchema(checklists).omit({
   updatedAt: true,
 });
 
+// Note: only `id` is omitted. `completedAt` stays in the schema (always nullable
+// so it's optional in the insert type) — storage.updateChecklistItem strips any
+// client-supplied value and recomputes via the state machine. Adding a 2nd omit
+// key here collapses drizzle-zod's type inference to `{}` for the insert type.
 export const insertChecklistItemSchema = createInsertSchema(checklistItems).omit({
   id: true,
+});
+
+export const insertChecklistSectionSchema = createInsertSchema(checklistSections).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
 });
 
 export const insertReportSchema = createInsertSchema(reports).omit({
@@ -579,6 +640,8 @@ export type InsertChecklist = z.infer<typeof insertChecklistSchema>;
 export type Checklist = typeof checklists.$inferSelect;
 export type InsertChecklistItem = z.infer<typeof insertChecklistItemSchema>;
 export type ChecklistItem = typeof checklistItems.$inferSelect;
+export type InsertChecklistSection = z.infer<typeof insertChecklistSectionSchema>;
+export type ChecklistSection = typeof checklistSections.$inferSelect;
 export type InsertReport = z.infer<typeof insertReportSchema>;
 export type Report = typeof reports.$inferSelect;
 export type InsertReportSection = z.infer<typeof insertReportSectionSchema>;

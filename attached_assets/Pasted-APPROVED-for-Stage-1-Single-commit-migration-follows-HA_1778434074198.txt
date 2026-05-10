@@ -1,0 +1,79 @@
+APPROVED for Stage 1. Single commit, migration follows HARD RULE.
+
+Implementation notes:
+
+1. Migration script naming: migrate_session39_checklists_v2.ts. Use 
+   migrate_session38_share_tokens.ts as the structural template (you 
+   referenced session22 — session38 is more recent and has the same 
+   shape).
+
+2. Pre-migration version check: include the SELECT version() call 
+   you proposed. Abort if PG < 11. RDS is almost certainly on a 
+   modern version but the check is cheap insurance.
+
+3. Backfill idempotency: confirmed — your WHERE value_bool IS NULL 
+   guard prevents re-runs from clobbering edits. Good.
+
+4. completed_at compute logic in storage.updateChecklistItem: 
+   centralized rule. Define explicitly in code:
+   - yes_no: completed when value_bool is non-null (true OR false 
+     both count as "answered")
+   - rating: completed when value_rating is between 1 and 5 inclusive
+   - text: completed when value_text is non-null AND .trim().length > 0
+   When fieldType changes via PATCH, NULL out value_bool/value_rating/
+   value_text + completed_at simultaneously. Don't try to coerce the 
+   prior value into the new type's shape.
+   
+   Add a unit-test-equivalent inline doc comment showing the state 
+   machine. Future-self will thank you.
+
+5. Restricted-user visibility fix (the pre-existing bug): match the 
+   reports pattern at server/routes.ts:1247-1249 exactly. Don't 
+   over-design — just project-membership for Stage 1. Per-item 
+   visibility for restricted users is Stage 2 (when assignment + 
+   filters land together).
+
+6. TS drift verification: after EACH step (schema → storage → routes 
+   → frontend). Memory pattern from earlier today: when count drifts, 
+   default assumption is real new error in our code. Don't push 
+   through with "zero new errors attributable" framing.
+
+7. Two new component files (checklist-section-editor.tsx + 
+   checklist-field-input.tsx): approve the extraction. project-detail.tsx 
+   is already 2,200+ lines — keep it from cresting.
+
+8. Field-type-specific input controls in checklist-field-input.tsx:
+   - yes_no: two pill-style buttons, "Yes" (green when selected) / 
+     "No" (red when selected). Tertiary state = unanswered (both 
+     gray).
+   - rating: 5-star row, hover preview, click to set. Click an 
+     already-selected star to clear (set to null).
+   - text: <Textarea> auto-grow, debounced PATCH on blur or 
+     500ms-after-last-keystroke (NOT every keystroke).
+   
+   The text-field debounce is important — without it, typing "Hello" 
+   fires 5 PATCH requests. Use lodash.debounce or a simple useRef 
+   timer. Confirm pattern matches existing inline edits in the 
+   editor.
+
+9. checklist_template_items also gets the new columns (mirroring 
+   instances minus value_*/assigned_to/completed_at). This is in 
+   your plan — confirming so it isn't dropped during implementation.
+
+10. Out of Stage 1 (do NOT scope-creep): multiple_choice field type, 
+    options table, photos table, photos_required UI/enforcement, 
+    "Hide Completed" / "Show only my items" filters, template 
+    parity for new fields, drop legacy `checked` column. All Stage 
+    2 / Stage 3 / Stage 1.5.
+
+After Phase 2 commit, the deploy sequence is mine:
+1. RDS snapshot via AWS Console
+2. Whitelist Replit IP on RDS security group
+3. ALLOW_PROD_MIGRATION=yes npx tsx script/migrations/migrate_session39_checklists_v2.ts
+4. Verify via TablePlus + the parity-check query (count rows where 
+   checked=true vs completed_at IS NOT NULL — should match)
+5. Push code, Vercel auto-promotes
+6. Un-whitelist Replit IP
+7. Smoke test the 11 verification cases on prod
+
+Run Phase 2.

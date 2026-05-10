@@ -7,7 +7,7 @@ import { getAccountBilling, isAccountBillingEnabled, overlayAccountBillingOnUser
 import { requireAdmin, requireAdminOrManager } from "./middleware/auth";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
-import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, pendingGeofenceExits, templateConfigSchema } from "@shared/schema";
+import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistSectionSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, checklistSections, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, pendingGeofenceExits, templateConfigSchema } from "@shared/schema";
 import { executeAutoClockOut } from "./lib/timesheets";
 import { users, invitations, accounts } from "@shared/models/auth";
 import { computeSeatUsage } from "./lib/seats";
@@ -103,6 +103,17 @@ async function verifyChecklistAccess(checklistId: number, accountId: string): Pr
     .where(eq(checklists.id, checklistId))
     .limit(1);
   return result.length > 0 && result[0].accountId === accountId;
+}
+
+async function verifyChecklistSectionAccess(sectionId: number, accountId: string): Promise<{ ok: boolean; checklistId?: number }> {
+  const [row] = await db.select({ accountId: projects.accountId, checklistId: checklists.id })
+    .from(checklistSections)
+    .innerJoin(checklists, eq(checklistSections.checklistId, checklists.id))
+    .innerJoin(projects, eq(checklists.projectId, projects.id))
+    .where(eq(checklistSections.id, sectionId))
+    .limit(1);
+  if (!row || row.accountId !== accountId) return { ok: false };
+  return { ok: true, checklistId: row.checklistId };
 }
 
 async function verifyTaskAccess(taskId: number, accountId: string): Promise<boolean> {
@@ -1107,8 +1118,15 @@ export async function registerRoutes(
     try {
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
-      const allChecklists = await storage.getAllChecklists(accountId);
-      res.json(allChecklists);
+      let all = await storage.getAllChecklists(accountId);
+      // Restricted users only see checklists for projects they created or are assigned to.
+      // Mirrors the reports filter at /api/reports above. Per-item assignee visibility
+      // for restricted users lands in Stage 2 alongside filters.
+      if (req.user.role === "restricted") {
+        const assigned = await getRestrictedAssignedProjectIds(req.user.id);
+        all = all.filter((c: any) => assigned.has(c.projectId) || c.createdById === req.user.id);
+      }
+      res.json(all);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch checklists" });
     }
@@ -1133,11 +1151,24 @@ export async function registerRoutes(
 
       if (req.body.items && Array.isArray(req.body.items)) {
         for (let i = 0; i < req.body.items.length; i++) {
+          const raw = req.body.items[i];
+          // Backward compat: legacy callers pass an array of strings.
+          const seed = typeof raw === "string"
+            ? { label: raw }
+            : {
+                label: String(raw.label ?? ""),
+                fieldType: raw.fieldType,
+                notes: raw.notes ?? null,
+                sectionId: raw.sectionId ?? null,
+                assignedToUserId: raw.assignedToUserId ?? null,
+                photosRequired: raw.photosRequired === true,
+              };
+          if (!seed.label) continue;
           await storage.createChecklistItem({
             checklistId: checklist.id,
-            label: req.body.items[i],
             sortOrder: i,
-          });
+            ...seed,
+          } as any);
         }
       }
 
@@ -1186,19 +1217,45 @@ export async function registerRoutes(
     }
   });
 
+  // Belt-and-suspenders: ensures the requested section_id (if any) belongs to
+  // the same checklist. The DB FK only guarantees the section row exists in
+  // SOME checklist, so without this a guessed/leaked id could cross-link items
+  // across checklists (and via that, across accounts).
+  async function assertSectionInChecklist(sectionId: number | null | undefined, checklistId: number): Promise<{ ok: true } | { ok: false; reason: string }> {
+    if (sectionId === null || sectionId === undefined) return { ok: true };
+    if (!Number.isInteger(sectionId)) return { ok: false, reason: "sectionId must be an integer" };
+    const [row] = await db.select({ checklistId: checklistSections.checklistId })
+      .from(checklistSections)
+      .where(eq(checklistSections.id, sectionId))
+      .limit(1);
+    if (!row) return { ok: false, reason: "Section not found" };
+    if (row.checklistId !== checklistId) return { ok: false, reason: "Section does not belong to this checklist" };
+    return { ok: true };
+  }
+
   app.post("/api/checklists/:id/items", requireWriteAccess, async (req: any, res) => {
     try {
       const checklistId = parseInt(req.params.id as string);
       if (!(await verifyChecklistAccess(checklistId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
-      const parsed = insertChecklistItemSchema.safeParse({
+      if ("sectionId" in req.body) {
+        const check = await assertSectionInChecklist(req.body.sectionId, checklistId);
+        if (!check.ok) return res.status(400).json({ message: check.reason });
+      }
+      const seed: Record<string, any> = {
         checklistId,
         label: req.body.label,
-        sortOrder: req.body.sortOrder || 0,
-      });
+        sortOrder: req.body.sortOrder ?? 0,
+      };
+      // Optional Stage 1 fields. Pass through verbatim — Zod + storage validate.
+      for (const k of ["sectionId", "fieldType", "notes", "assignedToUserId", "photosRequired",
+                       "valueBool", "valueRating", "valueText"]) {
+        if (k in req.body) seed[k] = req.body[k];
+      }
+      const parsed = insertChecklistItemSchema.safeParse(seed);
       if (!parsed.success) {
         return res.status(400).json({ message: parsed.error.message });
       }
-      const item = await storage.createChecklistItem(parsed.data);
+      const item = await storage.createChecklistItem(parsed.data as any);
       res.status(201).json(item);
     } catch (error) {
       res.status(500).json({ message: "Failed to create checklist item" });
@@ -1211,7 +1268,15 @@ export async function registerRoutes(
       const item = await db.select({ checklistId: sql<number>`checklist_items.checklist_id` }).from(sql`checklist_items`).where(sql`checklist_items.id = ${id}`).limit(1);
       if (item.length === 0) return res.status(404).json({ message: "Item not found" });
       if (!(await verifyChecklistAccess(item[0].checklistId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
-      const allowed = ["label", "checked", "sortOrder"];
+      // Re-link guard: a PATCH that moves the item to a different section must
+      // keep it inside the same checklist. Null is allowed (move to "Untitled").
+      if ("sectionId" in req.body) {
+        const check = await assertSectionInChecklist(req.body.sectionId, item[0].checklistId);
+        if (!check.ok) return res.status(400).json({ message: check.reason });
+      }
+      // `checked` retained for legacy mobile clients — storage mirrors it to value_bool.
+      const allowed = ["label", "checked", "sortOrder", "sectionId", "fieldType", "notes",
+                       "assignedToUserId", "valueBool", "valueRating", "valueText", "photosRequired"];
       const filtered: Record<string, any> = {};
       for (const key of allowed) {
         if (key in req.body) filtered[key] = req.body[key];
@@ -1221,6 +1286,81 @@ export async function registerRoutes(
       res.json(updated);
     } catch (error) {
       res.status(500).json({ message: "Failed to update checklist item" });
+    }
+  });
+
+  // ── Checklist sections (Stage 1 — instances only; templates land in Stage 3) ──
+  app.get("/api/checklists/:id/sections", requireReadAccess, async (req: any, res) => {
+    try {
+      const checklistId = parseInt(req.params.id as string);
+      if (!(await verifyChecklistAccess(checklistId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      res.json(await storage.getChecklistSections(checklistId));
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch sections" });
+    }
+  });
+
+  app.post("/api/checklists/:id/sections", requireWriteAccess, async (req: any, res) => {
+    try {
+      const checklistId = parseInt(req.params.id as string);
+      if (!(await verifyChecklistAccess(checklistId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      const parsed = insertChecklistSectionSchema.safeParse({
+        checklistId,
+        title: req.body.title,
+        sortOrder: req.body.sortOrder ?? 0,
+      });
+      if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+      const section = await storage.createChecklistSection(parsed.data as any);
+      res.status(201).json(section);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create section" });
+    }
+  });
+
+  app.patch("/api/checklist-sections/:id", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      const access = await verifyChecklistSectionAccess(id, req.user.accountId);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
+      const allowed = ["title", "sortOrder"];
+      const filtered: Record<string, any> = {};
+      for (const key of allowed) {
+        if (key in req.body) filtered[key] = req.body[key];
+      }
+      const updated = await storage.updateChecklistSection(id, filtered);
+      if (!updated) return res.status(404).json({ message: "Section not found" });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update section" });
+    }
+  });
+
+  app.delete("/api/checklist-sections/:id", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      const access = await verifyChecklistSectionAccess(id, req.user.accountId);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
+      // FK ON DELETE SET NULL drops items into the "Untitled" virtual group.
+      await storage.deleteChecklistSection(id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete section" });
+    }
+  });
+
+  app.post("/api/checklists/:id/sections/reorder", requireWriteAccess, async (req: any, res) => {
+    try {
+      const checklistId = parseInt(req.params.id as string);
+      if (!(await verifyChecklistAccess(checklistId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      const orderedIds = req.body.orderedIds;
+      if (!Array.isArray(orderedIds) || !orderedIds.every((n) => Number.isInteger(n))) {
+        return res.status(400).json({ message: "orderedIds must be an array of integers" });
+      }
+      await storage.reorderChecklistSections(checklistId, orderedIds);
+      res.json({ message: "Reordered" });
+    } catch (error: any) {
+      res.status(error?.message?.includes("does not belong") ? 400 : 500)
+        .json({ message: error?.message || "Failed to reorder sections" });
     }
   });
 

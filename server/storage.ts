@@ -6,6 +6,7 @@ import {
   tasks,
   checklists,
   checklistItems,
+  checklistSections,
   reports,
   reportSections,
   reportSectionPhotos,
@@ -29,6 +30,8 @@ import {
   type InsertChecklist,
   type ChecklistItem,
   type InsertChecklistItem,
+  type ChecklistSection,
+  type InsertChecklistSection,
   type Report,
   type InsertReport,
   type ReportSection,
@@ -63,6 +66,17 @@ import { db } from "./db";
 import { eq, desc, sql, asc, and, inArray, lte } from "drizzle-orm";
 
 type DbOrTx = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+// drizzle-zod's createInsertSchema(...).omit() collapses inferred insert types
+// to `{}` (see shared/schema.ts comments). This concrete view is used by the
+// checklist-item methods for field-type-aware writes.
+type ChecklistItemPatch = {
+  fieldType?: "yes_no" | "rating" | "text";
+  valueBool?: boolean | null;
+  valueRating?: number | null;
+  valueText?: string | null;
+  checked?: boolean;
+};
 
 export interface ProjectWithDetails extends Project {
   photoCount: number;
@@ -104,8 +118,8 @@ export interface IStorage {
   createTask(task: InsertTask): Promise<Task>;
   updateTask(id: number, data: Partial<InsertTask>): Promise<Task | undefined>;
 
-  getChecklistsByProject(projectId: number): Promise<(Checklist & { assignedTo?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }; itemCount: number; checkedCount: number })[]>;
-  getAllChecklists(accountId: string): Promise<(Checklist & { project?: { name: string }; assignedTo?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }; itemCount: number; checkedCount: number })[]>;
+  getChecklistsByProject(projectId: number): Promise<(Checklist & { assignedTo?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }; itemCount: number; checkedCount: number; sectionCount: number })[]>;
+  getAllChecklists(accountId: string): Promise<(Checklist & { project?: { name: string }; assignedTo?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }; itemCount: number; checkedCount: number; sectionCount: number })[]>;
   getChecklist(id: number): Promise<Checklist | undefined>;
   createChecklist(checklist: InsertChecklist): Promise<Checklist>;
   updateChecklist(id: number, data: Partial<InsertChecklist>): Promise<Checklist | undefined>;
@@ -115,6 +129,12 @@ export interface IStorage {
   createChecklistItem(item: InsertChecklistItem): Promise<ChecklistItem>;
   updateChecklistItem(id: number, data: Partial<InsertChecklistItem>): Promise<ChecklistItem | undefined>;
   deleteChecklistItem(id: number): Promise<void>;
+
+  getChecklistSections(checklistId: number): Promise<ChecklistSection[]>;
+  createChecklistSection(section: InsertChecklistSection): Promise<ChecklistSection>;
+  updateChecklistSection(id: number, data: Partial<InsertChecklistSection>): Promise<ChecklistSection | undefined>;
+  deleteChecklistSection(id: number): Promise<void>;
+  reorderChecklistSections(checklistId: number, orderedIds: number[]): Promise<void>;
 
   // ── Reports (structured shape, session 37) ──────────────────────────────
   getReportsByProject(projectId: number): Promise<(Report & { createdBy?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } })[]>;
@@ -530,17 +550,16 @@ export class DatabaseStorage implements IStorage {
       .where(eq(checklists.projectId, projectId))
       .orderBy(desc(checklists.createdAt));
 
-    const result = [];
-    for (const r of rows) {
-      const items = await db.select().from(checklistItems).where(eq(checklistItems.checklistId, r.checklist.id));
-      result.push({
-        ...r.checklist,
-        assignedTo: r.assignedTo?.firstName ? r.assignedTo : undefined,
-        itemCount: items.length,
-        checkedCount: items.filter(i => i.checked).length,
-      });
-    }
-    return result;
+    const ids = rows.map(r => r.checklist.id);
+    const { itemAgg, sectionAgg } = await this._aggregateChecklistCounts(ids);
+
+    return rows.map(r => ({
+      ...r.checklist,
+      assignedTo: r.assignedTo?.firstName ? r.assignedTo : undefined,
+      itemCount: itemAgg.get(r.checklist.id)?.total ?? 0,
+      checkedCount: itemAgg.get(r.checklist.id)?.checked ?? 0,
+      sectionCount: sectionAgg.get(r.checklist.id) ?? 0,
+    }));
   }
 
   async getAllChecklists(accountId: string) {
@@ -560,18 +579,52 @@ export class DatabaseStorage implements IStorage {
       .where(eq(projects.accountId, accountId))
       .orderBy(desc(checklists.createdAt));
 
-    const result = [];
-    for (const r of rows) {
-      const items = await db.select().from(checklistItems).where(eq(checklistItems.checklistId, r.checklist.id));
-      result.push({
-        ...r.checklist,
-        project: r.project?.name ? r.project : undefined,
-        assignedTo: r.assignedTo?.firstName ? r.assignedTo : undefined,
-        itemCount: items.length,
-        checkedCount: items.filter(i => i.checked).length,
-      });
-    }
-    return result;
+    const ids = rows.map(r => r.checklist.id);
+    const { itemAgg, sectionAgg } = await this._aggregateChecklistCounts(ids);
+
+    return rows.map(r => ({
+      ...r.checklist,
+      project: r.project?.name ? r.project : undefined,
+      assignedTo: r.assignedTo?.firstName ? r.assignedTo : undefined,
+      itemCount: itemAgg.get(r.checklist.id)?.total ?? 0,
+      checkedCount: itemAgg.get(r.checklist.id)?.checked ?? 0,
+      sectionCount: sectionAgg.get(r.checklist.id) ?? 0,
+    }));
+  }
+
+  // Collapses two N+1 queries into two grouped aggregates. "Checked" is now
+  // defined as completed_at IS NOT NULL — the migration backfilled this
+  // from the legacy `checked` flag, so legacy rows produce identical counts.
+  private async _aggregateChecklistCounts(checklistIds: number[]): Promise<{
+    itemAgg: Map<number, { total: number; checked: number }>;
+    sectionAgg: Map<number, number>;
+  }> {
+    const itemAgg = new Map<number, { total: number; checked: number }>();
+    const sectionAgg = new Map<number, number>();
+    if (checklistIds.length === 0) return { itemAgg, sectionAgg };
+
+    const itemRows = await db
+      .select({
+        checklistId: checklistItems.checklistId,
+        total: sql<number>`count(*)::int`,
+        checked: sql<number>`count(*) FILTER (WHERE ${checklistItems.completedAt} IS NOT NULL)::int`,
+      })
+      .from(checklistItems)
+      .where(inArray(checklistItems.checklistId, checklistIds))
+      .groupBy(checklistItems.checklistId);
+    for (const r of itemRows) itemAgg.set(r.checklistId, { total: r.total, checked: r.checked });
+
+    const sectionRows = await db
+      .select({
+        checklistId: checklistSections.checklistId,
+        total: sql<number>`count(*)::int`,
+      })
+      .from(checklistSections)
+      .where(inArray(checklistSections.checklistId, checklistIds))
+      .groupBy(checklistSections.checklistId);
+    for (const r of sectionRows) sectionAgg.set(r.checklistId, r.total);
+
+    return { itemAgg, sectionAgg };
   }
 
   async getChecklist(id: number): Promise<Checklist | undefined> {
@@ -604,21 +657,151 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createChecklistItem(item: InsertChecklistItem): Promise<ChecklistItem> {
-    const [created] = await db.insert(checklistItems).values(item).returning();
+    // drizzle-zod's createInsertSchema().omit() collapses InsertChecklistItem
+    // to `{}` in the inferred type — see comment in shared/schema.ts. Cast
+    // through a locally-typed view so the field-type-aware logic stays sound.
+    const i = item as ChecklistItemPatch;
+    const ft = (i.fieldType ?? "yes_no") as "yes_no" | "rating" | "text";
+    const valueBool = i.valueBool !== undefined ? i.valueBool : (i.checked ? true : i.valueBool);
+    const completedAt = this._computeCompletedAt(ft, {
+      valueBool: valueBool ?? null,
+      valueRating: i.valueRating ?? null,
+      valueText: i.valueText ?? null,
+    });
+    const [created] = await db.insert(checklistItems).values({
+      ...item,
+      valueBool,
+      completedAt,
+    } as InsertChecklistItem).returning();
     return created;
   }
 
-  async updateChecklistItem(id: number, data: Partial<InsertChecklistItem>): Promise<ChecklistItem | undefined> {
+  /**
+   * State machine for completed_at. Centralised here so future callers cannot
+   * bypass it.
+   *
+   *   yes_no  → completed when value_bool is non-null (true OR false count
+   *             as "answered" — both are deliberate answers).
+   *   rating  → completed when value_rating is between 1 and 5 inclusive.
+   *   text    → completed when value_text is non-null AND .trim().length > 0.
+   *
+   * When fieldType changes via PATCH, all three value_* columns AND
+   * completed_at are nulled simultaneously — we do not coerce a prior bool
+   * into a rating, etc.
+   *
+   * Legacy `checked` column is mirrored to/from value_bool for one release;
+   * value_bool is the source of truth for completed_at on yes_no items.
+   */
+  async updateChecklistItem(id: number, data: Partial<InsertChecklistItem> & { checked?: boolean }): Promise<ChecklistItem | undefined> {
+    const [current] = await db.select().from(checklistItems).where(eq(checklistItems.id, id)).limit(1);
+    if (!current) return undefined;
+
+    // Same drizzle-zod {} collapse — re-view through a concrete patch shape.
+    const d = data as ChecklistItemPatch;
+    const patch: Record<string, unknown> = { ...data };
+
+    // Field-type change wipes all values + completed_at.
+    if (d.fieldType !== undefined && d.fieldType !== current.fieldType) {
+      patch.valueBool = null;
+      patch.valueRating = null;
+      patch.valueText = null;
+      patch.checked = false;
+      patch.completedAt = null;
+    } else {
+      // Legacy `checked` write-through. PATCH { checked: true } from old
+      // mobile builds mirrors to value_bool=true; { checked: false } maps to
+      // value_bool=NULL (not false). Legacy "unchecked" semantics meant
+      // "unanswered", not a deliberate "No" answer — mapping to false here
+      // would mark the row complete under the new yes_no state machine.
+      if (d.checked !== undefined && d.valueBool === undefined) {
+        patch.valueBool = d.checked ? true : null;
+      }
+      // And vice-versa: new clients writing value_bool keep `checked` in sync
+      // until the column is dropped in Stage 1.5. Only value_bool=true counts
+      // as legacy-checked; both null and false → checked=false.
+      if (d.valueBool !== undefined && d.checked === undefined) {
+        patch.checked = d.valueBool === true;
+      }
+
+      const ft = (d.fieldType ?? current.fieldType) as "yes_no" | "rating" | "text";
+      const next = {
+        valueBool: patch.valueBool !== undefined ? (patch.valueBool as boolean | null) : current.valueBool,
+        valueRating: patch.valueRating !== undefined ? (patch.valueRating as number | null) : current.valueRating,
+        valueText: patch.valueText !== undefined ? (patch.valueText as string | null) : current.valueText,
+      };
+      patch.completedAt = this._computeCompletedAt(ft, next);
+    }
+
     const [updated] = await db
       .update(checklistItems)
-      .set(data)
+      .set(patch as Partial<InsertChecklistItem>)
       .where(eq(checklistItems.id, id))
       .returning();
     return updated;
   }
 
+  private _computeCompletedAt(
+    fieldType: "yes_no" | "rating" | "text",
+    v: { valueBool: boolean | null; valueRating: number | null; valueText: string | null },
+  ): Date | null {
+    switch (fieldType) {
+      case "yes_no":
+        return v.valueBool !== null && v.valueBool !== undefined ? new Date() : null;
+      case "rating":
+        return typeof v.valueRating === "number" && v.valueRating >= 1 && v.valueRating <= 5 ? new Date() : null;
+      case "text":
+        return typeof v.valueText === "string" && v.valueText.trim().length > 0 ? new Date() : null;
+      default:
+        return null;
+    }
+  }
+
   async deleteChecklistItem(id: number): Promise<void> {
     await db.delete(checklistItems).where(eq(checklistItems.id, id));
+  }
+
+  async getChecklistSections(checklistId: number): Promise<ChecklistSection[]> {
+    return db.select().from(checklistSections)
+      .where(eq(checklistSections.checklistId, checklistId))
+      .orderBy(asc(checklistSections.sortOrder), asc(checklistSections.id));
+  }
+
+  async createChecklistSection(section: InsertChecklistSection): Promise<ChecklistSection> {
+    const [created] = await db.insert(checklistSections).values(section).returning();
+    return created;
+  }
+
+  async updateChecklistSection(id: number, data: Partial<InsertChecklistSection>): Promise<ChecklistSection | undefined> {
+    const [updated] = await db
+      .update(checklistSections)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(checklistSections.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteChecklistSection(id: number): Promise<void> {
+    // FK ON DELETE SET NULL drops items into the "Untitled" virtual group.
+    await db.delete(checklistSections).where(eq(checklistSections.id, id));
+  }
+
+  async reorderChecklistSections(checklistId: number, orderedIds: number[]): Promise<void> {
+    if (orderedIds.length === 0) return;
+    // Validate every id belongs to this checklist before writing.
+    const owned = await db.select({ id: checklistSections.id })
+      .from(checklistSections)
+      .where(eq(checklistSections.checklistId, checklistId));
+    const ownedSet = new Set(owned.map(r => r.id));
+    for (const id of orderedIds) {
+      if (!ownedSet.has(id)) throw new Error(`Section ${id} does not belong to checklist ${checklistId}`);
+    }
+    await db.transaction(async (tx) => {
+      for (let i = 0; i < orderedIds.length; i++) {
+        await tx.update(checklistSections)
+          .set({ sortOrder: i, updatedAt: new Date() })
+          .where(eq(checklistSections.id, orderedIds[i]));
+      }
+    });
   }
 
   async getReportsByProject(projectId: number) {

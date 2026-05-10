@@ -43,6 +43,7 @@ import { isUnauthorizedError } from "@/lib/auth-utils";
 import { useAuth } from "@/hooks/use-auth";
 import PhotoViewer from "@/components/photo-viewer";
 import TaskFormDialog from "@/components/task-form-dialog";
+import { ChecklistSectionEditor } from "@/components/checklist-section-editor";
 import {
   Upload,
   MapPin,
@@ -2156,38 +2157,6 @@ function ChecklistCard({
   getInitials: (firstName: string | null, lastName: string | null) => string;
   projectId: string;
 }) {
-  const { data: items } = useQuery<ChecklistItem[]>({
-    queryKey: ["/api/checklists", checklist.id.toString(), "items"],
-    enabled: isExpanded,
-  });
-
-  const toggleItem = useMutation({
-    mutationFn: async ({ itemId, checked }: { itemId: number; checked: boolean }) => {
-      const res = await apiRequest("PATCH", `/api/checklist-items/${itemId}`, { checked });
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/checklists", checklist.id.toString(), "items"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
-    },
-  });
-
-  const addItem = useMutation({
-    mutationFn: async (label: string) => {
-      const res = await apiRequest("POST", `/api/checklists/${checklist.id}/items`, {
-        label,
-        sortOrder: (items?.length || 0),
-      });
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/checklists", checklist.id.toString(), "items"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
-    },
-  });
-
-  const [newItemLabel, setNewItemLabel] = useState("");
-
   return (
     <Card className="p-4" data-testid={`card-checklist-${checklist.id}`}>
       <div className="flex items-start gap-3 cursor-pointer" onClick={onToggle}>
@@ -2228,48 +2197,8 @@ function ChecklistCard({
         </div>
       </div>
       {isExpanded && (
-        <div className="mt-3 pl-8 space-y-2 border-t pt-3" onClick={(e) => e.stopPropagation()}>
-          {items?.map((item) => (
-            <label key={item.id} className="flex items-center gap-2 cursor-pointer" data-testid={`checklist-item-${item.id}`}>
-              <input
-                type="checkbox"
-                checked={item.checked}
-                onChange={() => toggleItem.mutate({ itemId: item.id, checked: !item.checked })}
-                className="h-4 w-4 rounded border-muted-foreground/30"
-              />
-              <span className={`text-sm ${item.checked ? "line-through text-muted-foreground" : ""}`}>
-                {item.label}
-              </span>
-            </label>
-          ))}
-          <div className="flex items-center gap-2 mt-2">
-            <Input
-              placeholder="Add item..."
-              value={newItemLabel}
-              onChange={(e) => setNewItemLabel(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && newItemLabel.trim()) {
-                  addItem.mutate(newItemLabel.trim());
-                  setNewItemLabel("");
-                }
-              }}
-              className="flex-1"
-              data-testid={`input-add-item-${checklist.id}`}
-            />
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                if (newItemLabel.trim()) {
-                  addItem.mutate(newItemLabel.trim());
-                  setNewItemLabel("");
-                }
-              }}
-              disabled={!newItemLabel.trim()}
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </Button>
-          </div>
+        <div className="mt-3 pl-8 border-t pt-3" onClick={(e) => e.stopPropagation()}>
+          <ChecklistSectionEditor checklistId={checklist.id} projectId={projectId} />
         </div>
       )}
     </Card>
