@@ -50,12 +50,12 @@ export default function VerifyEmailPage() {
       // invalidate→refetch (which raced Vercel cookie propagation and
       // intermittently wiped the user, blank-screening the post-verify
       // navigation to /subscribe).
-      console.log("[verify-email] submit success → setQueryData + navigate /subscribe", {
+      console.log("[verify-email] submit success → setQueryData + navigate / (Dashboard)", {
         userId: data?.id,
         emailVerified: data?.emailVerified,
       });
       queryClient.setQueryData(["/api/auth/user"], data);
-      setLocation("/subscribe");
+      setLocation("/");
     },
     onError: (err: any) => {
       setDigits(Array(CODE_LENGTH).fill(""));
