@@ -1,0 +1,60 @@
+Goal: Fix mobile project sharing to use the new public share-token 
+flow that web shipped tonight. Current state: mobile generates 
+broken /project/<id> URLs and iMessage shows double previews.
+
+CONTEXT
+Server now supports (live in prod):
+- POST /api/projects/:id/share → returns { shareToken: string } 
+  (mints new if none exists)
+- DELETE /api/projects/:id/share → revokes
+- Public URL format: https://app.field-view.com/p/<token>
+
+PHASE 1 — IMPLEMENT
+
+I1. ADD API METHODS (services/api.ts):
+    - shareProject(projectId): POST /api/projects/:id/share → 
+      returns { shareToken: string }
+    - unshareProject(projectId): DELETE /api/projects/:id/share
+
+I2. FIND THE SHARE BUTTON in app/project/[id].tsx (or wherever 
+    project share is triggered from — likely in the kebab menu now 
+    after the clock-out demotion work, or as a separate share 
+    button). Update the handler:
+    - On tap: call api.shareProject(projectId) first to get the token
+    - Build URL: `https://app.field-view.com/p/${shareToken}`
+    - Open Share.share({ url: shareUrl }) — ONLY pass the url field,
+      NO message field, NO title. This fixes the iMessage 
+      double-preview bug. Passing both url+message causes iMessage 
+      to render two separate previews.
+    - Show a brief toast "Share link ready" before opening the 
+      share sheet
+    - Handle errors: if POST fails, toast "Couldn't generate share 
+      link" and don't open the share sheet
+    - Loading state: disable the button while POST is in flight
+
+I3. NO UNIVERSAL LINKS in this PR. That requires app.json 
+    associatedDomains config + a fresh EAS build + serving the 
+    apple-app-site-association file at app.field-view.com. Out of 
+    scope for tonight. When a recipient taps the URL in iMessage, 
+    it opens in Safari (the public web page we shipped tonight). 
+    Universal Links is a post-launch follow-up.
+
+I4. NO CHANGES to receiving deep links into the app — also 
+    post-launch.
+
+PHASE 2 — VERIFY
+
+V1. npm run check
+V2. git diff --stat — expect 2 files modified (services/api.ts + 
+    app/project/[id].tsx), ~30-50 lines net
+V3. Manual test plan:
+    - Open a project on iPhone → tap Share (from wherever it lives 
+      in the UI)
+    - Brief "Share link ready" toast appears
+    - iOS share sheet appears
+    - Choose iMessage → send to yourself
+    - Should see ONE preview card (not two), tappable, leading to 
+      the public web page
+    - Pasted URL is https://app.field-view.com/p/<token>
+
+DO NOT push. Show diff first.
