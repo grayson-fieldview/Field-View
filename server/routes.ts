@@ -1193,6 +1193,24 @@ export async function registerRoutes(
     }
   });
 
+  app.delete("/api/tasks/:id", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ message: "Invalid task id" });
+      // Per spec: collapse "not in account" and "not found" both to 404 so we
+      // don't leak cross-account task IDs. (PATCH above returns 403 for the
+      // access-denied case — DELETE intentionally diverges per spec request.)
+      if (!(await verifyTaskAccess(id, req.user.accountId))) {
+        return res.status(404).json({ message: "Task not found" });
+      }
+      const deleted = await storage.deleteTask(id, req.user.accountId);
+      if (!deleted) return res.status(404).json({ message: "Task not found" });
+      res.status(204).end();
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete task" });
+    }
+  });
+
   // Checklists
   app.get("/api/checklists", requireReadAccess, async (req: any, res) => {
     try {

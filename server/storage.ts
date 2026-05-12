@@ -132,6 +132,7 @@ export interface IStorage {
   getAllTasks(accountId: string): Promise<(Task & { project?: { name: string }; assignedTo?: { firstName: string | null; lastName: string | null } })[]>;
   createTask(task: InsertTask): Promise<Task>;
   updateTask(id: number, data: Partial<InsertTask>): Promise<Task | undefined>;
+  deleteTask(id: number, accountId: string): Promise<boolean>;
 
   getChecklistsByProject(projectId: number): Promise<(Checklist & { assignedTo?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }; itemCount: number; checkedCount: number; sectionCount: number })[]>;
   getAllChecklists(accountId: string): Promise<(Checklist & { project?: { name: string }; assignedTo?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }; itemCount: number; checkedCount: number; sectionCount: number })[]>;
@@ -581,6 +582,22 @@ export class DatabaseStorage implements IStorage {
       .where(eq(tasks.id, id))
       .returning();
     return updated;
+  }
+
+  async deleteTask(id: number, accountId: string): Promise<boolean> {
+    // Account-scoped delete: verify the task's project belongs to the caller's
+    // account before issuing the DELETE. Returns false when no such task exists
+    // OR when it exists but in a different account (caller cannot distinguish —
+    // the route maps both to 404 to avoid leaking cross-account task IDs).
+    const [row] = await db
+      .select({ id: tasks.id })
+      .from(tasks)
+      .innerJoin(projects, eq(tasks.projectId, projects.id))
+      .where(and(eq(tasks.id, id), eq(projects.accountId, accountId)))
+      .limit(1);
+    if (!row) return false;
+    await db.delete(tasks).where(eq(tasks.id, id));
+    return true;
   }
 
   async getChecklistsByProject(projectId: number) {
