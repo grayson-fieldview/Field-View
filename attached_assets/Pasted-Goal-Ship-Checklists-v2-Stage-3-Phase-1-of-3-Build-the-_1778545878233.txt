@@ -1,0 +1,250 @@
+Goal: Ship Checklists v2 Stage 3 — Phase 1 of 3. Build the ENTIRE 
+backend surface for template parity + server-driven instantiation. 
+NO UI editor work (that's Phase 2). NO global page polish (Phase 3).
+
+This is a schema-touching deploy. HARD RULE applies: migration runs 
+on prod RDS BEFORE Vercel promotes. Build everything in this prompt; 
+Grayson runs the migration manually on prod following the standard 
+procedure, then pushes code.
+
+═════════════════════════════════════════════════════════════
+PART A — SCHEMA (shared/schema.ts)
+═════════════════════════════════════════════════════════════
+
+A1. Add checklist_template_sections table, mirroring checklist_sections:
+    - id integer PK identity
+    - template_id integer FK → checklist_templates.id ON DELETE CASCADE NOT NULL
+    - title text NOT NULL
+    - sort_order integer default 0 NOT NULL
+    - created_at timestamp default now() NOT NULL
+    - updated_at timestamp default now() NOT NULL
+
+A2. On checklist_template_items, convert the existing section_id 
+    placeholder column into a real FK:
+    - section_id integer FK → checklist_template_sections.id 
+      ON DELETE SET NULL (nullable)
+    Remove the schema-file comment about the placeholder.
+
+A3. Add checklist_template_item_options table, mirroring 
+    checklist_item_options:
+    - id integer PK identity
+    - item_id integer FK → checklist_template_items.id ON DELETE CASCADE NOT NULL
+    - label text NOT NULL
+    - sort_order integer default 0 NOT NULL
+    - created_at timestamp default now() NOT NULL
+    - updated_at timestamp default now() NOT NULL
+
+A4. Add Drizzle insert/select types and Zod schemas for both new 
+    tables, matching the pattern used for checklist_sections and 
+    checklist_item_options.
+
+A5. Run npm run check. Show TS error delta vs. baseline. New errors 
+    in OUR code = real bugs to fix; don't hand-wave "baseline."
+
+═════════════════════════════════════════════════════════════
+PART B — MIGRATION SCRIPT
+═════════════════════════════════════════════════════════════
+
+B1. Create script/migrations/migrate_session40_checklist_template_v2.ts 
+    modeled exactly on script/migrations/migrate_session22_timesheets.ts. 
+    Required:
+    - DDL wrapped in db.transaction() for atomic rollback
+    - Env guard: throw unless DATABASE_URL contains rds.amazonaws.com 
+      or neon.tech; require ALLOW_PROD_MIGRATION=yes when URL contains 
+      rds.amazonaws.com
+    - Entry-point guard (only runs when invoked directly)
+    - Log host (mask password) + mode (RDS vs Neon) before any DB call
+    - IF NOT EXISTS on every DDL for re-run safety
+    - Final SELECT count(*) verification block on both new tables
+
+B2. Migration steps INSIDE the transaction:
+    a) CREATE TABLE IF NOT EXISTS checklist_template_sections
+    b) UPDATE checklist_template_items SET section_id = NULL 
+       (clear stale placeholder values before adding the FK; they 
+       point at nothing real and will fail the constraint otherwise)
+    c) ALTER TABLE checklist_template_items ADD CONSTRAINT 
+       checklist_template_items_section_id_fk FOREIGN KEY (section_id) 
+       REFERENCES checklist_template_sections(id) ON DELETE SET NULL
+       (guard with IF NOT EXISTS on the constraint name pattern via 
+       a DO $$ ... pg_constraint check $$ block — match how 
+       session22 handles conditional constraints)
+    d) CREATE TABLE IF NOT EXISTS checklist_template_item_options
+    e) Final verification: SELECT count(*) FROM both new tables 
+       (0 / 0 expected on first run)
+
+B3. Run the migration against Neon dev:
+    DATABASE_URL="<neon-dev-url>" npx tsx \
+      script/migrations/migrate_session40_checklist_template_v2.ts
+    
+    Show me the full log output. Then run \d on all three relevant 
+    tables in Neon and paste the schemas:
+    \d checklist_template_sections
+    \d checklist_template_items
+    \d checklist_template_item_options
+    
+    DO NOT RUN against prod. Grayson runs that manually.
+
+═════════════════════════════════════════════════════════════
+PART C — STORAGE METHODS (server/storage.ts)
+═════════════════════════════════════════════════════════════
+
+Mirror Stage 2 patterns exactly.
+
+C1. Template sections:
+    - getChecklistTemplateSections(templateId)
+    - createChecklistTemplateSection(templateId, title)
+    - updateChecklistTemplateSection(sectionId, patch)
+    - deleteChecklistTemplateSection(sectionId)
+    - reorderChecklistTemplateSections(templateId, orderedIds)
+
+C2. Template items (some may exist; add what's missing):
+    - createChecklistTemplateItem(templateId, payload)
+      payload: { label, fieldType?, sectionId?, notes?, photosRequired?, sortOrder? }
+    - updateChecklistTemplateItem(itemId, patch) — typed ChecklistTemplateItemPatch
+    - deleteChecklistTemplateItem(itemId)
+    - reorderChecklistTemplateItems(templateId, orderedIds)
+
+C3. Template item options:
+    - getChecklistTemplateItemOptions(itemId)
+    - createChecklistTemplateItemOption(itemId, label)
+    - updateChecklistTemplateItemOption(optionId, patch)
+    - deleteChecklistTemplateItemOption(optionId)
+    - reorderChecklistTemplateItemOptions(itemId, orderedIds)
+
+C4. Template-level:
+    - updateChecklistTemplate(templateId, patch)
+      patch: { title?, description? }
+
+C5. INSTANTIATION — the critical one:
+    - instantiateChecklistFromTemplate(templateId, projectId, name, 
+      createdByUserId, accountId)
+    
+    Must run inside db.transaction(). Logic:
+    1. Look up template; verify template.accountId === accountId, 
+       throw if not (account isolation)
+    2. Look up template sections, template items, template item options 
+       (one query each)
+    3. Create the new checklist row in the project (name, projectId, 
+       createdById, accountId)
+    4. Clone sections in order → build a Map<oldSectionId, newSectionId>
+    5. Clone items, preserving label, fieldType, notes, photosRequired, 
+       sortOrder. For each item with a non-null template section_id, 
+       look up new section id via the Map. (Items with NULL section_id 
+       stay NULL.)
+    6. For items with fieldType === 'multiple_choice', clone their 
+       template item options to the new instance item (preserve label, 
+       sortOrder)
+    7. Return the new checklist's id
+    
+    On any failure inside the transaction, everything rolls back — 
+    no partial instantiation.
+
+═════════════════════════════════════════════════════════════
+PART D — ROUTES (server/routes.ts)
+═════════════════════════════════════════════════════════════
+
+ALL new routes use requireWriteAccess only. DO NOT add 
+requireAdminOrManager anywhere — checklist templates are 
+intentionally open to all write users (deliberate divergence 
+from report templates).
+
+Each route needs the appropriate ownership-chain access check 
+mirroring Stage 2's pattern. Add these helpers next to the 
+existing verifyChecklistItemAccess etc.:
+- verifyChecklistTemplateAccess
+- verifyChecklistTemplateSectionAccess
+- verifyChecklistTemplateItemAccess
+- verifyChecklistTemplateOptionAccess
+
+D1. Template-level:
+    PATCH  /api/checklist-templates/:id
+           body: { title?, description? }
+
+D2. Template sections:
+    GET    /api/checklist-templates/:id/sections
+    POST   /api/checklist-templates/:id/sections
+           body: { title }
+    PATCH  /api/checklist-template-sections/:id
+           body: { title? }
+    DELETE /api/checklist-template-sections/:id
+    POST   /api/checklist-templates/:id/sections/reorder
+           body: { orderedIds: number[] }
+
+D3. Template items (GET /api/checklist-templates/:id/items already 
+    exists; LEAVE IT. Add the rest):
+    POST   /api/checklist-templates/:id/items
+           body: { label, fieldType?, sectionId?, notes?, photosRequired?, sortOrder? }
+    PATCH  /api/checklist-template-items/:id
+           body: { label?, fieldType?, sectionId?, notes?, photosRequired?, sortOrder? }
+    DELETE /api/checklist-template-items/:id
+    POST   /api/checklist-templates/:id/items/reorder
+           body: { orderedIds: number[] }
+
+D4. Template item options:
+    GET    /api/checklist-template-items/:id/options
+    POST   /api/checklist-template-items/:id/options
+           body: { label }
+    PATCH  /api/checklist-template-options/:id
+           body: { label? }
+    DELETE /api/checklist-template-options/:id
+    POST   /api/checklist-template-items/:id/options/reorder
+           body: { orderedIds: number[] }
+
+D5. INSTANTIATION — extend existing checklist create route:
+    Modify POST /api/projects/:id/checklists to accept optional 
+    templateId on the body:
+           body: { name, templateId?, items? }
+    
+    If templateId is provided:
+      - Call storage.instantiateChecklistFromTemplate(templateId, 
+        projectId, name, req.user.id, accountId)
+      - Ignore the items array if also present
+      - Return the new checklist
+    If templateId is NOT provided:
+      - Preserve current behavior (create + optional initial items)
+
+═════════════════════════════════════════════════════════════
+PART E — CLIENT-SIDE INSTANTIATION CLEANUP
+═════════════════════════════════════════════════════════════
+
+E1. In client/src/pages/project-detail.tsx, update 
+    applyChecklistTemplate (~lines 401–424). Replace the lossy 
+    pattern (GET items → map to {label} array → POST) with a 
+    single POST /api/projects/:id/checklists call passing 
+    { name, templateId }. Delete the GET-items + items.map code.
+
+E2. Search the entire client/ tree for any other caller relying 
+    on the old client-side instantiation pattern (grep for 
+    "checklist-templates/.+/items" combined with template-apply 
+    contexts). If you find any, update them to the new pattern.
+
+═════════════════════════════════════════════════════════════
+PART F — VERIFICATION + DIFF
+═════════════════════════════════════════════════════════════
+
+F1. Run npm run check. Show TS error delta. Any new error in 
+    OUR code gets fixed before you stop.
+
+F2. Run git status + git diff --stat. Expected modified files:
+    - shared/schema.ts
+    - script/migrations/migrate_session40_checklist_template_v2.ts (new)
+    - server/storage.ts
+    - server/routes.ts
+    - client/src/pages/project-detail.tsx
+    
+    If ANY other file changed, stop and tell me which + why.
+
+F3. Show the git diff in reviewable chunks. Don't push.
+
+═════════════════════════════════════════════════════════════
+DO NOT
+═════════════════════════════════════════════════════════════
+- DO NOT push to GitHub.
+- DO NOT run the migration against prod (rds.amazonaws.com).
+- DO NOT add requireAdminOrManager anywhere.
+- DO NOT touch any checklist instance routes (/api/checklists/:id/*, 
+  /api/checklist-items/*, etc.) — those stay exactly as Stage 2 
+  left them.
+- DO NOT touch UI files except project-detail.tsx (the one 
+  instantiation call site).
+- DO NOT modify test files unless adding tests for new methods.

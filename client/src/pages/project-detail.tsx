@@ -394,19 +394,18 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     },
   });
 
-  // With the legacy inline create form removed, "Use Template" now creates
-  // the checklist directly (POST with templated items) and auto-expands the
-  // new card into the Stage 1+2 editor. Server's POST checklists endpoint
-  // accepts an array of {label} seeds via its backward-compat path.
+  // Stage 3 — single POST with { title, templateId } triggers a transactional
+  // server-side clone that preserves fieldType, notes, photosRequired,
+  // sections, and multiple_choice options. The Stage 1+2 path read items
+  // client-side and rebuilt them as bare { label } seeds, silently dropping
+  // every other field — replaced here.
   const applyChecklistTemplate = useCallback(async (templateId: number) => {
     try {
-      const itemsRes = await apiRequest("GET", `/api/checklist-templates/${templateId}/items`);
-      const tplItems: ChecklistTemplateItem[] = await itemsRes.json();
       const template = checklistTemplates?.find(t => t.id === templateId);
       if (!template) return;
       const createRes = await apiRequest("POST", `/api/projects/${id}/checklists`, {
         title: template.title,
-        items: tplItems.map(i => ({ label: i.label })),
+        templateId,
       });
       const created = await createRes.json() as { id: number };
       queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });

@@ -248,19 +248,45 @@ export const checklistTemplates = pgTable("checklist_templates", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
-// Mirror of checklist_items minus value_*/assigned_to/completed_at. sectionId is
-// a plain integer placeholder for Stage 1 — checklist_template_sections + the FK
-// arrive in Stage 3 when template parity lands.
+// Stage 3 — sections on templates, mirroring checklist_sections. Cascade
+// delete with the parent template; setting items.section_id NULL on section
+// delete drops them into the "Untitled" virtual group, same as instances.
+export const checklistTemplateSections = pgTable("checklist_template_sections", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  templateId: integer("template_id").references(() => checklistTemplates.id, { onDelete: "cascade" }).notNull(),
+  title: text("title").notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("checklist_template_sections_template_sort_idx").on(table.templateId, table.sortOrder),
+]);
+
+// Mirror of checklist_items minus value_*/assigned_to/completed_at. sectionId
+// became a real FK in Stage 3 alongside checklist_template_sections.
 export const checklistTemplateItems = pgTable("checklist_template_items", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   templateId: integer("template_id").references(() => checklistTemplates.id, { onDelete: "cascade" }).notNull(),
-  sectionId: integer("section_id"),
+  sectionId: integer("section_id").references(() => checklistTemplateSections.id, { onDelete: "set null" }),
   label: text("label").notNull(),
   fieldType: checklistFieldTypeEnum("field_type").default("yes_no").notNull(),
   notes: text("notes"),
   photosRequired: boolean("photos_required").default(false).notNull(),
   sortOrder: integer("sort_order").default(0).notNull(),
 });
+
+// Stage 3 — per-template-item answer options (multiple_choice authoring).
+// Mirrors checklist_item_options. Cascades with the parent template item.
+export const checklistTemplateItemOptions = pgTable("checklist_template_item_options", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  itemId: integer("item_id").references(() => checklistTemplateItems.id, { onDelete: "cascade" }).notNull(),
+  label: text("label").notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("checklist_template_item_options_item_sort_idx").on(table.itemId, table.sortOrder),
+]);
 
 // Report templates (new shape, session 37). Stage 1 ships the table only; the
 // authoring/apply UI lands in Stage 4. templateConfig is intentionally opaque
@@ -570,10 +596,22 @@ export const reportSectionPhotosRelations = relations(reportSectionPhotos, ({ on
 
 export const checklistTemplatesRelations = relations(checklistTemplates, ({ many }) => ({
   items: many(checklistTemplateItems),
+  sections: many(checklistTemplateSections),
 }));
 
-export const checklistTemplateItemsRelations = relations(checklistTemplateItems, ({ one }) => ({
+export const checklistTemplateSectionsRelations = relations(checklistTemplateSections, ({ one, many }) => ({
+  template: one(checklistTemplates, { fields: [checklistTemplateSections.templateId], references: [checklistTemplates.id] }),
+  items: many(checklistTemplateItems),
+}));
+
+export const checklistTemplateItemsRelations = relations(checklistTemplateItems, ({ one, many }) => ({
   template: one(checklistTemplates, { fields: [checklistTemplateItems.templateId], references: [checklistTemplates.id] }),
+  section: one(checklistTemplateSections, { fields: [checklistTemplateItems.sectionId], references: [checklistTemplateSections.id] }),
+  options: many(checklistTemplateItemOptions),
+}));
+
+export const checklistTemplateItemOptionsRelations = relations(checklistTemplateItemOptions, ({ one }) => ({
+  item: one(checklistTemplateItems, { fields: [checklistTemplateItemOptions.itemId], references: [checklistTemplateItems.id] }),
 }));
 
 export const insertProjectSchema = createInsertSchema(projects).omit({
@@ -716,6 +754,18 @@ export const insertChecklistTemplateItemSchema = createInsertSchema(checklistTem
   id: true,
 });
 
+export const insertChecklistTemplateSectionSchema = createInsertSchema(checklistTemplateSections).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertChecklistTemplateItemOptionSchema = createInsertSchema(checklistTemplateItemOptions).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
 export const insertReportTemplateSchema = createInsertSchema(reportTemplates).omit({
   id: true,
   createdAt: true,
@@ -726,5 +776,9 @@ export type InsertChecklistTemplate = z.infer<typeof insertChecklistTemplateSche
 export type ChecklistTemplate = typeof checklistTemplates.$inferSelect;
 export type InsertChecklistTemplateItem = z.infer<typeof insertChecklistTemplateItemSchema>;
 export type ChecklistTemplateItem = typeof checklistTemplateItems.$inferSelect;
+export type InsertChecklistTemplateSection = z.infer<typeof insertChecklistTemplateSectionSchema>;
+export type ChecklistTemplateSection = typeof checklistTemplateSections.$inferSelect;
+export type InsertChecklistTemplateItemOption = z.infer<typeof insertChecklistTemplateItemOptionSchema>;
+export type ChecklistTemplateItemOption = typeof checklistTemplateItemOptions.$inferSelect;
 export type InsertReportTemplate = z.infer<typeof insertReportTemplateSchema>;
 export type ReportTemplate = typeof reportTemplates.$inferSelect;

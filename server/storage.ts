@@ -15,6 +15,8 @@ import {
   sharedGalleries,
   checklistTemplates,
   checklistTemplateItems,
+  checklistTemplateSections,
+  checklistTemplateItemOptions,
   accountTags,
   calendarConnections,
   calendarEvents,
@@ -50,6 +52,10 @@ import {
   type InsertChecklistTemplate,
   type ChecklistTemplateItem,
   type InsertChecklistTemplateItem,
+  type ChecklistTemplateSection,
+  type InsertChecklistTemplateSection,
+  type ChecklistTemplateItemOption,
+  type InsertChecklistTemplateItemOption,
   reportTemplates,
   type ReportTemplate,
   type InsertReportTemplate,
@@ -202,9 +208,27 @@ export interface IStorage {
   getAllChecklistTemplates(accountId: string): Promise<(ChecklistTemplate & { itemCount: number })[]>;
   getChecklistTemplate(id: number): Promise<ChecklistTemplate | undefined>;
   createChecklistTemplate(template: InsertChecklistTemplate): Promise<ChecklistTemplate>;
+  updateChecklistTemplate(id: number, patch: { title?: string; description?: string | null }): Promise<ChecklistTemplate | undefined>;
   deleteChecklistTemplate(id: number): Promise<void>;
   getChecklistTemplateItems(templateId: number): Promise<ChecklistTemplateItem[]>;
+  getChecklistTemplateItem(id: number): Promise<ChecklistTemplateItem | undefined>;
   createChecklistTemplateItem(item: InsertChecklistTemplateItem): Promise<ChecklistTemplateItem>;
+  updateChecklistTemplateItem(id: number, patch: { label?: string; fieldType?: ChecklistFieldType; sectionId?: number | null; notes?: string | null; photosRequired?: boolean; sortOrder?: number }): Promise<ChecklistTemplateItem | undefined>;
+  deleteChecklistTemplateItem(id: number): Promise<void>;
+  reorderChecklistTemplateItems(templateId: number, orderedIds: number[]): Promise<void>;
+  getChecklistTemplateSections(templateId: number): Promise<ChecklistTemplateSection[]>;
+  getChecklistTemplateSection(id: number): Promise<ChecklistTemplateSection | undefined>;
+  createChecklistTemplateSection(section: InsertChecklistTemplateSection): Promise<ChecklistTemplateSection>;
+  updateChecklistTemplateSection(id: number, patch: { title?: string; sortOrder?: number }): Promise<ChecklistTemplateSection | undefined>;
+  deleteChecklistTemplateSection(id: number): Promise<void>;
+  reorderChecklistTemplateSections(templateId: number, orderedIds: number[]): Promise<void>;
+  getChecklistTemplateItemOptions(itemId: number): Promise<ChecklistTemplateItemOption[]>;
+  getChecklistTemplateItemOption(id: number): Promise<ChecklistTemplateItemOption | undefined>;
+  createChecklistTemplateItemOption(option: InsertChecklistTemplateItemOption): Promise<ChecklistTemplateItemOption>;
+  updateChecklistTemplateItemOption(id: number, patch: { label?: string; sortOrder?: number }): Promise<ChecklistTemplateItemOption | undefined>;
+  deleteChecklistTemplateItemOption(id: number): Promise<void>;
+  reorderChecklistTemplateItemOptions(itemId: number, orderedIds: number[]): Promise<void>;
+  instantiateChecklistFromTemplate(templateId: number, projectId: number, name: string, createdByUserId: string, accountId: string): Promise<number>;
 
   getReportTemplates(accountId: string): Promise<(ReportTemplate & { sectionCount: number })[]>;
   getReportTemplate(id: number): Promise<ReportTemplate | undefined>;
@@ -1300,9 +1324,266 @@ export class DatabaseStorage implements IStorage {
       .orderBy(asc(checklistTemplateItems.sortOrder));
   }
 
+  async getChecklistTemplateItem(id: number): Promise<ChecklistTemplateItem | undefined> {
+    const [row] = await db.select().from(checklistTemplateItems).where(eq(checklistTemplateItems.id, id)).limit(1);
+    return row;
+  }
+
   async createChecklistTemplateItem(item: InsertChecklistTemplateItem): Promise<ChecklistTemplateItem> {
     const [created] = await db.insert(checklistTemplateItems).values(item).returning();
     return created;
+  }
+
+  async updateChecklistTemplate(id: number, patch: { title?: string; description?: string | null }): Promise<ChecklistTemplate | undefined> {
+    const set: Record<string, unknown> = {};
+    if (patch.title !== undefined) set.title = patch.title;
+    if (patch.description !== undefined) set.description = patch.description;
+    if (Object.keys(set).length === 0) {
+      return this.getChecklistTemplate(id);
+    }
+    const [updated] = await db.update(checklistTemplates).set(set).where(eq(checklistTemplates.id, id)).returning();
+    return updated;
+  }
+
+  async updateChecklistTemplateItem(
+    id: number,
+    patch: { label?: string; fieldType?: ChecklistFieldType; sectionId?: number | null; notes?: string | null; photosRequired?: boolean; sortOrder?: number },
+  ): Promise<ChecklistTemplateItem | undefined> {
+    const set: Record<string, unknown> = {};
+    if (patch.label !== undefined) set.label = patch.label;
+    if (patch.fieldType !== undefined) set.fieldType = patch.fieldType;
+    if (patch.sectionId !== undefined) set.sectionId = patch.sectionId;
+    if (patch.notes !== undefined) set.notes = patch.notes;
+    if (patch.photosRequired !== undefined) set.photosRequired = patch.photosRequired;
+    if (patch.sortOrder !== undefined) set.sortOrder = patch.sortOrder;
+    if (Object.keys(set).length === 0) {
+      return this.getChecklistTemplateItem(id);
+    }
+    // Field-type change wipes child options — multiple_choice options are
+    // meaningless on a yes_no/rating/text item. Cascade is parent → child
+    // here just like the instance updateChecklistItem nulls value_*.
+    if (patch.fieldType !== undefined) {
+      return await db.transaction(async (tx) => {
+        const [cur] = await tx.select({ fieldType: checklistTemplateItems.fieldType })
+          .from(checklistTemplateItems)
+          .where(eq(checklistTemplateItems.id, id))
+          .limit(1);
+        if (cur && cur.fieldType !== patch.fieldType && cur.fieldType === "multiple_choice") {
+          await tx.delete(checklistTemplateItemOptions).where(eq(checklistTemplateItemOptions.itemId, id));
+        }
+        const [updated] = await tx.update(checklistTemplateItems).set(set).where(eq(checklistTemplateItems.id, id)).returning();
+        return updated;
+      });
+    }
+    const [updated] = await db.update(checklistTemplateItems).set(set).where(eq(checklistTemplateItems.id, id)).returning();
+    return updated;
+  }
+
+  async deleteChecklistTemplateItem(id: number): Promise<void> {
+    // FK cascade on checklist_template_item_options.item_id removes options.
+    await db.delete(checklistTemplateItems).where(eq(checklistTemplateItems.id, id));
+  }
+
+  async reorderChecklistTemplateItems(templateId: number, orderedIds: number[]): Promise<void> {
+    if (orderedIds.length === 0) return;
+    const owned = await db.select({ id: checklistTemplateItems.id })
+      .from(checklistTemplateItems)
+      .where(eq(checklistTemplateItems.templateId, templateId));
+    const ownedSet = new Set(owned.map(r => r.id));
+    for (const id of orderedIds) {
+      if (!ownedSet.has(id)) throw new Error(`Item ${id} does not belong to template ${templateId}`);
+    }
+    await db.transaction(async (tx) => {
+      for (let i = 0; i < orderedIds.length; i++) {
+        await tx.update(checklistTemplateItems)
+          .set({ sortOrder: i })
+          .where(eq(checklistTemplateItems.id, orderedIds[i]));
+      }
+    });
+  }
+
+  // ── Stage 3: template sections ───────────────────────────────────────────
+  async getChecklistTemplateSections(templateId: number): Promise<ChecklistTemplateSection[]> {
+    return db.select().from(checklistTemplateSections)
+      .where(eq(checklistTemplateSections.templateId, templateId))
+      .orderBy(asc(checklistTemplateSections.sortOrder), asc(checklistTemplateSections.id));
+  }
+
+  async getChecklistTemplateSection(id: number): Promise<ChecklistTemplateSection | undefined> {
+    const [row] = await db.select().from(checklistTemplateSections).where(eq(checklistTemplateSections.id, id)).limit(1);
+    return row;
+  }
+
+  async createChecklistTemplateSection(section: InsertChecklistTemplateSection): Promise<ChecklistTemplateSection> {
+    const [created] = await db.insert(checklistTemplateSections).values(section).returning();
+    return created;
+  }
+
+  async updateChecklistTemplateSection(id: number, patch: { title?: string; sortOrder?: number }): Promise<ChecklistTemplateSection | undefined> {
+    const set: Record<string, unknown> = { updatedAt: new Date() };
+    if (patch.title !== undefined) set.title = patch.title;
+    if (patch.sortOrder !== undefined) set.sortOrder = patch.sortOrder;
+    const [updated] = await db.update(checklistTemplateSections).set(set).where(eq(checklistTemplateSections.id, id)).returning();
+    return updated;
+  }
+
+  async deleteChecklistTemplateSection(id: number): Promise<void> {
+    // FK ON DELETE SET NULL on items.section_id; mirrors the instance behaviour.
+    await db.delete(checklistTemplateSections).where(eq(checklistTemplateSections.id, id));
+  }
+
+  async reorderChecklistTemplateSections(templateId: number, orderedIds: number[]): Promise<void> {
+    if (orderedIds.length === 0) return;
+    const owned = await db.select({ id: checklistTemplateSections.id })
+      .from(checklistTemplateSections)
+      .where(eq(checklistTemplateSections.templateId, templateId));
+    const ownedSet = new Set(owned.map(r => r.id));
+    for (const id of orderedIds) {
+      if (!ownedSet.has(id)) throw new Error(`Section ${id} does not belong to template ${templateId}`);
+    }
+    await db.transaction(async (tx) => {
+      for (let i = 0; i < orderedIds.length; i++) {
+        await tx.update(checklistTemplateSections)
+          .set({ sortOrder: i, updatedAt: new Date() })
+          .where(eq(checklistTemplateSections.id, orderedIds[i]));
+      }
+    });
+  }
+
+  // ── Stage 3: template item options (multiple_choice authoring) ───────────
+  async getChecklistTemplateItemOptions(itemId: number): Promise<ChecklistTemplateItemOption[]> {
+    return db.select().from(checklistTemplateItemOptions)
+      .where(eq(checklistTemplateItemOptions.itemId, itemId))
+      .orderBy(asc(checklistTemplateItemOptions.sortOrder), asc(checklistTemplateItemOptions.id));
+  }
+
+  async getChecklistTemplateItemOption(id: number): Promise<ChecklistTemplateItemOption | undefined> {
+    const [row] = await db.select().from(checklistTemplateItemOptions).where(eq(checklistTemplateItemOptions.id, id)).limit(1);
+    return row;
+  }
+
+  async createChecklistTemplateItemOption(option: InsertChecklistTemplateItemOption): Promise<ChecklistTemplateItemOption> {
+    const [created] = await db.insert(checklistTemplateItemOptions).values(option).returning();
+    return created;
+  }
+
+  async updateChecklistTemplateItemOption(id: number, patch: { label?: string; sortOrder?: number }): Promise<ChecklistTemplateItemOption | undefined> {
+    const set: Record<string, unknown> = { updatedAt: new Date() };
+    if (patch.label !== undefined) set.label = patch.label;
+    if (patch.sortOrder !== undefined) set.sortOrder = patch.sortOrder;
+    const [updated] = await db.update(checklistTemplateItemOptions).set(set).where(eq(checklistTemplateItemOptions.id, id)).returning();
+    return updated;
+  }
+
+  async deleteChecklistTemplateItemOption(id: number): Promise<void> {
+    await db.delete(checklistTemplateItemOptions).where(eq(checklistTemplateItemOptions.id, id));
+  }
+
+  async reorderChecklistTemplateItemOptions(itemId: number, orderedIds: number[]): Promise<void> {
+    if (orderedIds.length === 0) return;
+    const owned = await db.select({ id: checklistTemplateItemOptions.id })
+      .from(checklistTemplateItemOptions)
+      .where(eq(checklistTemplateItemOptions.itemId, itemId));
+    const ownedSet = new Set(owned.map(r => r.id));
+    for (const id of orderedIds) {
+      if (!ownedSet.has(id)) throw new Error(`Option ${id} does not belong to item ${itemId}`);
+    }
+    await db.transaction(async (tx) => {
+      for (let i = 0; i < orderedIds.length; i++) {
+        await tx.update(checklistTemplateItemOptions)
+          .set({ sortOrder: i, updatedAt: new Date() })
+          .where(eq(checklistTemplateItemOptions.id, orderedIds[i]));
+      }
+    });
+  }
+
+  // ── Stage 3: instantiation ────────────────────────────────────────────────
+  // Server-side, transactional clone of a template into a new checklist on a
+  // project. Fixes the lossy client-side mapping (Stage 1+2 dropped fieldType,
+  // notes, photosRequired, sections, options on every instantiation).
+  // Account isolation is enforced here AND by the route's project access check.
+  async instantiateChecklistFromTemplate(
+    templateId: number,
+    projectId: number,
+    name: string,
+    createdByUserId: string,
+    accountId: string,
+  ): Promise<number> {
+    return await db.transaction(async (tx) => {
+      const [tpl] = await tx.select().from(checklistTemplates).where(eq(checklistTemplates.id, templateId)).limit(1);
+      if (!tpl) throw new Error("Template not found");
+      if (tpl.accountId !== accountId) throw new Error("Template not in this account");
+
+      const tplSections = await tx.select().from(checklistTemplateSections)
+        .where(eq(checklistTemplateSections.templateId, templateId))
+        .orderBy(asc(checklistTemplateSections.sortOrder), asc(checklistTemplateSections.id));
+      const tplItems = await tx.select().from(checklistTemplateItems)
+        .where(eq(checklistTemplateItems.templateId, templateId))
+        .orderBy(asc(checklistTemplateItems.sortOrder), asc(checklistTemplateItems.id));
+      const tplItemIds = tplItems.map(i => i.id);
+      const tplOptions = tplItemIds.length === 0 ? [] : await tx.select().from(checklistTemplateItemOptions)
+        .where(inArray(checklistTemplateItemOptions.itemId, tplItemIds))
+        .orderBy(asc(checklistTemplateItemOptions.sortOrder), asc(checklistTemplateItemOptions.id));
+
+      const [newChecklist] = await tx.insert(checklists).values({
+        projectId,
+        title: name,
+        createdById: createdByUserId,
+      } as any).returning();
+
+      // Clone sections preserving the source sort_order verbatim — keeps
+      // any deliberate gaps the author may have left between rows so future
+      // reorders behave the same as on the template.
+      const sectionMap = new Map<number, number>();
+      for (const s of tplSections) {
+        const [created] = await tx.insert(checklistSections).values({
+          checklistId: newChecklist.id,
+          title: s.title,
+          sortOrder: s.sortOrder,
+        }).returning();
+        sectionMap.set(s.id, created.id);
+      }
+
+      // Clone items, mapping section_id via sectionMap (NULL stays NULL) and
+      // preserving the source item sort_order.
+      const itemMap = new Map<number, number>();
+      for (const it of tplItems) {
+        const newSectionId = it.sectionId == null ? null : (sectionMap.get(it.sectionId) ?? null);
+        const [created] = await tx.insert(checklistItems).values({
+          checklistId: newChecklist.id,
+          sectionId: newSectionId,
+          label: it.label,
+          fieldType: it.fieldType,
+          notes: it.notes,
+          photosRequired: it.photosRequired,
+          sortOrder: it.sortOrder,
+        } as any).returning();
+        itemMap.set(it.id, created.id);
+      }
+
+      // Clone options for multiple_choice items only — others can't have any
+      // and the template-side updateChecklistTemplateItem already cascades them
+      // away on a fieldType change, but we filter defensively here too.
+      const mcItemIds = new Set(tplItems.filter(i => i.fieldType === "multiple_choice").map(i => i.id));
+      const optionsByItem = new Map<number, ChecklistTemplateItemOption[]>();
+      for (const opt of tplOptions) {
+        if (!mcItemIds.has(opt.itemId)) continue;
+        const arr = optionsByItem.get(opt.itemId) ?? [];
+        arr.push(opt);
+        optionsByItem.set(opt.itemId, arr);
+      }
+      for (const oldItemId of Array.from(optionsByItem.keys())) {
+        const opts = optionsByItem.get(oldItemId)!;
+        const newItemId = itemMap.get(oldItemId);
+        if (!newItemId) continue;
+        const rows = opts.map((o: ChecklistTemplateItemOption) => ({
+          itemId: newItemId, label: o.label, sortOrder: o.sortOrder,
+        }));
+        await tx.insert(checklistItemOptions).values(rows as any);
+      }
+
+      return newChecklist.id;
+    });
   }
 
   // Report templates — Stage 4. Hard delete (matches checklistTemplates).

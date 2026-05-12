@@ -7,7 +7,7 @@ import { getAccountBilling, isAccountBillingEnabled, overlayAccountBillingOnUser
 import { requireAdmin, requireAdminOrManager } from "./middleware/auth";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
-import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistSectionSchema, insertChecklistItemOptionSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, checklistItems, checklistSections, checklistItemOptions, checklistItemPhotos, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, pendingGeofenceExits, templateConfigSchema } from "@shared/schema";
+import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistSectionSchema, insertChecklistItemOptionSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, checklistItems, checklistSections, checklistItemOptions, checklistItemPhotos, checklistTemplates, checklistTemplateSections, checklistTemplateItems, checklistTemplateItemOptions, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, pendingGeofenceExits, templateConfigSchema } from "@shared/schema";
 import { executeAutoClockOut } from "./lib/timesheets";
 import { users, invitations, accounts } from "@shared/models/auth";
 import { computeSeatUsage } from "./lib/seats";
@@ -135,6 +135,48 @@ async function verifyChecklistOptionAccess(optionId: number, accountId: string):
     .innerJoin(checklists, eq(checklistItems.checklistId, checklists.id))
     .innerJoin(projects, eq(checklists.projectId, projects.id))
     .where(eq(checklistItemOptions.id, optionId))
+    .limit(1);
+  if (!row || row.accountId !== accountId) return { ok: false };
+  return { ok: true, itemId: row.itemId };
+}
+
+// Stage 3 — template ownership-chain access checks. Templates live at the
+// account level (no project pivot) so the chain is short. Item / option
+// chains pivot through their parent template.
+async function verifyChecklistTemplateAccess(templateId: number, accountId: string): Promise<boolean> {
+  const [row] = await db.select({ accountId: checklistTemplates.accountId })
+    .from(checklistTemplates)
+    .where(eq(checklistTemplates.id, templateId))
+    .limit(1);
+  return !!row && row.accountId === accountId;
+}
+
+async function verifyChecklistTemplateSectionAccess(sectionId: number, accountId: string): Promise<{ ok: boolean; templateId?: number }> {
+  const [row] = await db.select({ accountId: checklistTemplates.accountId, templateId: checklistTemplateSections.templateId })
+    .from(checklistTemplateSections)
+    .innerJoin(checklistTemplates, eq(checklistTemplateSections.templateId, checklistTemplates.id))
+    .where(eq(checklistTemplateSections.id, sectionId))
+    .limit(1);
+  if (!row || row.accountId !== accountId) return { ok: false };
+  return { ok: true, templateId: row.templateId };
+}
+
+async function verifyChecklistTemplateItemAccess(itemId: number, accountId: string): Promise<{ ok: boolean; templateId?: number }> {
+  const [row] = await db.select({ accountId: checklistTemplates.accountId, templateId: checklistTemplateItems.templateId })
+    .from(checklistTemplateItems)
+    .innerJoin(checklistTemplates, eq(checklistTemplateItems.templateId, checklistTemplates.id))
+    .where(eq(checklistTemplateItems.id, itemId))
+    .limit(1);
+  if (!row || row.accountId !== accountId) return { ok: false };
+  return { ok: true, templateId: row.templateId };
+}
+
+async function verifyChecklistTemplateOptionAccess(optionId: number, accountId: string): Promise<{ ok: boolean; itemId?: number }> {
+  const [row] = await db.select({ accountId: checklistTemplates.accountId, itemId: checklistTemplateItemOptions.itemId })
+    .from(checklistTemplateItemOptions)
+    .innerJoin(checklistTemplateItems, eq(checklistTemplateItemOptions.itemId, checklistTemplateItems.id))
+    .innerJoin(checklistTemplates, eq(checklistTemplateItems.templateId, checklistTemplates.id))
+    .where(eq(checklistTemplateItemOptions.id, optionId))
     .limit(1);
   if (!row || row.accountId !== accountId) return { ok: false };
   return { ok: true, itemId: row.itemId };
@@ -1174,6 +1216,34 @@ export async function registerRoutes(
     try {
       const projectId = parseInt(req.params.id as string);
       if (!(await verifyProjectAccess(projectId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+
+      // Stage 3 — server-driven template instantiation. Single POST with a
+      // templateId clones every section/item/option in one transaction,
+      // preserving fieldType/notes/photosRequired and multiple_choice options
+      // (Stage 1+2 client-side mapping silently dropped all of these).
+      if (req.body?.templateId !== undefined && req.body.templateId !== null) {
+        const templateId = parseInt(req.body.templateId);
+        if (!Number.isInteger(templateId) || templateId <= 0) {
+          return res.status(400).json({ message: "Invalid templateId" });
+        }
+        const name = typeof req.body.title === "string" && req.body.title.trim()
+          ? req.body.title
+          : (typeof req.body.name === "string" ? req.body.name : "");
+        if (!name.trim()) return res.status(400).json({ message: "title required" });
+        try {
+          const newId = await storage.instantiateChecklistFromTemplate(
+            templateId, projectId, name.trim(), req.user.id, req.user.accountId,
+          );
+          const created = await storage.getChecklist(newId);
+          return res.status(201).json(created);
+        } catch (e: any) {
+          const msg = String(e?.message ?? "");
+          if (msg === "Template not found") return res.status(404).json({ message: msg });
+          if (msg === "Template not in this account") return res.status(403).json({ message: "Access denied" });
+          throw e;
+        }
+      }
+
       const parsed = insertChecklistSchema.safeParse({
         projectId,
         title: req.body.title,
@@ -3943,6 +4013,260 @@ export async function registerRoutes(
       res.json({ message: "Deleted" });
     } catch (error) {
       res.status(500).json({ message: "Failed to delete checklist template" });
+    }
+  });
+
+  // ── Stage 3: template parity surface ─────────────────────────────────────
+  // Open to all write users by deliberate divergence from report-templates —
+  // no requireAdminOrManager. Account isolation enforced via verify helpers.
+
+  app.patch("/api/checklist-templates/:id", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      if (!(await verifyChecklistTemplateAccess(id, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      const patch: { title?: string; description?: string | null } = {};
+      if (typeof req.body.title === "string") patch.title = req.body.title;
+      if ("description" in req.body) patch.description = req.body.description ?? null;
+      const updated = await storage.updateChecklistTemplate(id, patch);
+      if (!updated) return res.status(404).json({ message: "Template not found" });
+      res.json(updated);
+    } catch {
+      res.status(500).json({ message: "Failed to update template" });
+    }
+  });
+
+  // Sections
+  app.get("/api/checklist-templates/:id/sections", requireReadAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      if (!(await verifyChecklistTemplateAccess(id, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      res.json(await storage.getChecklistTemplateSections(id));
+    } catch {
+      res.status(500).json({ message: "Failed to fetch sections" });
+    }
+  });
+
+  app.post("/api/checklist-templates/:id/sections", requireWriteAccess, async (req: any, res) => {
+    try {
+      const templateId = parseInt(req.params.id as string);
+      if (!(await verifyChecklistTemplateAccess(templateId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      const title = String(req.body?.title ?? "").trim();
+      if (!title) return res.status(400).json({ message: "title required" });
+      const sortOrder = Number.isInteger(req.body?.sortOrder) ? req.body.sortOrder : 0;
+      const created = await storage.createChecklistTemplateSection({ templateId, title, sortOrder });
+      res.status(201).json(created);
+    } catch {
+      res.status(500).json({ message: "Failed to create section" });
+    }
+  });
+
+  app.patch("/api/checklist-template-sections/:id", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      const access = await verifyChecklistTemplateSectionAccess(id, req.user.accountId);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
+      const patch: { title?: string; sortOrder?: number } = {};
+      if (typeof req.body.title === "string") patch.title = req.body.title;
+      if (Number.isInteger(req.body.sortOrder)) patch.sortOrder = req.body.sortOrder;
+      const updated = await storage.updateChecklistTemplateSection(id, patch);
+      if (!updated) return res.status(404).json({ message: "Section not found" });
+      res.json(updated);
+    } catch {
+      res.status(500).json({ message: "Failed to update section" });
+    }
+  });
+
+  app.delete("/api/checklist-template-sections/:id", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      const access = await verifyChecklistTemplateSectionAccess(id, req.user.accountId);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
+      await storage.deleteChecklistTemplateSection(id);
+      res.json({ message: "Deleted" });
+    } catch {
+      res.status(500).json({ message: "Failed to delete section" });
+    }
+  });
+
+  app.post("/api/checklist-templates/:id/sections/reorder", requireWriteAccess, async (req: any, res) => {
+    try {
+      const templateId = parseInt(req.params.id as string);
+      if (!(await verifyChecklistTemplateAccess(templateId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      const orderedIds = req.body?.orderedIds;
+      if (!Array.isArray(orderedIds) || !orderedIds.every((n) => Number.isInteger(n) && n > 0)) {
+        return res.status(400).json({ message: "orderedIds must be array of positive integers" });
+      }
+      await storage.reorderChecklistTemplateSections(templateId, orderedIds);
+      res.json({ message: "Reordered" });
+    } catch (e: any) {
+      const msg = e?.message ?? "Failed to reorder sections";
+      res.status(msg.includes("does not belong") ? 400 : 500).json({ message: msg });
+    }
+  });
+
+  // Items
+  app.post("/api/checklist-templates/:id/items", requireWriteAccess, async (req: any, res) => {
+    try {
+      const templateId = parseInt(req.params.id as string);
+      if (!(await verifyChecklistTemplateAccess(templateId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      const label = String(req.body?.label ?? "").trim();
+      if (!label) return res.status(400).json({ message: "label required" });
+      // sectionId, if provided, must belong to this template.
+      let sectionId: number | null = null;
+      if (req.body?.sectionId !== undefined && req.body.sectionId !== null) {
+        const sid = parseInt(req.body.sectionId);
+        if (!Number.isInteger(sid)) return res.status(400).json({ message: "Invalid sectionId" });
+        const access = await verifyChecklistTemplateSectionAccess(sid, req.user.accountId);
+        if (!access.ok || access.templateId !== templateId) {
+          return res.status(400).json({ message: "Section does not belong to template" });
+        }
+        sectionId = sid;
+      }
+      const created = await storage.createChecklistTemplateItem({
+        templateId,
+        sectionId,
+        label,
+        fieldType: req.body?.fieldType ?? "yes_no",
+        notes: req.body?.notes ?? null,
+        photosRequired: req.body?.photosRequired === true,
+        sortOrder: Number.isInteger(req.body?.sortOrder) ? req.body.sortOrder : 0,
+      });
+      res.status(201).json(created);
+    } catch {
+      res.status(500).json({ message: "Failed to create template item" });
+    }
+  });
+
+  app.patch("/api/checklist-template-items/:id", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      const access = await verifyChecklistTemplateItemAccess(id, req.user.accountId);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
+      const patch: any = {};
+      if (typeof req.body.label === "string") patch.label = req.body.label;
+      if (typeof req.body.fieldType === "string") patch.fieldType = req.body.fieldType;
+      if ("sectionId" in req.body) {
+        const raw = req.body.sectionId;
+        if (raw === null) {
+          patch.sectionId = null;
+        } else {
+          const sid = parseInt(raw);
+          if (!Number.isInteger(sid)) return res.status(400).json({ message: "Invalid sectionId" });
+          const sAccess = await verifyChecklistTemplateSectionAccess(sid, req.user.accountId);
+          if (!sAccess.ok || sAccess.templateId !== access.templateId) {
+            return res.status(400).json({ message: "Section does not belong to template" });
+          }
+          patch.sectionId = sid;
+        }
+      }
+      if ("notes" in req.body) patch.notes = req.body.notes ?? null;
+      if (typeof req.body.photosRequired === "boolean") patch.photosRequired = req.body.photosRequired;
+      if (Number.isInteger(req.body.sortOrder)) patch.sortOrder = req.body.sortOrder;
+      const updated = await storage.updateChecklistTemplateItem(id, patch);
+      if (!updated) return res.status(404).json({ message: "Item not found" });
+      res.json(updated);
+    } catch {
+      res.status(500).json({ message: "Failed to update template item" });
+    }
+  });
+
+  app.delete("/api/checklist-template-items/:id", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      const access = await verifyChecklistTemplateItemAccess(id, req.user.accountId);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
+      await storage.deleteChecklistTemplateItem(id);
+      res.json({ message: "Deleted" });
+    } catch {
+      res.status(500).json({ message: "Failed to delete template item" });
+    }
+  });
+
+  app.post("/api/checklist-templates/:id/items/reorder", requireWriteAccess, async (req: any, res) => {
+    try {
+      const templateId = parseInt(req.params.id as string);
+      if (!(await verifyChecklistTemplateAccess(templateId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      const orderedIds = req.body?.orderedIds;
+      if (!Array.isArray(orderedIds) || !orderedIds.every((n) => Number.isInteger(n) && n > 0)) {
+        return res.status(400).json({ message: "orderedIds must be array of positive integers" });
+      }
+      await storage.reorderChecklistTemplateItems(templateId, orderedIds);
+      res.json({ message: "Reordered" });
+    } catch (e: any) {
+      const msg = e?.message ?? "Failed to reorder items";
+      res.status(msg.includes("does not belong") ? 400 : 500).json({ message: msg });
+    }
+  });
+
+  // Options (multiple_choice authoring)
+  app.get("/api/checklist-template-items/:id/options", requireReadAccess, async (req: any, res) => {
+    try {
+      const itemId = parseInt(req.params.id as string);
+      const access = await verifyChecklistTemplateItemAccess(itemId, req.user.accountId);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
+      res.json(await storage.getChecklistTemplateItemOptions(itemId));
+    } catch {
+      res.status(500).json({ message: "Failed to fetch options" });
+    }
+  });
+
+  app.post("/api/checklist-template-items/:id/options", requireWriteAccess, async (req: any, res) => {
+    try {
+      const itemId = parseInt(req.params.id as string);
+      const access = await verifyChecklistTemplateItemAccess(itemId, req.user.accountId);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
+      const label = String(req.body?.label ?? "").trim();
+      if (!label) return res.status(400).json({ message: "label required" });
+      const sortOrder = Number.isInteger(req.body?.sortOrder) ? req.body.sortOrder : 0;
+      const created = await storage.createChecklistTemplateItemOption({ itemId, label, sortOrder });
+      res.status(201).json(created);
+    } catch {
+      res.status(500).json({ message: "Failed to create option" });
+    }
+  });
+
+  app.patch("/api/checklist-template-options/:id", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      const access = await verifyChecklistTemplateOptionAccess(id, req.user.accountId);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
+      const patch: { label?: string; sortOrder?: number } = {};
+      if (typeof req.body.label === "string") patch.label = req.body.label;
+      if (Number.isInteger(req.body.sortOrder)) patch.sortOrder = req.body.sortOrder;
+      const updated = await storage.updateChecklistTemplateItemOption(id, patch);
+      if (!updated) return res.status(404).json({ message: "Option not found" });
+      res.json(updated);
+    } catch {
+      res.status(500).json({ message: "Failed to update option" });
+    }
+  });
+
+  app.delete("/api/checklist-template-options/:id", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      const access = await verifyChecklistTemplateOptionAccess(id, req.user.accountId);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
+      await storage.deleteChecklistTemplateItemOption(id);
+      res.json({ message: "Deleted" });
+    } catch {
+      res.status(500).json({ message: "Failed to delete option" });
+    }
+  });
+
+  app.post("/api/checklist-template-items/:id/options/reorder", requireWriteAccess, async (req: any, res) => {
+    try {
+      const itemId = parseInt(req.params.id as string);
+      const access = await verifyChecklistTemplateItemAccess(itemId, req.user.accountId);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
+      const orderedIds = req.body?.orderedIds;
+      if (!Array.isArray(orderedIds) || !orderedIds.every((n) => Number.isInteger(n) && n > 0)) {
+        return res.status(400).json({ message: "orderedIds must be array of positive integers" });
+      }
+      await storage.reorderChecklistTemplateItemOptions(itemId, orderedIds);
+      res.json({ message: "Reordered" });
+    } catch (e: any) {
+      const msg = e?.message ?? "Failed to reorder options";
+      res.status(msg.includes("does not belong") ? 400 : 500).json({ message: msg });
     }
   });
 
