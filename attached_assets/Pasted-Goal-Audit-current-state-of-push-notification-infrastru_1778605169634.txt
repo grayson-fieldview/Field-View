@@ -1,0 +1,68 @@
+Goal: Audit current state of push-notification infrastructure on the 
+server side. Diagnose only — no code changes, no commits.
+
+PHASE 1 — DIAGNOSE
+
+S1. SCHEMA. Confirm the users table has an expo_push_token column.
+    Run in TablePlus or via psql against the dev DB:
+    \d users
+    Show me the columns relevant to push: expo_push_token (or 
+    similar). Note nullable/not-null and length.
+    
+    Also confirm whether there's a separate push_tokens table 
+    (some apps store multiple tokens per user — one per device — 
+    in a side table rather than a single column on users).
+
+S2. ROUTES. grep server/routes.ts for any /api/users/push-token, 
+    /api/push, /api/notifications, /api/devices route. For each 
+    found:
+    - Method + path
+    - Middleware chain (requireWriteAccess? Just authenticated?)
+    - What does the handler actually do? (paste the handler body)
+    - Specifically: does POST validate the token format, upsert 
+      onto users.expo_push_token, and handle the "user is logged 
+      in on multiple devices" case (overwrite vs. additive)?
+
+S3. SERVER LIB. Does server/lib/push.ts exist? If yes, paste it 
+    in full. What does it export? Is expo-server-sdk imported? 
+    What version is in package.json? (Memory says it should be 
+    pinned to 5.0.0 — confirm or flag a drift.)
+
+S4. CALLERS. grep the server tree for any caller of push.ts's 
+    sendPush / sendNotification / similar. Specifically: does the 
+    geofence-exit auto-clock-OUT path call into push.ts to send 
+    a notification, or is the notification still wired up only 
+    to the silent ClockReceiptBanner client-side flow?
+    
+    Reminder of the existing Phase 2 geofencing pattern per memory: 
+    silent-auto clock-in is the default, ClockReceiptBanner shows 
+    post-facto receipt. S32 will add the symmetric clock-OUT push 
+    notification — but S31b is just the infra to enable it.
+
+S5. ENV. Check Vercel env vars for any EXPO_ACCESS_TOKEN or 
+    similar. expo-server-sdk usually doesn't strictly need an 
+    access token for push, but EAS push receipts do. Note 
+    presence or absence.
+
+S6. MIGRATION HISTORY. grep script/migrations/ for any migration 
+    that adds expo_push_token (or a push_tokens table). Show me 
+    the migration filename, date, and SQL.
+
+PHASE 2 — REPORT
+
+Give me a clean status:
+
+A. Is the schema in place? (column or table)
+B. Are POST/DELETE register/unregister routes in place and 
+   functionally correct?
+C. Is push.ts in place with a working sender? Pinned version 
+   correct?
+D. Is the geofence-exit handler wired to call the sender, or 
+   is that the missing piece?
+E. What's actually MISSING for S31b (server side)?
+
+Don't fix anything. Just report. Once we know server state, the 
+next prompt will be for Replit Mobile to implement the permission 
+request + token capture + register API call on the mobile side.
+
+No code changes, no commits.
