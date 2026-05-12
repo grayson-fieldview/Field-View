@@ -1,0 +1,124 @@
+Goal: Wire conversion events into Meta Pixel + GA4 + Google Ads so 
+paid ads can optimize against the right funnel signals. Four events 
+to fire:
+  1. signup_completed — user finishes email verification
+  2. trial_started — user lands on /dashboard with active trial 
+     (i.e., onboarded successfully)
+  3. card_added — Stripe Checkout completes and the user now has 
+     a stripeCustomerId
+  4. subscription_started — subscription becomes active (paid 
+     subscription, not trial)
+
+PHASE 1 — DIAGNOSE (15 min, no code changes)
+
+D1. Pixel + analytics inventory: search the codebase + index.html 
+    + client/src for every <script> tag, gtag, fbq, dataLayer, 
+    GoogleAnalytics, MetaPixel, ReactPixel reference. List:
+    - Which platforms are loaded (Meta Pixel, GA4 via gtag.js, 
+      Google Ads, any others)
+    - Where they're loaded (in client/index.html head, in 
+      client/src/main.tsx, in App.tsx, lazy-loaded somewhere)
+    - The actual pixel/property/tag IDs in use (or env var names 
+      they're read from)
+    - Whether they fire on every page load or are gated by 
+      something (cookie consent, env, route)
+    
+    Also note: per Grayson's memory, Termly cookie consent banner 
+    is installed on the FRAMER marketing site (field-view.com). 
+    Confirm whether Termly is also wired on the app subdomain 
+    (app.field-view.com) — if not, that's a pre-launch gap since 
+    GDPR/CPRA require consent before tracking.
+
+D2. For each platform found, document how to fire a custom event:
+    - Meta Pixel: fbq('track', 'EventName', { ...params })
+    - GA4: gtag('event', 'event_name', { ...params })
+    - Google Ads: gtag('event', 'conversion', { send_to: 'AW-XXX/YYY' })
+    
+    If a platform is NOT currently loaded (e.g., Google Ads tag), 
+    flag it as "needs install" and don't try to fire events to it.
+
+D3. Find the four fire points in the codebase:
+    
+    a) signup_completed — most likely in the verify-email completion 
+       handler. The funnel order per memory is register → welcome → 
+       verify-email → subscribe → dashboard. The right fire moment 
+       is when /api/verify-email POST succeeds and the user is 
+       auto-logged-in. Find that handler in 
+       client/src/pages/verify-email.tsx (or wherever).
+    
+    b) trial_started — find where the user lands on /dashboard for 
+       the first time after a successful signup. Could be a useEffect 
+       in dashboard.tsx gated on a "first visit" signal, or could 
+       fire from the same place as signup_completed (since trial 
+       auto-starts on signup). FLAG which interpretation is right 
+       for Field View's funnel — if "signup_completed" and 
+       "trial_started" would always fire within seconds of each 
+       other, they're redundant; pick one. (My read: trial_started 
+       is the more useful conversion event for ads since it 
+       confirms the user actually got into the product, not just 
+       hit verify. signup_completed could fold into it. But check.)
+    
+    c) card_added — fires when Stripe webhook updates the user with 
+       a stripeCustomerId. This is the canonical "Add Payment Info" 
+       conversion. Two options:
+       i)  Client-side: on the /subscribe?checkout=success callback 
+           handler in subscribe.tsx — fires when Stripe redirects 
+           back after successful checkout
+       ii) Server-side: in the Stripe webhook handler when 
+           customer.subscription.created or checkout.session.completed 
+           fires
+       
+       Client-side is much simpler (no server → pixel bridge needed) 
+       and aligns with how ads attribution actually works (the user's 
+       browser fires the event in-session). Recommend (i). Find the 
+       success callback handler in subscribe.tsx and confirm it 
+       exists.
+    
+    d) subscription_started — fires when the subscription goes 
+       active (trial converted to paid, or paid from day 1). Two 
+       interpretations:
+       i)  Same moment as card_added if Field View charges 
+           immediately (no trial)
+       ii) When the trial ends and the first invoice is paid — 
+           this is server-side only (webhook 
+           invoice.paid or customer.subscription.updated with 
+           status='active' and trial ending)
+       
+       Per memory, Field View runs a 14-day trial, so (ii) is the 
+       correct interpretation for "real subscription started." 
+       But the client browser won't be open when the trial ends 
+       in most cases, so this event has to fire server-side and 
+       be relayed via Conversions API (Meta) and the GA4 
+       Measurement Protocol. FLAG this complexity — it's a real 
+       infrastructure piece.
+
+D4. Existing wiring: search for any conversion-event firing code 
+    that already exists. Even one line of fbq('track', ...) or 
+    gtag('event', ...) somewhere would change the build plan. 
+    Show me anything found.
+
+PHASE 2 — REPORT (don't fix yet)
+
+Give me a clean status:
+
+A. Which platforms are loaded and ready to receive events on the 
+   app subdomain?
+B. Which platforms need install before we can fire events?
+C. For each of the 4 events, what's the proposed fire point (client 
+   or server, file:function), and is the underlying signal already 
+   accessible at that point?
+D. What's the right consent gating model — should Termly extend to 
+   app subdomain before tracking starts, or is the consent already 
+   handled differently?
+E. Recommended scope split:
+   - Quick PR: fire the 3 client-firable events (signup_completed, 
+     trial_started, card_added) once consent is sorted
+   - Follow-up: server-side subscription_started via Conversions 
+     API + GA4 Measurement Protocol (more complex, may be worth a 
+     separate session)
+
+DO NOT make any code changes yet. Just report what you found and 
+propose the build scope. I'll review and either approve the full 
+scope or ask you to start with the easier client-side 3.
+
+No code changes, no env changes, no commits.
