@@ -1,0 +1,74 @@
+Goal: Verify whether Checklists v2 Stage 2 was actually shipped, or 
+whether it was queued but never built. Diagnose only — NO code changes, 
+NO db writes. Output becomes the decision input for "verify and move on" 
+vs "build Stage 2 now."
+
+Stage 2 scope (what should exist if shipped):
+- Multiple choice field type on checklist items
+- Per-item photo attachment (one or many photos per item)
+- "Photos required" toggle per item
+- Completion semantics tied to value presence (not just a boolean check)
+- Hide Completed Fields filter (UI)
+- Hide Assigned Fields filter (UI — "show only mine")
+
+Phase 1 — DIAGNOSE only:
+
+SCHEMA AUDIT
+1. Show me the full current definition of `checklistItems` (and any 
+   `checklistItemPhotos` / `checklistItemOptions` tables) from 
+   shared/schema.ts. List every column with its type.
+2. Specifically confirm presence/absence of these columns on 
+   checklist_items:
+   - field_type (and what enum values it accepts)
+   - value_bool, value_text, value_rating, value_choice (or similar 
+     value-by-type columns)
+   - photos_required (boolean)
+   - completed_at (we know this shipped in Stage 1 — confirm it's still 
+     there)
+3. Is there a `checklist_item_photos` table or join table? If yes, show 
+   its columns. If no, is there a `photoIds` array column on items 
+   instead?
+4. Is there a `checklist_item_options` table for multiple-choice 
+   options, OR an `options` JSONB/array column on checklist_items?
+
+ROUTES AUDIT
+5. List every /api/checklists* and /api/checklist-items* route in 
+   server/routes.ts. For each: method, path, and a one-line summary 
+   of what it does. Mark which ones touch the new Stage 2 surface 
+   (photo attach, multiple choice value set, photos_required toggle).
+6. Specifically check: is there a route to attach a photo to a 
+   checklist item? To set a multiple-choice value? To toggle 
+   photos_required?
+
+STORAGE AUDIT
+7. List every storage method in server/storage.ts that touches 
+   checklist_items or checklist_item_photos. Mark which are new for 
+   Stage 2 vs. pre-existing.
+
+FRONTEND AUDIT
+8. In client/src/pages/project-detail.tsx (or wherever the Checklists 
+   tab lives), find the checklist item rendering. Does the UI 
+   currently render different inputs for different field_types 
+   (yes/no toggle vs star rating vs text input vs radio buttons for 
+   multiple choice)? Or is it still just checkboxes?
+9. Is there a photo attachment UI on individual checklist items? 
+   Camera/upload button per item?
+10. Are the "Hide Completed Fields" and "Hide Assigned Fields" toggle 
+    filters present in the Checklists UI? Where?
+
+GIT HISTORY
+11. Run: git log --oneline --all -- shared/schema.ts | head -30
+12. Run: git log --oneline --all --grep="stage 2" --grep="checklist" -i 
+    | head -20
+    Show me the last ~10 checklist-related commits with their dates 
+    and one-line messages.
+
+OUTPUT FORMAT
+End your diagnosis with a single verdict line:
+
+VERDICT: Stage 2 is [FULLY SHIPPED / PARTIALLY SHIPPED / NOT STARTED]
+- If PARTIALLY: list specifically what's done and what's missing.
+- If NOT STARTED: confirm Stage 1 columns (section_id, field_type, 
+  completed_at) are present but no Stage 2 surface exists.
+
+Do NOT modify any files. Do NOT run db:push. Do NOT push to git.
