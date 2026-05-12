@@ -1,0 +1,132 @@
+Goal: Fix the headless cold-launch cache miss in services/geofencing.ts 
+that causes background geofence events to be dropped, and bump 
+RADIUS_METERS to Apple's recommended floor. Both fixes ship together. 
+Single-file change (services/geofencing.ts), no app.json, no native 
+config, no schema, no permission changes.
+
+═════════════════════════════════════════════════════════════
+PART A — CACHE REHYDRATION FROM ASYNCSTORAGE
+═════════════════════════════════════════════════════════════
+
+A1. ADD a new constant near the top of services/geofencing.ts with 
+    the other module constants:
+    const REGISTERED_CACHE_STORAGE_KEY = "fv.geofence.registered-cache.v1";
+    
+    (The .v1 suffix lets us invalidate later by bumping the version 
+    without colliding with the old snapshot.)
+
+A2. ADD a serialize/deserialize helper pair near the existing cache 
+    declarations. The cache is a Map; JSON doesn't natively serialize 
+    Maps. Convert to an array of [key, value] entries on write, and 
+    rebuild from entries on read. Type-safe: the value shape must 
+    match what's already stored in lastRegisteredCache (whatever 
+    project/region shape is there — DON'T change it).
+
+A3. ADD a module-top-level async rehydrate function (call it 
+    rehydrateRegisteredCacheFromStorage). Its job:
+    - Read REGISTERED_CACHE_STORAGE_KEY from AsyncStorage
+    - If absent or unparseable: log and return (no throw)
+    - If valid: seed lastRegisteredCache with the entries 
+      (do NOT overwrite entries that may have been added by a 
+      concurrent foreground sync — only fill keys that are absent)
+    - Stash the rehydration Promise in a module-scoped 
+      rehydrationPromise variable so the task body can await it 
+      on cache miss (only once per process lifetime — subsequent 
+      task fires use the resolved Promise without re-reading 
+      storage)
+
+A4. KICK OFF the rehydration at module evaluation time, right 
+    after the existing TaskManager.defineTask block. Don't await 
+    it at module-level (would block module import) — let it run 
+    in parallel with whatever else mounts.
+
+A5. PERSIST the cache on every successful registerGeofences() call. 
+    After the existing line that populates lastRegisteredCache 
+    (find it inside registerGeofences — should be near line 967 
+    where startGeofencingAsync is called), add an AsyncStorage 
+    write of the serialized cache. Wrap in try/catch — storage 
+    write failure must NEVER bubble up and break registration. 
+    Log only.
+
+A6. MODIFY the cache lookup in runGeofenceTaskBody at the existing 
+    line 225-237 block. New behavior:
+    - First lookup: cache.get(regionId) — if hit, proceed as today
+    - On miss: instead of immediately rejecting, AWAIT the 
+      rehydrationPromise (with a hard timeout of 3 seconds to 
+      avoid leaving the task body hanging if storage is weird), 
+      then retry the lookup
+    - If still missing after rehydration: log the existing 
+      "[geofence] rejected: not in registration cache (cold-launch 
+      race?)" line — that's correct behavior at that point (we 
+      genuinely have no record of this region, e.g., user got 
+      removed from the project between launches)
+    - If hit after rehydration: log "[geofence] cache rehydrated 
+      from storage" so we can verify the fix is working in 
+      Sentry/console
+    
+    Preserve the existing comment at lines 234-247 OR update it to 
+    note the fix is now in place. Your call — but don't silently 
+    delete the comment.
+
+A7. CACHE INVALIDATION on sign-out. unregisterAllGeofences() should 
+    also clear the AsyncStorage snapshot (AsyncStorage.removeItem). 
+    Otherwise a logged-out user's stale cache could fire events 
+    after they log back in as a different user. Wrap in try/catch, 
+    log-only on failure.
+
+═════════════════════════════════════════════════════════════
+PART B — RADIUS BUMP
+═════════════════════════════════════════════════════════════
+
+B1. Change RADIUS_METERS at line 74 from 30 to 100.
+
+B2. Add a one-line code comment on the constant explaining the 
+    floor: "Apple's recommended minimum for reliable region 
+    monitoring. Smaller radii produce unreliable enter/exit events 
+    due to GPS accuracy floor. Downstream proximity filter 
+    (PROXIMITY_THRESHOLD_M=200m) still gates actual clock-in."
+
+B3. Confirm by grep that RADIUS_METERS is referenced in exactly 
+    one place (the startGeofencingAsync call site, ~line 960). 
+    If it's referenced elsewhere (e.g., a hardcoded comparison), 
+    flag it.
+
+═════════════════════════════════════════════════════════════
+PART C — VERIFY
+═════════════════════════════════════════════════════════════
+
+C1. TS check. Show error delta vs. baseline. Any new error in OUR 
+    code is a real bug.
+
+C2. git diff --stat. Expected files exactly:
+    - services/geofencing.ts
+    No other files. No app.json. No package.json. If anything else 
+    is in the diff, stop and explain.
+
+C3. Manual test plan for Grayson on the dev build:
+    - Install the new dev build (will already be in flight or 
+      installed by the time we ship this fix)
+    - Confirm Always location + Background App Refresh still 
+      granted
+    - Go to a project site (within ~100m radius of the project's 
+      registered coordinates), open the app, then FULLY KILL THE 
+      APP (swipe up from app switcher — do NOT just background it)
+    - Walk/drive out of the geofence (>200m away) with the app 
+      killed
+    - Wait ~5 minutes, walk/drive back into the geofence with the 
+      app STILL KILLED
+    - DO NOT OPEN THE APP. Wait another 2-3 minutes.
+    - Now open the app. Check the Timesheets dashboard.
+    - Expected: a clock-in entry with source="auto_geofence" 
+      timestamped close to when you re-entered the geofence (not 
+      when you opened the app)
+    - If the timestamp matches re-entry time (within a couple 
+      minutes), the fix is working
+    - If the timestamp matches when you opened the app, the fix 
+      didn't take effect — flag immediately
+    
+    Also: check the Sentry / console logs for "[geofence] cache 
+    rehydrated from storage" on the cold-launch fire — that's the 
+    smoking gun confirming the new path executed.
+
+DO NOT push to git. Show me the diff first.

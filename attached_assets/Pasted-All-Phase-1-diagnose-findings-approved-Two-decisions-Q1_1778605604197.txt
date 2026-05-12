@@ -1,0 +1,116 @@
+All Phase 1 diagnose findings approved. Two decisions:
+  Q1: Option (a) — request permission in AuthProvider when user 
+      becomes non-null. Existing notificationOnboardingFlags 
+      AsyncStorage flag prevents re-prompting.
+  Q2: Option (a) — plumb push-arrived clock_out_receipt payload 
+      into TimesheetContext.firedExit via a new exported 
+      setFiredExit(payload) method. No banner changes.
+
+Additional locks:
+  - Install expo-device. Use Device.isDevice to gate 
+    getExpoPushTokenAsync.
+  - DO NOT modify setNotificationHandler. Keep existing 
+    shouldShowBanner + shouldShowList config. Only ADD 
+    addNotificationReceivedListener.
+  - Use Constants.expoConfig?.extra?.eas?.projectId for the EAS 
+    project ID. No app.json edit.
+  - Android notification channel: lightColor "#f09004" (canonical 
+    Field View orange).
+  - Logout: unregisterPushTokenWithServer() BEFORE api.logout() 
+    inside AuthContext.signOut.
+
+PHASE 2 — IMPLEMENT (per the diagnose plan)
+
+Build everything you outlined in the Diagnose Summary table:
+
+I1. New module services/pushNotifications.ts (or extend existing 
+    services/notifications.ts — your call on file structure, just 
+    keep related concerns colocated):
+    - registerForPushNotificationsAsync(): permission check + 
+      request if needed → Device.isDevice gate → 
+      getExpoPushTokenAsync({ projectId }) → Android channel 
+      setup → returns token or null
+    - registerPushTokenWithServer(token): POST 
+      /api/users/push-token via existing apiFetch helper
+    - unregisterPushTokenWithServer(): DELETE 
+      /api/users/push-token
+    - Both server calls log errors but DO NOT throw — must never 
+      block app start or logout
+
+I2. AuthProvider integration:
+    - After user becomes non-null on login, call 
+      registerForPushNotificationsAsync() → 
+      registerPushTokenWithServer(token) if token returned
+    - Subscribe to Notifications.addPushTokenListener at provider 
+      mount, re-register on rotation
+    - Cleanup subscription on unmount
+    - Pre-logout: call unregisterPushTokenWithServer() inside 
+      signOut BEFORE api.logout()
+
+I3. TimesheetContext extension:
+    - Export setFiredExit(payload: {...}) setter so push handler 
+      can write to firedExit
+    - Confirm dismissFiredExit + existing kind="out" banner 
+      subscription continue to work unchanged
+
+I4. Foreground received-listener wiring (likely in 
+    app/_layout.tsx near the existing NotificationDeepLinkHandler, 
+    OR a new sibling component):
+    - Notifications.addNotificationReceivedListener(notification => ...)
+    - Parse notification.request.content.data
+    - If data.type === "clock_out_receipt": extract { timeEntryId, 
+      projectId, clockOutAt } and call setFiredExit with the 
+      payload shape TimesheetContext expects
+    - Other notification types: ignore for now (forward-compat)
+    - Cleanup listener on unmount
+
+PHASE 3 — VERIFY
+
+V1. TS check. Show error delta.
+V2. git diff --stat. Expected new/modified files:
+    - services/pushNotifications.ts (new) OR 
+      services/notifications.ts (modified)
+    - contexts/AuthContext.tsx (modified)
+    - contexts/TimesheetContext.tsx (modified, new setFiredExit 
+      export)
+    - app/_layout.tsx (modified, new received-listener wiring)
+    - services/api.ts (modified, new push-token endpoints if not 
+      added to pushNotifications.ts directly)
+    - package.json + package-lock.json (modified, expo-device 
+      added)
+    No app.json changes. No native config changes.
+
+V3. Manual test plan:
+    a) Fresh install on physical iPhone → log in → 
+       permission prompt appears → grant
+    b) Verify dev DB row updated: 
+       SELECT id, email, expo_push_token FROM users WHERE 
+       email = 'grayson@field-view.com';
+       Token should start with ExponentPushToken[
+    c) Send test push via Expo Push Tool 
+       (https://expo.dev/notifications):
+       {
+         "to": "<the token from step b>",
+         "title": "Clocked out",
+         "body": "Test Project · 3:15 PM",
+         "data": { 
+           "type": "clock_out_receipt", 
+           "timeEntryId": 1, 
+           "projectId": 1, 
+           "clockOutAt": "2026-05-12T15:15:00Z" 
+         }
+       }
+    d) Foreground: ClockReceiptBanner kind="out" should render via 
+       the firedExit path
+    e) Background → tap notification: existing 
+       NotificationDeepLinkHandler should route to project detail 
+       (this path was already working for clock-in — confirm 
+       parseClockInReceiptData handles clock_out_receipt too, OR 
+       add a sibling parser)
+    f) Sign out → check DB: expo_push_token should be NULL for 
+       that user
+    g) Sign back in → no second permission prompt 
+       (notificationOnboardingFlags prevents it) → token 
+       re-registers → DB token populated again
+
+DO NOT push to git. Show me the diff first.
