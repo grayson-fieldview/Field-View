@@ -1,0 +1,117 @@
+Goal: Diagnose why deleting an item from a project's checklist 
+(an instance of a template) also deletes the item from the parent 
+template. Diagnose only — NO code changes, NO db writes.
+
+Same bug may exist on reports — check both.
+
+═══════════════════════════════════════════════════════════
+PART 1 — DB-LEVEL REALITY CHECK
+═══════════════════════════════════════════════════════════
+
+1. In TablePlus (or via psql on the dev DB if you have a test 
+   template + instance pair), run these queries and paste the 
+   results:
+
+   -- All checklist templates
+   SELECT id, title FROM checklist_templates ORDER BY id;
+   
+   -- Items in a specific template (pick one with items)
+   SELECT id, template_id, label, field_type, sort_order 
+   FROM checklist_template_items 
+   WHERE template_id = <pick a template id>;
+   
+   -- All checklists created from that template (or in general)
+   SELECT id, title, project_id, created_at 
+   FROM checklists 
+   ORDER BY created_at DESC LIMIT 5;
+   
+   -- Items in the most recent checklist (an instance)
+   SELECT id, checklist_id, label, field_type, sort_order 
+   FROM checklist_items 
+   WHERE checklist_id = <most recent checklist id>;
+
+   THE CRITICAL CHECK: the id values in checklist_items must be 
+   DIFFERENT from the id values in checklist_template_items. If 
+   any id appears in both tables for the same label, we have a 
+   sharing bug.
+
+   ALSO: check rough row counts:
+   SELECT count(*) FROM checklist_template_items;
+   SELECT count(*) FROM checklist_items;
+
+═══════════════════════════════════════════════════════════
+PART 2 — INSTANTIATION CODE AUDIT
+═══════════════════════════════════════════════════════════
+
+2. Show me the FULL implementation of 
+   instantiateChecklistFromTemplate in server/storage.ts. Don't 
+   summarize — paste the whole function.
+
+3. Verify it actually calls tx.insert(checklistItems) (note: 
+   instance table) and NOT tx.insert(checklistTemplateItems) 
+   inside the cloning loop. Same check for sections and options.
+
+4. Check the return: does the function return the new checklist's 
+   id, or could it accidentally return the template's id?
+
+═══════════════════════════════════════════════════════════
+PART 3 — DELETE ENDPOINT AUDIT (the most likely culprit)
+═══════════════════════════════════════════════════════════
+
+5. Show me the handler for DELETE /api/checklist-items/:id in 
+   server/routes.ts. Confirm it deletes from checklist_items, 
+   not checklist_template_items.
+
+6. In the per-project checklist editor (client/src/components/ 
+   checklist-section-editor.tsx and client/src/components/ 
+   checklist-field-input.tsx, plus client/src/pages/ 
+   project-detail.tsx), find every API call that does a DELETE 
+   on an item. What URL does it hit?
+   
+   THE CRITICAL CHECK: in the project context, item delete must 
+   go to /api/checklist-items/:id, NOT /api/checklist-template-items/:id.
+
+7. Did Phase 2 accidentally extract a shared component that the 
+   per-project editor now uses, where the delete URL points at 
+   the template endpoint? Check the import graph of 
+   template-item-editor.tsx and template-section-editor.tsx — 
+   is the per-project editor importing anything from them?
+
+═══════════════════════════════════════════════════════════
+PART 4 — SCHEMA CASCADE CHECK
+═══════════════════════════════════════════════════════════
+
+8. Run \d checklist_items and \d checklist_template_items in 
+   TablePlus. List all FK constraints and any triggers. 
+   Confirm there is NO FK from checklist_items.id back to 
+   checklist_template_items.id and no trigger that deletes 
+   template rows when instance rows are deleted.
+
+═══════════════════════════════════════════════════════════
+PART 5 — REPORTS PARALLEL CHECK
+═══════════════════════════════════════════════════════════
+
+9. Repeat the same audits for reports:
+   - Is there an instantiateReportFromTemplate (or similar) 
+     storage method? Show its implementation.
+   - Does DELETE /api/report-items/:id (or whatever the 
+     reports equivalent is) target the instance table or the 
+     template table?
+   - Does the per-project reports editor hit instance endpoints 
+     or template endpoints for delete?
+
+═══════════════════════════════════════════════════════════
+OUTPUT
+═══════════════════════════════════════════════════════════
+
+End with a verdict:
+
+ROOT CAUSE: [INSTANTIATION_NOT_CLONING / WRONG_DELETE_ENDPOINT / 
+CASCADE_MISCONFIGURED / NOT_REPRODUCED]
+
+Plus a one-paragraph explanation of exactly what's happening and 
+what would need to change. Don't fix anything yet — diagnose only.
+
+Repeat the verdict for reports.
+
+No code modified. No DB writes. No git push.
