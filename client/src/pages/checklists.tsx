@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -7,16 +7,23 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Card } from "@/components/ui/card";
 import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   ClipboardCheck,
   CheckCircle2,
   Clock,
   Circle,
   Plus,
   Trash2,
-  X,
+  Pencil,
   LayoutTemplate,
 } from "lucide-react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Checklist, ChecklistTemplate } from "@shared/schema";
@@ -38,10 +45,30 @@ const statusConfig: Record<string, { label: string; icon: typeof CheckCircle2; c
 
 type TabKey = "checklists" | "templates";
 
+function readTabFromSearch(): TabKey {
+  if (typeof window === "undefined") return "checklists";
+  return new URLSearchParams(window.location.search).get("tab") === "templates"
+    ? "templates"
+    : "checklists";
+}
+
 export default function ChecklistsPage() {
-  const [activeTab, setActiveTab] = useState<TabKey>("checklists");
+  const [location, navigate] = useLocation();
+  // Honor ?tab=templates so back-links from the editor land on the right tab.
+  const [activeTab, setActiveTab] = useState<TabKey>(() => readTabFromSearch());
+
+  // Re-sync when the URL changes (back/forward, programmatic nav). wouter's
+  // useLocation only tracks the path, not the search string, so we also
+  // listen to popstate to catch ?tab= flips.
+  useEffect(() => {
+    setActiveTab(readTabFromSearch());
+    const onPop = () => setActiveTab(readTabFromSearch());
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [location]);
+  const [createOpen, setCreateOpen] = useState(false);
   const [newTemplateName, setNewTemplateName] = useState("");
-  const [newTemplateItems, setNewTemplateItems] = useState<string[]>([""]);
+  const [deleteTarget, setDeleteTarget] = useState<ChecklistTemplateWithCount | null>(null);
   const { toast } = useToast();
 
   const { data: allChecklists, isLoading: checklistsLoading } = useQuery<ChecklistWithDetails[]>({
@@ -54,14 +81,18 @@ export default function ChecklistsPage() {
 
   const createTemplate = useMutation({
     mutationFn: async () => {
-      const items = newTemplateItems.filter(i => i.trim());
-      return apiRequest("POST", "/api/checklist-templates", { title: newTemplateName, items });
+      const res = await apiRequest("POST", "/api/checklist-templates", {
+        title: newTemplateName.trim(),
+      });
+      return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (created: { id: number }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/checklist-templates"] });
       setNewTemplateName("");
-      setNewTemplateItems([""]);
+      setCreateOpen(false);
       toast({ title: "Template created" });
+      // Drop the user straight into the rich editor.
+      navigate(`/checklist-templates/${created.id}/edit`);
     },
     onError: () => {
       toast({ title: "Failed to create template", variant: "destructive" });
@@ -69,18 +100,19 @@ export default function ChecklistsPage() {
   });
 
   const deleteTemplate = useMutation({
-    mutationFn: async (id: number) => {
-      return apiRequest("DELETE", `/api/checklist-templates/${id}`);
-    },
+    mutationFn: async (id: number) => apiRequest("DELETE", `/api/checklist-templates/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/checklist-templates"] });
+      setDeleteTarget(null);
       toast({ title: "Template deleted" });
+    },
+    onError: () => {
+      toast({ title: "Failed to delete template", variant: "destructive" });
     },
   });
 
-  const getInitials = (firstName: string | null, lastName: string | null) => {
-    return `${(firstName || "")[0] || ""}${(lastName || "")[0] || ""}`.toUpperCase() || "U";
-  };
+  const getInitials = (firstName: string | null, lastName: string | null) =>
+    `${(firstName || "")[0] || ""}${(lastName || "")[0] || ""}`.toUpperCase() || "U";
 
   const isLoading = activeTab === "checklists" ? checklistsLoading : templatesLoading;
 
@@ -211,67 +243,15 @@ export default function ChecklistsPage() {
 
       {activeTab === "templates" && (
         <div className="space-y-4">
-          <Card className="p-4 space-y-3">
-            <h3 className="text-sm font-semibold">Create Template</h3>
-            <Input
-              placeholder="Template name..."
-              value={newTemplateName}
-              onChange={(e) => setNewTemplateName(e.target.value)}
-              data-testid="input-template-name"
-            />
-            <div className="space-y-2">
-              {newTemplateItems.map((item, idx) => (
-                <div key={idx} className="flex items-center gap-2">
-                  <Circle className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <Input
-                    placeholder={`Item ${idx + 1}...`}
-                    value={item}
-                    onChange={(e) => {
-                      const updated = [...newTemplateItems];
-                      updated[idx] = e.target.value;
-                      setNewTemplateItems(updated);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        setNewTemplateItems([...newTemplateItems, ""]);
-                      }
-                    }}
-                    className="flex-1"
-                    data-testid={`input-template-item-${idx}`}
-                  />
-                  {newTemplateItems.length > 1 && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => setNewTemplateItems(newTemplateItems.filter((_, i) => i !== idx))}
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </Button>
-                  )}
-                </div>
-              ))}
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-primary"
-                onClick={() => setNewTemplateItems([...newTemplateItems, ""])}
-                data-testid="button-add-template-item"
-              >
-                <Plus className="h-3.5 w-3.5 mr-1" />
-                Add Item
-              </Button>
-            </div>
-            <div className="flex justify-end">
-              <Button
-                onClick={() => { if (newTemplateName.trim()) createTemplate.mutate(); }}
-                disabled={createTemplate.isPending || !newTemplateName.trim()}
-                data-testid="button-create-template"
-              >
-                <LayoutTemplate className="h-4 w-4 mr-2" />
-                {createTemplate.isPending ? "Creating..." : "Create Template"}
-              </Button>
-            </div>
-          </Card>
+          <div className="flex justify-end">
+            <Button
+              onClick={() => setCreateOpen(true)}
+              data-testid="button-new-template"
+            >
+              <Plus className="h-4 w-4 mr-1.5" />
+              New Template
+            </Button>
+          </div>
 
           {(!templates || templates.length === 0) ? (
             <Card className="p-12">
@@ -281,16 +261,24 @@ export default function ChecklistsPage() {
                 </div>
                 <h3 className="text-lg font-semibold">No templates yet</h3>
                 <p className="text-sm text-muted-foreground max-w-sm mx-auto">
-                  Create a checklist template above. Templates can be applied when creating checklists in projects.
+                  Click "New Template" above to author a reusable checklist template with sections, items, and field types.
                 </p>
               </div>
             </Card>
           ) : (
             <div className="space-y-3">
               {templates.map((t) => (
-                <Card key={t.id} className="p-4" data-testid={`card-template-${t.id}`}>
+                <Card
+                  key={t.id}
+                  className="p-4 hover-elevate"
+                  data-testid={`card-template-${t.id}`}
+                >
                   <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-3 min-w-0">
+                    <Link
+                      href={`/checklist-templates/${t.id}/edit`}
+                      className="flex items-center gap-3 min-w-0 flex-1 cursor-pointer"
+                      data-testid={`link-template-${t.id}`}
+                    >
                       <div className="flex h-9 w-9 items-center justify-center rounded-md bg-muted shrink-0">
                         <LayoutTemplate className="h-4 w-4 text-muted-foreground" />
                       </div>
@@ -298,15 +286,28 @@ export default function ChecklistsPage() {
                         <span className="text-sm font-semibold" data-testid={`text-template-title-${t.id}`}>{t.title}</span>
                         <p className="text-xs text-muted-foreground">{t.itemCount} item{t.itemCount !== 1 ? "s" : ""}</p>
                       </div>
+                    </Link>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <Link href={`/checklist-templates/${t.id}/edit`}>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          data-testid={`button-edit-template-${t.id}`}
+                          aria-label="Edit template"
+                        >
+                          <Pencil className="h-4 w-4 text-muted-foreground" />
+                        </Button>
+                      </Link>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setDeleteTarget(t)}
+                        data-testid={`button-delete-template-${t.id}`}
+                        aria-label="Delete template"
+                      >
+                        <Trash2 className="h-4 w-4 text-muted-foreground" />
+                      </Button>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => deleteTemplate.mutate(t.id)}
-                      data-testid={`button-delete-template-${t.id}`}
-                    >
-                      <Trash2 className="h-4 w-4 text-muted-foreground" />
-                    </Button>
                   </div>
                 </Card>
               ))}
@@ -314,6 +315,69 @@ export default function ChecklistsPage() {
           )}
         </div>
       )}
+
+      {/* New template dialog */}
+      <Dialog open={createOpen} onOpenChange={(o) => { if (!o) { setCreateOpen(false); setNewTemplateName(""); } }}>
+        <DialogContent data-testid="dialog-new-template">
+          <DialogHeader>
+            <DialogTitle>New Template</DialogTitle>
+            <DialogDescription>
+              Give your template a name. You'll add sections and items on the next screen.
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            placeholder="Template name..."
+            value={newTemplateName}
+            onChange={(e) => setNewTemplateName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && newTemplateName.trim() && !createTemplate.isPending) {
+                createTemplate.mutate();
+              }
+            }}
+            autoFocus
+            data-testid="input-new-template-name"
+          />
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => { setCreateOpen(false); setNewTemplateName(""); }}
+              disabled={createTemplate.isPending}
+              data-testid="button-new-template-cancel"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => createTemplate.mutate()}
+              disabled={!newTemplateName.trim() || createTemplate.isPending}
+              data-testid="button-new-template-create"
+            >
+              {createTemplate.isPending ? "Creating..." : "Create"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirm */}
+      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => { if (!o) setDeleteTarget(null); }}>
+        <AlertDialogContent data-testid="dialog-delete-template">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this template?</AlertDialogTitle>
+            <AlertDialogDescription>
+              "{deleteTarget?.title}" will be permanently deleted. Project checklists already created from this template are not affected.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-delete-template-cancel">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => { if (deleteTarget) deleteTemplate.mutate(deleteTarget.id); }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-delete-template-confirm"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

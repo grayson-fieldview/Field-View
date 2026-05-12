@@ -1,0 +1,161 @@
+Goal: Ship Checklists v2 Stage 3 — Phase 2 of 3. Build the rich 
+template editor UI that mirrors the per-project checklist editor's 
+capabilities. Purely client-side; all backend routes already exist 
+from Phase 1.
+
+UX direction: a dedicated /checklist-templates/:id/edit page reached 
+by clicking a template on the /checklists Templates tab. Matches how 
+report templates work (navigate to /templates/:id/edit). The current 
+flat-list create form on the Templates tab gets replaced by a 
+"+ New Template" button.
+
+═════════════════════════════════════════════════════════════
+PART A — ROUTE + BACKEND CHECK
+═════════════════════════════════════════════════════════════
+
+A1. Confirm whether GET /api/checklist-templates/:id (single template 
+    fetch) exists in server/routes.ts. If not, ADD it:
+    - GET /api/checklist-templates/:id
+    - Middleware: requireReadAccess + verifyChecklistTemplateAccess
+    - Returns the template row (id, title, description, accountId, 
+      createdById, createdAt)
+    This is the only backend touch in this phase.
+
+A2. Add the page route in client/src/App.tsx (after other authenticated 
+    edit routes):
+    <Route path="/checklist-templates/:id/edit" component={ChecklistTemplateEdit} />
+    Follow whatever lazy-import / code-split convention the app uses 
+    for similar pages (mirror /reports/:id/edit).
+
+═════════════════════════════════════════════════════════════
+PART B — NEW PAGE: client/src/pages/checklist-template-edit.tsx
+═════════════════════════════════════════════════════════════
+
+B1. Page header:
+    - "← Back to Checklists" link → /checklists?tab=templates
+    - Editable template title (inline rename, PATCH 
+      /api/checklist-templates/:id on blur)
+    - Optional description field (inline edit, same PATCH)
+
+B2. Body — stack of section editors:
+    - Items with NULL section_id render in an implicit "Untitled" 
+      section at top (matches per-project pattern)
+    - Below all sections: "+ Add Section" full-width button
+
+B3. Data fetching:
+    - useQuery: GET /api/checklist-templates/:id (template metadata)
+    - useQuery: GET /api/checklist-templates/:id/sections
+    - useQuery: GET /api/checklist-templates/:id/items
+    - For multiple_choice items: lazy-fetch options via 
+      /api/checklist-template-items/:itemId/options on first expand 
+      (mirror the MultipleChoiceField pattern in 
+      checklist-field-input.tsx)
+
+B4. Section row component (new — likely 
+    client/src/components/template-section-editor.tsx):
+    - Drag handle (left edge)
+    - Editable section title (inline, PATCH 
+      /api/checklist-template-sections/:id on blur)
+    - Renders the item rows inside
+    - "+ Add item" footer with field type dropdown (default Yes/No); 
+      on click creates POST /api/checklist-templates/:id/items with 
+      { label: "Untitled item", fieldType, sectionId }
+    - Delete section button (items in that section get section_id 
+      set to NULL via ON DELETE SET NULL — they re-render in the 
+      Untitled section, matching the per-project editor)
+
+B5. Item row component (new — likely 
+    client/src/components/template-item-editor.tsx):
+    - Drag handle
+    - Editable label (PATCH /api/checklist-template-items/:id on blur)
+    - Field type dropdown: Yes/No, Rating, Text, Multiple Choice 
+      (PATCH fieldType on change)
+    - For multiple_choice ONLY: inline options editor
+        - List of existing options with edit + delete inline
+        - "+ Add option" input → POST 
+          /api/checklist-template-items/:id/options with { label }
+        - Drag-to-reorder options → POST 
+          /api/checklist-template-items/:id/options/reorder
+    - "Photo required to complete" toggle (PATCH photosRequired)
+    - "Add notes" affordance — collapsible textarea (PATCH notes)
+    - Delete button (one-click for items is fine; section delete 
+      gets a confirm)
+
+B6. Drag-to-reorder:
+    - Match whatever drag library the per-project checklist editor 
+      uses (check checklist-section-editor.tsx imports). If it uses 
+      dnd-kit, use dnd-kit. If react-beautiful-dnd, use that. 
+      Consistency matters.
+    - Within section: POST /api/checklist-templates/:id/items/reorder 
+      with orderedIds
+    - Across sections: PATCH item with new sectionId, then reorder 
+      destination
+    - Section reorder: POST 
+      /api/checklist-templates/:id/sections/reorder
+
+═════════════════════════════════════════════════════════════
+PART C — UPDATE /checklists TEMPLATES TAB 
+        (client/src/pages/checklists.tsx)
+═════════════════════════════════════════════════════════════
+
+C1. REMOVE the inline Create Template form (the Name + flat items 
+    + Create Template button block). Replace with a single 
+    "+ New Template" button at the top of the Templates tab.
+
+C2. "+ New Template" button behavior:
+    - Opens a small Dialog with a single Name input + Cancel/Create
+    - On Create: POST /api/checklist-templates with { title: name } 
+      (no items)
+    - On success: navigate to /checklist-templates/:newId/edit
+
+C3. Each existing template card:
+    - Clickable → navigate to /checklist-templates/:id/edit
+    - Add pencil/edit icon as redundant explicit affordance
+    - Wrap the existing delete button in AlertDialog confirm 
+      (mirror the report templates pattern). No more one-click delete.
+
+C4. Templates tab badge count stays as-is.
+
+═════════════════════════════════════════════════════════════
+PART D — VERIFICATION
+═════════════════════════════════════════════════════════════
+
+D1. npm run check. Show TS error delta. Any new error in OUR code = 
+    real bug. Don't hand-wave.
+
+D2. git diff --stat. Expected files:
+    - server/routes.ts (only if A1 needed the new GET endpoint)
+    - client/src/App.tsx
+    - client/src/pages/checklists.tsx
+    - client/src/pages/checklist-template-edit.tsx (new)
+    - client/src/components/template-section-editor.tsx (new)
+    - client/src/components/template-item-editor.tsx (new)
+    
+    If ANY other file changes, stop and explain.
+
+D3. Document the manual test plan you expect me to run (don't 
+    execute — just describe). Should cover: new template creation, 
+    each field type, MC options, photos_required, notes, section 
+    add/rename/delete, item reorder within and across sections, 
+    section reorder, persistence on refresh, applying the rich 
+    template to a project and confirming all fields clone faithfully.
+
+═════════════════════════════════════════════════════════════
+DO NOT
+═════════════════════════════════════════════════════════════
+- DO NOT push to GitHub. Show me the diff first.
+- DO NOT touch backend routes except adding GET 
+  /api/checklist-templates/:id if missing.
+- DO NOT add requireAdminOrManager anywhere — templates stay 
+  open to all write users.
+- DO NOT modify the per-project checklist editor 
+  (client/src/pages/project-detail.tsx, 
+  client/src/components/checklist-section-editor.tsx, 
+  checklist-field-input.tsx, etc.) — those are the reference 
+  patterns. Read them but don't touch them. (Exception: if you 
+  identify a small component worth sharing between the two editors, 
+  extract it carefully — but the per-project editor must still 
+  work unchanged.)
+- DO NOT remove the legacy POST /api/checklist-templates 
+  { items: string[] } seed shape — leave it in the route handler 
+  for backward compat even though the frontend stops using it.

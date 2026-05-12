@@ -40,6 +40,7 @@ import ChecklistsPage from "@/pages/checklists";
 import ReportsPage from "@/pages/reports";
 import ReportEditPage from "@/pages/report-edit";
 import TemplateEditPage from "@/pages/template-edit";
+import ChecklistTemplateEditPage from "@/pages/checklist-template-edit";
 import GalleryPage from "@/pages/gallery";
 import PublicReportPage from "@/pages/public-report";
 import TasksPage from "@/pages/tasks";
@@ -224,6 +225,9 @@ function AuthenticatedLayout() {
               </Route>
               <Route path="/templates/:id/edit">
                 {(params) => <TemplateEditPage id={params.id} />}
+              </Route>
+              <Route path="/checklist-templates/:id/edit">
+                {(params) => <ChecklistTemplateEditPage id={params.id} />}
               </Route>
               <Route path="/analytics" component={AnalyticsPage} />
               <Route path="/calendar" component={CalendarPage} />

@@ -3962,6 +3962,18 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/checklist-templates/:id", requireReadAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid id" });
+      const template = await storage.getChecklistTemplate(id);
+      if (!template || template.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
+      res.json(template);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch template" });
+    }
+  });
+
   app.get("/api/checklist-templates/:id/items", requireReadAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
