@@ -1,0 +1,54 @@
+Approved. Build the PR as scoped in the diagnose.
+
+Button label: "Choose a plan" (not "Add payment method"). 
+Keep data-testid="button-add-payment-method" unchanged.
+
+PHASE 2 — IMPLEMENT
+
+P1. In client/src/pages/settings.tsx (BillingCard):
+    - Add import { useLocation } from "wouter" (or match the 
+      existing import pattern for wouter hooks elsewhere in this 
+      file)
+    - Inside BillingCard: const [, setLocation] = useLocation();
+    - Delete the SETTINGS_MONTHLY_PRICE_ID constant (line 386)
+    - Delete the entire checkoutMutation block including its 
+      onSuccess/onError (lines 387–409)
+    - Delete the leading comment flagging "Session 3 BUG 5" 
+      (lines 381–385)
+    - Change the "Add payment method" Button's onClick to:
+      () => setLocation("/subscribe")
+    - Change the button label to "Choose a plan"
+    - Keep data-testid="button-add-payment-method" exactly as-is
+    - Remove the disabled / isPending wiring on this button 
+      (no async work anymore — pure client-side nav)
+    - DO NOT TOUCH the Manage Billing path (portalMutation + 
+      "Manage Billing" button stay exactly as they are)
+
+P2. In server/lib/billing.ts:
+    - Update the comment block at lines 9–13 to remove the 
+      VITE_STRIPE_PRICE_MONTHLY reference. The comment should 
+      accurately describe the current env var contract 
+      (server vars only).
+
+PHASE 3 — VERIFY
+
+V1. npm run check. Show TS error delta. New errors in OUR code 
+    must be addressed.
+
+V2. git diff --stat. Expected files exactly:
+    - client/src/pages/settings.tsx
+    - server/lib/billing.ts
+    No other files. No new files. No backend route changes. 
+    No schema.
+
+V3. Manual test plan to describe (don't run):
+    - As a trialing user with no stripeCustomerId, open 
+      Settings → Billing
+    - Click "Choose a plan" → lands on /subscribe
+    - Confirm the plan picker renders (Monthly/Annual toggle, 
+      team size stepper, server-resolved prices)
+    - Existing trial banner CTAs in App.tsx (Add Card buttons 
+      on both trial-active and trial-expired banners) behavior 
+      is UNCHANGED — they still route to /subscribe as before
+
+DO NOT push. Show me the diff before I approve.

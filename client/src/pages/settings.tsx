@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -352,6 +353,7 @@ function SeatCountWidget() {
 function BillingCard() {
   const { user } = useAuth();
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
 
   const portalMutation = useMutation({
     mutationFn: async () => {
@@ -375,36 +377,6 @@ function BillingCard() {
         description: error.message,
         variant: "destructive",
       });
-    },
-  });
-
-  // Session 3 BUG 5 fix: sourced from VITE_STRIPE_PRICE_MONTHLY env var
-  // instead of a hardcoded test-mode price ID that didn't exist in live
-  // Stripe. Mirrors the banner CTA in App.tsx; will be removed in
-  // Session 3 Commit B when this CTA also routes to the /subscribe
-  // plan picker.
-  const SETTINGS_MONTHLY_PRICE_ID = import.meta.env.VITE_STRIPE_PRICE_MONTHLY as string;
-  const checkoutMutation = useMutation({
-    mutationFn: async () => {
-      const res = await fetch("/api/create-checkout-session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          lineItems: [{ priceId: SETTINGS_MONTHLY_PRICE_ID, quantity: 1 }],
-        }),
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.message || "Failed to start checkout");
-      }
-      return res.json();
-    },
-    onSuccess: (data) => {
-      if (data.url) window.location.href = data.url;
-    },
-    onError: (error: Error) => {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
     },
   });
 
@@ -462,19 +434,12 @@ function BillingCard() {
             </Button>
           ) : (status === "trialing" || status === "trial") ? (
             <Button
-              onClick={() => checkoutMutation.mutate()}
-              disabled={checkoutMutation.isPending}
+              onClick={() => setLocation("/subscribe")}
               className="bg-[#F09000] hover:bg-[#d98000] text-white"
               data-testid="button-add-payment-method"
             >
-              {checkoutMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <>
-                  <CreditCard className="h-4 w-4 mr-2" />
-                  Add payment method
-                </>
-              )}
+              <CreditCard className="h-4 w-4 mr-2" />
+              Choose a plan
             </Button>
           ) : null}
         </div>

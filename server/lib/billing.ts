@@ -6,13 +6,12 @@
 //     • STRIPE_PRICE_SEAT_ADDON_MONTHLY   — additional-seat add-on, monthly billing
 //     • STRIPE_PRICE_SEAT_ADDON_ANNUAL    — additional-seat add-on, annual billing
 //
-//   Frontend (import.meta.env, baked into the Vite bundle at build time):
-//     • VITE_STRIPE_PRICE_MONTHLY         — used by the trial banner Add Card
-//                                           CTA in client/src/App.tsx; will be
-//                                           removed in Session 3 Commit B when
-//                                           the CTA routes to /subscribe instead
+//   No frontend (VITE_*) Stripe price vars are required. The /subscribe
+//   plan picker fetches live prices from /api/stripe/prices, which is
+//   resolved server-side from the four vars above. All trial/add-card
+//   CTAs (App.tsx banners + Settings → Billing) route to /subscribe.
 //
-// All five must be set in Vercel for production. The two SEAT_ADDON vars
+// All four must be set in Vercel for production. The two SEAT_ADDON vars
 // fall back to legacy product-name string-match (with a warn log) if both
 // are unset, so the app degrades gracefully but mis-counts custom plans.
 import { db } from "../db";
