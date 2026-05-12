@@ -1,0 +1,56 @@
+Goal: Add a top-level ErrorBoundary in client/src/App.tsx so a 
+React render error in any route shows a friendly fallback UI 
+instead of a blank white screen. Pure client-side, single file 
+(maybe two if you extract the boundary to its own component file).
+
+PHASE 1 — DIAGNOSE (2 min)
+
+D1. Confirm there is no existing top-level ErrorBoundary already 
+    wrapping the route tree in client/src/App.tsx. If there is, 
+    stop and tell me.
+
+D2. Check whether Sentry is wired up client-side. If yes, the 
+    ErrorBoundary should call Sentry.captureException(error) 
+    inside componentDidCatch (or whatever the equivalent hook is 
+    for the SDK version in use). Show me what's imported from 
+    @sentry/react today.
+
+PHASE 2 — IMPLEMENT
+
+P1. Create client/src/components/ErrorBoundary.tsx (class 
+    component, since hooks don't expose componentDidCatch yet):
+    - Renders fallback UI on caught render errors
+    - Fallback UI: centered card with the Field View logo, message 
+      "Something went wrong loading this page", a "Reload page" 
+      button that calls window.location.reload(), and a small 
+      "Return to dashboard" link that hard-navigates to /
+    - Use the app's Tailwind / component conventions; should look 
+      like it belongs in the Field View UI
+    - Calls Sentry.captureException(error, { extra: errorInfo }) 
+      in componentDidCatch if Sentry is wired
+    - Resets error state on route change (use a route-aware reset 
+      via the location pathname as a key on a wrapper component, 
+      OR just leave it as "user clicks Reload" — whichever is 
+      cleaner in our stack)
+
+P2. Wrap the entire route Switch in client/src/App.tsx with the 
+    new ErrorBoundary, INSIDE the auth provider / query client 
+    provider / theme provider boundary so those still mount, 
+    but OUTSIDE the route Switch so a single bad route doesn't 
+    take down everything.
+
+PHASE 3 — VERIFY
+
+V1. npm run check. Show TS error delta.
+
+V2. git diff --stat. Expected files:
+    - client/src/App.tsx
+    - client/src/components/ErrorBoundary.tsx (new)
+    No backend, no schema, no other UI files.
+
+V3. Manual test plan (don't run): how would I trigger a render 
+    error in dev to verify the fallback UI shows? (Suggest a 
+    one-line throw in any component for the test, with the 
+    instruction to revert after verifying.)
+
+DO NOT push. Show me the diff.

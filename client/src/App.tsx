@@ -13,6 +13,7 @@ import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -379,17 +380,19 @@ function App() {
         <TooltipProvider>
           <Toaster />
           <TrialExpiredToastBridge />
-          <Switch>
-            <Route path="/gallery/:token">
-              {(params) => <GalleryPage token={params.token} />}
-            </Route>
-            <Route path="/report/:token">
-              {(params) => <PublicReportPage token={params.token} />}
-            </Route>
-            <Route>
-              <AppContent />
-            </Route>
-          </Switch>
+          <ErrorBoundary>
+            <Switch>
+              <Route path="/gallery/:token">
+                {(params) => <GalleryPage token={params.token} />}
+              </Route>
+              <Route path="/report/:token">
+                {(params) => <PublicReportPage token={params.token} />}
+              </Route>
+              <Route>
+                <AppContent />
+              </Route>
+            </Switch>
+          </ErrorBoundary>
         </TooltipProvider>
       </QueryClientProvider>
     </ThemeProvider>
