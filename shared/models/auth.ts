@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import { boolean, index, integer, jsonb, pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
+import { z } from "zod";
 
 export const sessions = pgTable(
   "sessions",
@@ -103,10 +104,17 @@ export const invitations = pgTable("invitations", {
   status: varchar("status").default("pending").notNull(),
   invitedById: varchar("invited_by_id").references(() => users.id),
   expiresAt: timestamp("expires_at").notNull(),
+  // S41: Project IDs to auto-assign to the invitee at acceptance time. Only
+  // meaningful for role="restricted" (validated at POST /api/invitations).
+  // Empty array means no auto-assignment (post-acceptance assignment via
+  // POST /api/projects/:id/assignments still works).
+  assignedProjectIds: jsonb("assigned_project_ids").$type<number[]>().notNull().default(sql`'[]'::jsonb`),
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => [
   index("invitations_account_id_idx").on(table.accountId),
 ]);
+
+export const assignedProjectIdsSchema = z.array(z.number().int().positive()).default([]);
 
 export type UpsertUser = typeof users.$inferInsert;
 export type User = typeof users.$inferSelect;

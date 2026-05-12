@@ -12,6 +12,7 @@ import { authStorage } from "./storage";
 import { db, pool } from "../../db";
 import { eq, and, isNull, isNotNull } from "drizzle-orm";
 import { passwordResetTokens, users, accounts, invitations, type User } from "@shared/models/auth";
+import { projectAssignments } from "@shared/schema";
 import { sendPasswordResetEmail, sendEmailVerificationEmail, sendWelcomeEmail, sendAccountRestoredEmail } from "../../services/email";
 import { getAccountBilling, overlayAccountBillingOnUser, computeAccessLevel } from "../../lib/billing";
 import { sanitizeUserForViewer } from "../../lib/userVisibility";
@@ -122,7 +123,8 @@ async function findOrCreateOAuthUser(opts: {
       .limit(1);
     initialSubscriptionStatus = acct?.subscriptionStatus ?? "none";
     initialTrialEndsAt = acct?.trialEndsAt ?? null;
-    await db.update(invitations).set({ status: "accepted" }).where(eq(invitations.id, invitation.id));
+    // S41: stash for post-user-create assignment tx below.
+    (opts as any)._invitationForAssignment = invitation;
   } else {
     // Session 1 trial-flow rework: OAuth self-serve signups also start in
     // a 14-day no-card trial, mirroring the /api/register trial branch.
@@ -151,7 +153,56 @@ async function findOrCreateOAuthUser(opts: {
     subscriptionStatus: initialSubscriptionStatus,
     trialEndsAt: initialTrialEndsAt,
   } as any);
+
+  // S41: invite acceptance — atomically mark invitation accepted and seed
+  // project_assignments for any restricted-role pre-assignments. If a
+  // referenced project was deleted between invite-send and acceptance,
+  // the FK violation rolls back BOTH the status flip and the assignments
+  // (invitation stays pending — admin can cancel/resend or re-invite).
+  const invitationForAssignment = (opts as any)._invitationForAssignment as
+    | typeof invitations.$inferSelect
+    | undefined;
+  if (invitationForAssignment) {
+    await applyInvitationAcceptance(invitationForAssignment, created.id);
+  }
+
   return { user: created, isNewSignup: true };
+}
+
+/**
+ * S41: shared acceptance writer. Wraps "mark invitation accepted" + "seed
+ * project_assignments rows" in a single tx. Called from both the password
+ * (/api/register) and OAuth (findOrCreateOAuthUser) acceptance paths.
+ *
+ * Failure semantics: any FK or write failure rolls back BOTH the status flip
+ * and any partial assignments. The user row is already created (outside this
+ * tx) — they exist and can sign in, but their invitation stays pending so
+ * an admin can re-attempt. Worst-case orphan is a created user with role +
+ * accountId but no auto-assignments; a manager can assign manually via
+ * POST /api/projects/:id/assignments.
+ */
+async function applyInvitationAcceptance(
+  invitation: typeof invitations.$inferSelect,
+  newUserId: string,
+): Promise<void> {
+  const projectIds = (invitation.assignedProjectIds ?? []) as number[];
+  await db.transaction(async (tx) => {
+    await tx.update(invitations).set({ status: "accepted" }).where(eq(invitations.id, invitation.id));
+    if (projectIds.length > 0) {
+      await tx.insert(projectAssignments).values(
+        projectIds.map((projectId) => ({
+          projectId,
+          userId: newUserId,
+          assignedById: invitation.invitedById ?? null,
+        })),
+      );
+    }
+  });
+  if (projectIds.length > 0) {
+    console.log(
+      `[invite-accept] assigned user ${newUserId} to ${projectIds.length} projects from invitation ${invitation.id}`,
+    );
+  }
 }
 
 // 30-day soft-delete grace period. Set deleted_at via DELETE /api/users/me or DELETE /api/account.
@@ -471,6 +522,7 @@ export async function setupAuth(app: Express) {
       let firstName: string | null = null;
       let lastName: string | null = null;
 
+      let invitationForAssignment: typeof invitations.$inferSelect | null = null;
       if (inviteToken) {
         const [invitation] = await db.select().from(invitations).where(
           and(eq(invitations.token, inviteToken), eq(invitations.status, "pending"))
@@ -485,7 +537,10 @@ export async function setupAuth(app: Express) {
         role = invitation.role;
         firstName = invitation.firstName ?? null;
         lastName = invitation.lastName ?? null;
-        await db.update(invitations).set({ status: "accepted" }).where(eq(invitations.id, invitation.id));
+        // S41: defer the status flip + project_assignments seed until AFTER
+        // the user row is created (so we have newUserId to write into
+        // project_assignments.user_id). See applyInvitationAcceptance().
+        invitationForAssignment = invitation;
       }
 
       // Session 1 of trial-flow rework: new self-serve signups start in a
@@ -543,6 +598,11 @@ export async function setupAuth(app: Express) {
         // by the admin who invited them); trial signups must complete it.
         profileCompletedAt: inviteToken ? new Date() : null,
       });
+
+      // S41: invite acceptance writer — atomic invitation status flip + project_assignments seed.
+      if (invitationForAssignment) {
+        await applyInvitationAcceptance(invitationForAssignment, user.id);
+      }
 
       if (!isCompAccount(user.email)) {
         const name = [user.firstName, user.lastName].filter(Boolean).join(" ").trim() || "(no name)";

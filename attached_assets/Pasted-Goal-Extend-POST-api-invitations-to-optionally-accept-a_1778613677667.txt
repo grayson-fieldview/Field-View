@@ -1,0 +1,88 @@
+Goal: Extend POST /api/invitations to optionally accept 
+assignedProjectIds[] and apply those assignments inside the existing 
+invitation-acceptance transaction. Required for the mobile Team UX 
+full-fix shipping in parallel.
+
+This is a schema-touching deploy. HARD RULE applies: migration runs 
+on prod RDS BEFORE Vercel promotes. Build everything; Grayson runs 
+migration manually, then pushes code.
+
+PART A — SCHEMA (shared/schema.ts)
+
+Add to invitations table:
+- assigned_project_ids: jsonb default '[]'::jsonb NOT NULL
+  (stores integer[] of project IDs; default empty array)
+
+Add corresponding Drizzle types + Zod schema if relevant.
+
+PART B — MIGRATION SCRIPT
+
+Create script/migrations/migrate_session41_invitation_project_assignments.ts
+Modeled on session22 timesheets template. Required:
+- DDL in db.transaction()
+- Env guards (rds.amazonaws.com or neon.tech; ALLOW_PROD_MIGRATION=yes for RDS)
+- Entry-point guard, IF NOT EXISTS, host logging
+- Steps: ALTER TABLE invitations ADD COLUMN IF NOT EXISTS 
+  assigned_project_ids jsonb NOT NULL DEFAULT '[]'::jsonb
+- Verification: SELECT count(*) FROM invitations + 
+  SELECT count(*) FROM invitations WHERE assigned_project_ids != '[]'::jsonb
+
+Run on Neon dev, paste full log + \d invitations after. DO NOT run 
+on prod.
+
+PART C — POST /api/invitations HANDLER UPDATE (server/routes.ts)
+
+Extend body destructure to include:
+- assignedProjectIds: number[] | undefined (defaults to [] if missing)
+
+Validation logic:
+- If role !== "restricted" AND assignedProjectIds.length > 0: 
+  return 400 { error: "assigned_projects_invalid_role", message: 
+  "Project assignments only apply to restricted role" }
+- If role === "restricted" AND assignedProjectIds.length === 0: 
+  allowed (assignment can happen post-acceptance via existing endpoints)
+- All projectIds must belong to req.user's account. Validate via:
+  SELECT id FROM projects WHERE id = ANY($1) AND account_id = $2
+  If returned count !== assignedProjectIds.length: 400 { error: 
+  "project_not_found", message: "One or more project IDs not found 
+  or not accessible" }
+
+On success, store the validated array in invitation.assigned_project_ids.
+
+PART D — ACCEPTANCE FLOW
+
+Find where invitations are consumed (the register-via-token or 
+accept-invite endpoint — likely in 
+server/replit_integrations/auth/routes.ts or a separate accept 
+handler). After the new user row is created inside the existing 
+acceptance transaction:
+
+- For each projectId in invitation.assigned_project_ids, INSERT into 
+  project_assignments (userId = new user's id, projectId, createdAt = 
+  now()). Use the same tx — acceptance and assignments atomic.
+- On any failure inside the tx, rollback so no orphaned assignments.
+
+Log "[invite-accept] assigned user X to N projects from invitation Y" 
+for verifiability.
+
+PART E — VERIFY
+
+E1. npm run check, show error delta
+E2. git diff --stat, expected files:
+    - shared/schema.ts
+    - script/migrations/migrate_session41_invitation_project_assignments.ts (new)
+    - server/routes.ts
+    - server/replit_integrations/auth/routes.ts (or wherever acceptance lives)
+    No client/, no UI files. If client/ touched, stop and explain.
+
+E3. Document the manual test plan I'll run:
+    - POST /api/invitations with role=restricted + assignedProjectIds=[27,31] → 
+      DB row should reflect both IDs
+    - Accept via the inviteLink → new user created + 
+      project_assignments rows for [27, 31]
+    - POST with role=standard + assignedProjectIds=[27] → 400 with 
+      assigned_projects_invalid_role
+    - POST with role=restricted + assignedProjectIds=[99999] → 400 
+      with project_not_found
+
+DO NOT push, DO NOT run migration on prod. Show diff first.

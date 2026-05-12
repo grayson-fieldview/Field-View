@@ -9,7 +9,7 @@ import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
 import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistSectionSchema, insertChecklistItemOptionSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, checklistItems, checklistSections, checklistItemOptions, checklistItemPhotos, checklistTemplates, checklistTemplateSections, checklistTemplateItems, checklistTemplateItemOptions, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, pendingGeofenceExits, templateConfigSchema } from "@shared/schema";
 import { executeAutoClockOut } from "./lib/timesheets";
-import { users, invitations, accounts } from "@shared/models/auth";
+import { users, invitations, accounts, assignedProjectIdsSchema } from "@shared/models/auth";
 import { computeSeatUsage } from "./lib/seats";
 import { db } from "./db";
 import { eq, sql, and, or, inArray, count, isNull, desc } from "drizzle-orm";
@@ -2563,7 +2563,7 @@ export async function registerRoutes(
   app.post("/api/invitations", requireWriteAccess, requireAdminOrManager, async (req: any, res) => {
     try {
       const currentUser = req.user;
-      const { email, role, firstName, lastName } = req.body || {};
+      const { email, role, firstName, lastName, assignedProjectIds: rawAssignedProjectIds } = req.body || {};
       if (!email) return res.status(400).json({ message: "Email is required" });
       const trimmedFirst = typeof firstName === "string" ? firstName.trim() : "";
       const trimmedLast = typeof lastName === "string" ? lastName.trim() : "";
@@ -2571,12 +2571,46 @@ export async function registerRoutes(
         return res.status(400).json({ message: "First and last name are required." });
       }
       const validRoles = ["admin", "manager", "standard", "restricted"];
-      if (!validRoles.includes(role || "standard")) {
+      const effectiveRole = role || "standard";
+      if (!validRoles.includes(effectiveRole)) {
         return res.status(400).json({ message: "Invalid role" });
       }
-      if (currentUser.role === "manager" && (role === "admin" || role === "manager")) {
+      if (currentUser.role === "manager" && (effectiveRole === "admin" || effectiveRole === "manager")) {
         return res.status(403).json({ message: "Managers can only invite standard or restricted users" });
       }
+
+      // S41: validate optional assignedProjectIds[]. Only meaningful for restricted role.
+      // Empty/missing = no auto-assignment at acceptance (post-acceptance flow still works).
+      const parsedAssignedIds = assignedProjectIdsSchema.safeParse(rawAssignedProjectIds ?? []);
+      if (!parsedAssignedIds.success) {
+        return res.status(400).json({
+          error: "assigned_projects_invalid",
+          message: "assignedProjectIds must be an array of positive integers",
+        });
+      }
+      const assignedProjectIds = parsedAssignedIds.data;
+      if (effectiveRole !== "restricted" && assignedProjectIds.length > 0) {
+        return res.status(400).json({
+          error: "assigned_projects_invalid_role",
+          message: "Project assignments only apply to restricted role",
+        });
+      }
+      if (assignedProjectIds.length > 0) {
+        const found = await db
+          .select({ id: projects.id })
+          .from(projects)
+          .where(and(
+            inArray(projects.id, assignedProjectIds),
+            eq(projects.accountId, currentUser.accountId),
+          ));
+        if (found.length !== assignedProjectIds.length) {
+          return res.status(400).json({
+            error: "project_not_found",
+            message: "One or more project IDs not found or not accessible",
+          });
+        }
+      }
+
       const existingUser = await authStorage.getUserByEmail(email);
       if (existingUser) {
         return res.status(409).json({ message: "A user with this email already exists" });
@@ -2645,10 +2679,11 @@ export async function registerRoutes(
           email: email.toLowerCase(),
           firstName: trimmedFirst,
           lastName: trimmedLast,
-          role: role || "standard",
+          role: effectiveRole,
           token,
           invitedById: currentUser.id,
           expiresAt,
+          assignedProjectIds,
         }).returning();
         return { kind: "ok", invitation: created };
       });
