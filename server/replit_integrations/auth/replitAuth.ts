@@ -93,6 +93,9 @@ async function findOrCreateOAuthUser(opts: {
   let role: string;
   let initialSubscriptionStatus: string;
   let initialTrialEndsAt: Date | null;
+  // S41: stash the validated invitation here so we can run the
+  // applyInvitationAcceptance tx AFTER the user row is created.
+  let invitationForAssignment: typeof invitations.$inferSelect | null = null;
 
   // TODO: Terms acceptance gate for OAuth signups. Users signing up via Google
   // currently bypass the terms checkbox on /register. Consider adding a
@@ -123,8 +126,8 @@ async function findOrCreateOAuthUser(opts: {
       .limit(1);
     initialSubscriptionStatus = acct?.subscriptionStatus ?? "none";
     initialTrialEndsAt = acct?.trialEndsAt ?? null;
-    // S41: stash for post-user-create assignment tx below.
-    (opts as any)._invitationForAssignment = invitation;
+    // S41: defer status flip + project_assignments seed until after user upsert.
+    invitationForAssignment = invitation;
   } else {
     // Session 1 trial-flow rework: OAuth self-serve signups also start in
     // a 14-day no-card trial, mirroring the /api/register trial branch.
@@ -159,9 +162,6 @@ async function findOrCreateOAuthUser(opts: {
   // referenced project was deleted between invite-send and acceptance,
   // the FK violation rolls back BOTH the status flip and the assignments
   // (invitation stays pending — admin can cancel/resend or re-invite).
-  const invitationForAssignment = (opts as any)._invitationForAssignment as
-    | typeof invitations.$inferSelect
-    | undefined;
   if (invitationForAssignment) {
     await applyInvitationAcceptance(invitationForAssignment, created.id);
   }
