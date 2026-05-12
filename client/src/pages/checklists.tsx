@@ -37,10 +37,32 @@ type ChecklistWithDetails = Checklist & {
 
 type ChecklistTemplateWithCount = ChecklistTemplate & { itemCount: number };
 
-const statusConfig: Record<string, { label: string; icon: typeof CheckCircle2; className: string }> = {
-  not_started: { label: "Not Started", icon: Circle, className: "text-muted-foreground" },
-  in_progress: { label: "In Progress", icon: Clock, className: "text-amber-500" },
-  completed: { label: "Completed", icon: CheckCircle2, className: "text-green-500" },
+// Status palette mirrors reports.tsx so checklists and reports read the same
+// at a glance across the global lists. iconClassName drives the small left-rail
+// icon; badgeClass drives the colored status pill (matching reports' Badge
+// treatment exactly — same Tailwind classes, same dark-mode pairs).
+const statusConfig: Record<
+  string,
+  { label: string; icon: typeof CheckCircle2; iconClassName: string; badgeClass: string }
+> = {
+  not_started: {
+    label: "Not Started",
+    icon: Circle,
+    iconClassName: "text-muted-foreground",
+    badgeClass: "bg-muted text-muted-foreground",
+  },
+  in_progress: {
+    label: "In Progress",
+    icon: Clock,
+    iconClassName: "text-amber-500",
+    badgeClass: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
+  },
+  completed: {
+    label: "Completed",
+    icon: CheckCircle2,
+    iconClassName: "text-green-500",
+    badgeClass: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
+  },
 };
 
 type TabKey = "checklists" | "templates";
@@ -188,17 +210,26 @@ export default function ChecklistsPage() {
                 return (
                   <Card key={cl.id} className="p-4 hover-elevate" data-testid={`card-checklist-${cl.id}`}>
                     <div className="flex items-start gap-3">
-                      <StatusIcon className={`h-5 w-5 mt-0.5 shrink-0 ${config.className}`} />
+                      <StatusIcon className={`h-5 w-5 mt-0.5 shrink-0 ${config.iconClassName}`} />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between gap-2">
-                          <Link href={`/projects/${cl.projectId}`}>
+                          <Link href={`/projects/${cl.projectId}?checklist=${cl.id}`}>
                             <span className="text-sm font-semibold hover:underline cursor-pointer" data-testid={`text-checklist-title-${cl.id}`}>
                               {cl.title}
                             </span>
                           </Link>
-                          <Badge variant="secondary" className="text-xs shrink-0 no-default-hover-elevate no-default-active-elevate">
-                            {cl.checkedCount}/{cl.itemCount} items
-                          </Badge>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <Badge
+                              variant="secondary"
+                              className={`text-xs no-default-hover-elevate no-default-active-elevate ${config.badgeClass}`}
+                              data-testid={`badge-checklist-status-${cl.id}`}
+                            >
+                              {config.label}
+                            </Badge>
+                            <Badge variant="secondary" className="text-xs no-default-hover-elevate no-default-active-elevate">
+                              {cl.checkedCount}/{cl.itemCount} items
+                            </Badge>
+                          </div>
                         </div>
                         {cl.project && (
                           <p className="text-xs text-muted-foreground mt-0.5">

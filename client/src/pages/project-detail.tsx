@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -372,6 +372,54 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const { data: checklistTemplates } = useQuery<(ChecklistTemplate & { itemCount: number })[]>({
     queryKey: ["/api/checklist-templates"],
   });
+
+  // Deep-link: ?checklist=:id from the global /checklists list jumps straight
+  // to the right tab + expands the matching checklist + scrolls it into view.
+  // Runs once per (id, search-string) change and waits for `data` so the card
+  // has actually rendered before we scroll. wouter's useLocation only tracks
+  // the path, so we read window.location.search directly and listen to
+  // popstate for back/forward (mirrors the pattern in checklists.tsx).
+  const handledChecklistDeepLinkRef = useRef<string | null>(null);
+  useEffect(() => {
+    const apply = () => {
+      if (typeof window === "undefined" || !data) return;
+      const params = new URLSearchParams(window.location.search);
+      const raw = params.get("checklist");
+      if (!raw) return;
+      const targetId = parseInt(raw, 10);
+      if (!Number.isFinite(targetId)) return;
+      // Confirm the param refers to a checklist that actually belongs to this
+      // project. Bail silently if not — avoids opening the wrong tab on a
+      // stale/cross-project link.
+      const exists = data.checklists.some((cl) => cl.id === targetId);
+      if (!exists) return;
+
+      const dedupeKey = `${id}:${targetId}`;
+      if (handledChecklistDeepLinkRef.current === dedupeKey) return;
+      handledChecklistDeepLinkRef.current = dedupeKey;
+
+      setActiveTab("checklists");
+      setExpandedChecklist(targetId);
+      // Wait one frame so the checklists tab content + card have mounted, then
+      // scroll. requestAnimationFrame x2 covers the tab-switch repaint.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const el = document.querySelector(`[data-testid="card-checklist-${targetId}"]`);
+          if (el && "scrollIntoView" in el) {
+            (el as HTMLElement).scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+        });
+      });
+    };
+    apply();
+    const onPop = () => {
+      // URL changed — re-arm the dedupe guard so a fresh ?checklist= can fire.
+      handledChecklistDeepLinkRef.current = null;
+      apply();
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [id, data]);
 
   const setCoverPhoto = useMutation({
     mutationFn: async (mediaId: number) => {

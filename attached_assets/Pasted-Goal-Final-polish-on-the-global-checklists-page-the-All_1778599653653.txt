@@ -1,0 +1,72 @@
+Goal: Final polish on the global /checklists page (the All Checklists 
+tab). Two changes. Pure client-side, no backend. ~30 min of work.
+
+PHASE 1 — DIAGNOSE (5 min)
+
+D1. Show me the current rendering of each checklist card on 
+    client/src/pages/checklists.tsx (All Checklists tab). Specifically:
+    - What does the status indicator look like today? (Per the Stage 3 
+      diagnosis, it's icons-only — no colored badges.)
+    - What URL does the card title link to today? (Per the Stage 3 
+      diagnosis, /projects/:projectId — which doesn't focus the 
+      specific checklist.)
+
+D2. Show me the equivalent rendering in client/src/pages/reports.tsx 
+    for comparison — specifically the badge color treatment for 
+    statuses (draft/submitted/approved). What CSS classes or 
+    statusConfig object does it use?
+
+D3. In client/src/pages/project-detail.tsx, find how the project page 
+    handles incoming query params or hash fragments. Does it already 
+    support something like ?expandChecklist=:id or #checklist-:id, 
+    or do we need to add the handler?
+
+PHASE 2 — IMPLEMENT
+
+CHANGE 1: Status badge colors on All Checklists list
+
+- Reuse the badge styling pattern from reports.tsx — match the same 
+  visual treatment (colored pill/badge with status text + matching 
+  background tint).
+- Map checklist statuses to colors consistently. If checklists today 
+  only have a derived status from completion percentage (e.g. "in 
+  progress", "completed", "not started"), use those. If there's a 
+  literal status column or computed status function, find it and use 
+  its values. Show me the mapping before implementing if it's not 
+  obvious.
+- Don't redefine colors — pull from the same source reports.tsx uses 
+  (Tailwind classes, shared statusConfig object, whatever it is).
+
+CHANGE 2: Deep-link from checklist card → focused checklist in project
+
+- Update the link target on each checklist card from 
+  /projects/:projectId to /projects/:projectId?checklist=:checklistId 
+  (or whatever query param convention the codebase uses).
+- In project-detail.tsx, read that query param on mount. When present:
+    - Auto-select the Checklists tab
+    - Scroll the matching checklist into view
+    - Expand it if checklists collapse by default
+- If the param is missing, behavior is unchanged.
+
+PHASE 3 — VERIFY
+
+V1. npm run check. Show TS error delta. Any new error in OUR code 
+    is a real bug.
+
+V2. git diff --stat. Expected files:
+    - client/src/pages/checklists.tsx
+    - client/src/pages/project-detail.tsx
+    Possibly a small shared util file if you extract the status 
+    color map. No backend, no schema.
+
+V3. Manual test plan:
+    - Land on /checklists All Checklists tab → confirm cards now 
+      show colored status badges, visually consistent with reports.tsx
+    - Click a checklist card → lands on /projects/:id with 
+      ?checklist=:id query → Checklists tab auto-selected and the 
+      right checklist visible/expanded
+    - Direct-paste the URL with ?checklist=:id → same behavior on 
+      fresh load (not just after navigation)
+    - Land on /projects/:id WITHOUT the param → behavior unchanged
+
+DO NOT push. Show me the diff first.
