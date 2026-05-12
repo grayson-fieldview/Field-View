@@ -1,0 +1,53 @@
+Goal: Finish the in-flight migration of pricing/subscription flow out 
+of settings.tsx and into the dedicated /subscribe route. Then remove 
+the now-unused VITE_STRIPE_PRICE_MONTHLY env var.
+
+PHASE 1 — DIAGNOSE (5-10 min, find current state of "in flight" work)
+
+D1. Show me the current state of client/src/pages/settings.tsx. 
+    Specifically:
+    - Does it still contain pricing/plan-selection UI (price display, 
+      "Subscribe to Monthly", "Subscribe to Annual" buttons, Stripe 
+      checkout redirect logic)?
+    - Or has that already been moved out — leaving settings.tsx with 
+      only subscription MANAGEMENT (billing portal link, current plan 
+      info, cancel option, etc.)?
+    Paste the relevant section of the file (the plan/subscription 
+    block, however large).
+
+D2. Show me client/src/pages/subscribe.tsx in full (or its core 
+    structure). What does it render today? Plan picker, Stripe 
+    Checkout button(s), and what env vars / API endpoints does it 
+    consume?
+
+D3. grep the client/ tree for VITE_STRIPE_PRICE_MONTHLY. Show every 
+    occurrence with file:line:context. We want to identify every 
+    consumer before we remove the var.
+
+D4. grep the client/ tree for any reference to /subscribe to confirm 
+    the route exists and what links to it (sidebar, dashboard CTAs, 
+    trial banner, etc.).
+
+D5. Check server/ for any reference to VITE_STRIPE_PRICE_MONTHLY too — 
+    the VITE_ prefix means it's client-side, but it's worth confirming 
+    the server doesn't accidentally reference it (it would be a 
+    no-op there).
+
+PHASE 2 — REPORT (don't fix yet)
+
+Based on D1-D5, give me a clean status of what's done and what's 
+left in the in-flight migration:
+
+- Is pricing UI still in settings.tsx? (If yes, what specifically — 
+  buttons, price text, redirect logic, full plan picker?)
+- Is /subscribe the authoritative pricing/checkout entry point now?
+- How many consumers of VITE_STRIPE_PRICE_MONTHLY remain, and can 
+  they all be removed safely (i.e., is the value used anywhere that 
+  matters or is it dead reference)?
+- What's the smallest correct PR to finish this migration cleanly?
+
+DO NOT make any changes yet. Just report what you found and propose 
+the final PR scope. I'll review and approve before you build.
+
+No code changes, no env var deletion in Vercel/Replit (Grayson does 
+that manually after the PR ships and is verified). No commits.
