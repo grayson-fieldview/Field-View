@@ -206,6 +206,15 @@ export interface IStorage {
   setReportShareToken(id: number, token: string | null): Promise<Report | undefined>;
   getReportByShareToken(token: string): Promise<Report | undefined>;
 
+  setProjectShareToken(projectId: number, accountId: string, token: string | null): Promise<boolean>;
+  getProjectByShareToken(token: string): Promise<Project | undefined>;
+  getProjectPublicSummary(token: string): Promise<{
+    project: { id: number; name: string; address: string | null; status: string; color: string | null; photoCount: number; taskCount: number; completionPercent: number };
+    account: { name: string; companyLogoUrl: string | null };
+    coverPhoto: { url: string } | null;
+    recentPhotos: Array<{ id: number; url: string; takenAt: Date }>;
+  } | undefined>;
+
   getAllChecklistTemplates(accountId: string): Promise<(ChecklistTemplate & { itemCount: number })[]>;
   getChecklistTemplate(id: number): Promise<ChecklistTemplate | undefined>;
   createChecklistTemplate(template: InsertChecklistTemplate): Promise<ChecklistTemplate>;
@@ -1309,6 +1318,90 @@ export class DatabaseStorage implements IStorage {
   async getReportByShareToken(token: string): Promise<Report | undefined> {
     const [row] = await db.select().from(reports).where(eq(reports.shareToken, token)).limit(1);
     return row;
+  }
+
+  async setProjectShareToken(projectId: number, accountId: string, token: string | null): Promise<boolean> {
+    const updated = await db
+      .update(projects)
+      .set({ shareToken: token, updatedAt: new Date() })
+      .where(and(eq(projects.id, projectId), eq(projects.accountId, accountId)))
+      .returning({ id: projects.id });
+    return updated.length > 0;
+  }
+
+  async getProjectByShareToken(token: string): Promise<Project | undefined> {
+    if (!token) return undefined;
+    const [row] = await db.select().from(projects).where(eq(projects.shareToken, token)).limit(1);
+    return row;
+  }
+
+  async getProjectPublicSummary(token: string) {
+    if (!token) return undefined;
+    const [project] = await db.select().from(projects).where(eq(projects.shareToken, token)).limit(1);
+    if (!project || !project.accountId) return undefined;
+
+    const [account] = await db
+      .select({ name: accounts.name, companyLogoUrl: accounts.companyLogoUrl })
+      .from(accounts)
+      .where(eq(accounts.id, project.accountId));
+    if (!account) return undefined;
+
+    const [photoCountRow] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(media)
+      .where(eq(media.projectId, project.id));
+    const photoCount = photoCountRow?.n ?? 0;
+
+    const [taskCountsRow] = await db
+      .select({
+        total: sql<number>`count(*)::int`,
+        done: sql<number>`count(*) FILTER (WHERE ${tasks.status} = 'done')::int`,
+      })
+      .from(tasks)
+      .where(eq(tasks.projectId, project.id));
+    const taskCount = taskCountsRow?.total ?? 0;
+    const taskDone = taskCountsRow?.done ?? 0;
+    const completionPercent = taskCount > 0 ? Math.round((taskDone / taskCount) * 100) : 0;
+
+    let coverPhoto: { url: string } | null = null;
+    if (project.coverPhotoId) {
+      // Defense-in-depth: also require media.projectId === project.id, in
+      // case a stale or maliciously-set coverPhotoId points to media in
+      // another project (the project PATCH endpoint does not currently
+      // validate cross-project ownership of coverPhotoId).
+      const [m] = await db
+        .select({ url: media.url })
+        .from(media)
+        .where(and(eq(media.id, project.coverPhotoId), eq(media.projectId, project.id)))
+        .limit(1);
+      if (m) coverPhoto = { url: m.url };
+    }
+
+    const recent = await db
+      .select({ id: media.id, url: media.url, takenAt: media.createdAt })
+      .from(media)
+      .where(eq(media.projectId, project.id))
+      .orderBy(desc(media.createdAt))
+      .limit(6);
+
+    return {
+      project: {
+        id: project.id,
+        name: project.name,
+        address: project.address,
+        status: project.status as string,
+        color: project.color,
+        photoCount,
+        taskCount,
+        completionPercent,
+      },
+      account: {
+        name: account.name,
+        companyLogoUrl: account.companyLogoUrl,
+      },
+      coverPhoto,
+      recentPhotos: recent,
+    };
   }
 
   async getAllChecklistTemplates(accountId: string): Promise<(ChecklistTemplate & { itemCount: number })[]> {

@@ -45,6 +45,7 @@ import { useAuth } from "@/hooks/use-auth";
 import PhotoViewer from "@/components/photo-viewer";
 import TaskFormDialog from "@/components/task-form-dialog";
 import { ChecklistSectionEditor } from "@/components/checklist-section-editor";
+import ProjectShareDialog from "@/components/project-share-dialog";
 import {
   Upload,
   MapPin,
@@ -341,6 +342,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const selectionMode = selectedIds.size > 0;
   const [showShareDialog, setShowShareDialog] = useState(false);
+  const [showProjectShareDialog, setShowProjectShareDialog] = useState(false);
   const [shareStep, setShareStep] = useState<"options" | "link">("options");
   const [shareIncludeMetadata, setShareIncludeMetadata] = useState(false);
   const [shareIncludeDescriptions, setShareIncludeDescriptions] = useState(false);
@@ -864,7 +866,13 @@ export default function ProjectDetailPage({ id }: { id: string }) {
               Projects
             </Button>
             <div className="flex items-center gap-1.5">
-              <Button variant="ghost" size="icon" className="text-white bg-black/30 hover:bg-black/50 backdrop-blur-sm h-8 w-8" data-testid="button-share">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setShowProjectShareDialog(true)}
+                className="text-white bg-black/30 hover:bg-black/50 backdrop-blur-sm h-8 w-8"
+                data-testid="button-share-project"
+              >
                 <Share2 className="h-4 w-4" />
               </Button>
               <DropdownMenu>
@@ -1978,6 +1986,13 @@ export default function ProjectDetailPage({ id }: { id: string }) {
         open={isCreateReportOpen}
         onOpenChange={setIsCreateReportOpen}
         projectId={parseInt(id)}
+      />
+
+      <ProjectShareDialog
+        projectId={project.id}
+        shareToken={(project as any).shareToken ?? null}
+        open={showProjectShareDialog}
+        onOpenChange={setShowProjectShareDialog}
       />
     </div>
   );

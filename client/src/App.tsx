@@ -44,6 +44,7 @@ import TemplateEditPage from "@/pages/template-edit";
 import ChecklistTemplateEditPage from "@/pages/checklist-template-edit";
 import GalleryPage from "@/pages/gallery";
 import PublicReportPage from "@/pages/public-report";
+import PublicProjectPage from "@/pages/public-project";
 import TasksPage from "@/pages/tasks";
 import AnalyticsPage from "@/pages/analytics";
 import CalendarPage from "@/pages/calendar";
@@ -387,6 +388,9 @@ function App() {
               </Route>
               <Route path="/report/:token">
                 {(params) => <PublicReportPage token={params.token} />}
+              </Route>
+              <Route path="/p/:token">
+                {(params) => <PublicProjectPage token={params.token} />}
               </Route>
               <Route>
                 <AppContent />

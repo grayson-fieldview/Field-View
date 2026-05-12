@@ -41,6 +41,7 @@ export const projects = pgTable("projects", {
   color: text("color").default("#3B82F6"),
   tags: text("tags").array().default(sql`'{}'::text[]`),
   coverPhotoId: integer("cover_photo_id"),
+  shareToken: varchar("share_token", { length: 32 }),
   accountId: varchar("account_id").references(() => accounts.id),
   createdById: varchar("created_by_id").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -48,6 +49,7 @@ export const projects = pgTable("projects", {
 }, (table) => [
   index("projects_account_id_idx").on(table.accountId),
   index("projects_created_by_id_idx").on(table.createdById),
+  index("projects_share_token_idx").on(table.shareToken).where(sql`${table.shareToken} IS NOT NULL`),
 ]);
 
 export const media = pgTable("media", {

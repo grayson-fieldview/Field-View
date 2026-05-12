@@ -2061,6 +2061,119 @@ export async function registerRoutes(
     }
   });
 
+  // ===== Project share-token flow (Session 42, Phase A) =====
+  // Mirrors the reports/share pattern above. NO OG-tag injection here —
+  // that's Phase B. The /api/public/projects/:token/cover.jpg endpoint
+  // streams bytes (not a redirect for present covers) so OG scrapers in
+  // Phase B can rely on a stable URL.
+
+  // Generate or regenerate a public share token for a project.
+  // Uses userCanAccessProject (NOT verifyProjectAccess) so restricted users
+  // can only mint links for projects they're assigned to or created.
+  app.post("/api/projects/:id/share", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid id" });
+      if (!(await userCanAccessProject(req, id))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const token = crypto.randomBytes(16).toString("base64url");
+      const ok = await storage.setProjectShareToken(id, req.user.accountId, token);
+      if (!ok) return res.status(404).json({ message: "Project not found" });
+      res.json({ shareToken: token });
+    } catch (error) {
+      console.error("[projects/share] create error:", error);
+      res.status(500).json({ message: "Failed to create share link" });
+    }
+  });
+
+  // Revoke an existing project share token. Same restricted-user check.
+  app.delete("/api/projects/:id/share", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid id" });
+      if (!(await userCanAccessProject(req, id))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const ok = await storage.setProjectShareToken(id, req.user.accountId, null);
+      if (!ok) return res.status(404).json({ message: "Project not found" });
+      res.json({ shareToken: null });
+    } catch (error) {
+      console.error("[projects/share] revoke error:", error);
+      res.status(500).json({ message: "Failed to revoke share link" });
+    }
+  });
+
+  // Public viewer — no auth, token is the access grant. Whitelist-only
+  // payload — never include createdById, internal notes, restricted-user
+  // assignments, or anything else not explicitly returned by
+  // getProjectPublicSummary.
+  app.get("/api/public/projects/:token", async (req, res) => {
+    try {
+      const token = String(req.params.token || "");
+      if (!token) return res.status(404).json({ message: "Project not found" });
+      const data = await storage.getProjectPublicSummary(token);
+      if (!data) return res.status(404).json({ message: "Project not found" });
+
+      const coverPhotoUrl = data.coverPhoto
+        ? (await presignMediaUrls([{ url: data.coverPhoto.url }]))[0].url
+        : null;
+
+      const recentPhotos = await presignMediaUrls(
+        data.recentPhotos.map((p) => ({ id: p.id, url: p.url, takenAt: p.takenAt })),
+      );
+
+      const rawLogo = data.account.companyLogoUrl;
+      const logoKey = rawLogo && isS3Url(rawLogo) ? extractS3KeyFromUrl(rawLogo) : null;
+      const companyLogoUrl = logoKey ? await getPresignedUrl(logoKey) : rawLogo;
+
+      res.set("Cache-Control", "public, max-age=300, s-maxage=300");
+      res.json({
+        project: data.project,
+        account: { name: data.account.name, companyLogoUrl },
+        coverPhoto: coverPhotoUrl ? { url: coverPhotoUrl } : null,
+        recentPhotos,
+      });
+    } catch (error) {
+      console.error("[public-projects] get error:", error);
+      res.status(500).json({ message: "Failed to load project" });
+    }
+  });
+
+  // Cover-image endpoint — streams S3 bytes for OG scrapers (stable URL).
+  // Falls back to /favicon.png redirect if no cover. Auth-free, token-gated.
+  app.get("/api/public/projects/:token/cover.jpg", async (req, res) => {
+    try {
+      const token = String(req.params.token || "");
+      if (!token) return res.redirect(302, "/favicon.png");
+      const project = await storage.getProjectByShareToken(token);
+      if (!project || !project.coverPhotoId) return res.redirect(302, "/favicon.png");
+
+      // Defense-in-depth: ensure the cover media row actually belongs to
+      // this project before streaming bytes through a public endpoint.
+      const cover = await storage.getMedia(project.coverPhotoId);
+      if (!cover || cover.projectId !== project.id || !isS3Url(cover.url)) {
+        return res.redirect(302, "/favicon.png");
+      }
+
+      const key = extractS3KeyFromUrl(cover.url);
+      if (!key) return res.redirect(302, "/favicon.png");
+
+      const stream = await getObjectStream(key);
+      res.set("Content-Type", cover.mimeType || "image/jpeg");
+      res.set("Cache-Control", "public, max-age=86400");
+      stream.pipe(res);
+      stream.on("error", (err) => {
+        console.error("[public-projects/cover] stream error:", err);
+        if (!res.headersSent) res.redirect(302, "/favicon.png");
+        else res.destroy();
+      });
+    } catch (error) {
+      console.error("[public-projects/cover] error:", error);
+      if (!res.headersSent) res.redirect(302, "/favicon.png");
+    }
+  });
+
   // Public PDF — no auth, token is the access grant.
   app.get("/api/public/reports/:token/pdf", async (req, res) => {
     try {

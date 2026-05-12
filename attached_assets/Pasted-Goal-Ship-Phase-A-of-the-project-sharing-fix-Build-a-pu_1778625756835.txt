@@ -1,0 +1,178 @@
+Goal: Ship Phase A of the project-sharing fix. Build a public share-
+token flow for projects, mirroring the existing reports public-share 
+pattern. This PR includes BOTH server and client changes — they 
+deploy as one unit. NO OG-tag injection (deferred to Phase B).
+
+Schema-touching deploy — HARD RULE applies: I run the prod migration 
+manually BEFORE you promote. Build everything; show diff first.
+
+CONTEXT (from earlier diagnose):
+- Project route /projects/:id (plural) is auth-gated; logged-out 
+  recipients bounce to /signup
+- No share_token on projects table (reports has one, model after that)
+- No /api/public/projects/... endpoints exist
+- Existing pattern to mirror: reports share flow at 
+  server/routes.ts:1972-2000 (POST/DELETE share) + 
+  /api/public/reports/:token (line ~2002) + 
+  client/src/pages/public-report.tsx + 
+  client/src/components/report-share-dialog.tsx
+
+PART A — SCHEMA (shared/schema.ts)
+
+Add to projects table:
+- shareToken: varchar("share_token", { length: 32 }) — nullable
+
+Add index: projects_share_token_idx on shareToken WHERE shareToken IS NOT NULL.
+
+PART B — MIGRATION SCRIPT
+
+Create script/migrations/migrate_session42_project_share_tokens.ts
+Modeled on session41 template. Required:
+- DDL in db.transaction()
+- Env guards (rds.amazonaws.com or neon.tech; ALLOW_PROD_MIGRATION=yes for RDS)
+- Entry-point guard, IF NOT EXISTS, host logging
+- Steps: 
+  ALTER TABLE projects ADD COLUMN IF NOT EXISTS share_token varchar(32);
+  CREATE INDEX IF NOT EXISTS projects_share_token_idx 
+    ON projects (share_token) WHERE share_token IS NOT NULL;
+- Verification: \d projects column meta + count with non-null tokens (=0)
+
+Run on Neon dev first, paste full log.
+
+PART C — STORAGE METHODS (server/storage.ts)
+
+Add three methods to IStorage:
+- setProjectShareToken(projectId: number, accountId: string, 
+    token: string | null): Promise<boolean>
+  Account-scoped UPDATE. Returns true if updated, false if not 
+  found/wrong account.
+- getProjectByShareToken(token: string): Promise<Project | null>
+  No auth — public lookup. Returns project row or null.
+- getProjectPublicSummary(token: string): Promise<{
+    project: { id, name, address, status, color, photoCount, 
+      taskCount, completionPercent };
+    account: { name, companyLogoUrl };
+    coverPhoto: { url } | null;
+    recentPhotos: Array<{ id, url, takenAt }>;  // last 6
+  } | null>
+  Joins project + account + media (cover + 6 most recent). All S3 
+  URLs presigned. CAREFUL: filter out private fields — don't expose 
+  createdById, internal notes, restricted-user assignments, etc. 
+  Whitelist-only on the returned shape.
+
+PART D — ROUTES (server/routes.ts)
+
+Add four routes:
+
+POST /api/projects/:id/share
+- Auth: requireWriteAccess + verifyProjectAccess (existing middleware)
+- Generates crypto.randomBytes(16).toString("base64url")
+- Calls storage.setProjectShareToken(id, accountId, newToken)
+- Returns 200 { shareToken: newToken }
+- Mirror reports/share at server/routes.ts:1972-1985
+
+DELETE /api/projects/:id/share
+- Auth: same chain
+- Calls storage.setProjectShareToken(id, accountId, null)
+- Returns 200 { shareToken: null }
+- Mirror reports/share DELETE at line 1988-2000
+
+GET /api/public/projects/:token
+- NO AUTH (token IS the credential)
+- Calls storage.getProjectPublicSummary(token)
+- Returns 404 if null
+- 5-minute Cache-Control: public, max-age=300, s-maxage=300
+- Mirror /api/public/reports/:token pattern
+
+GET /api/public/projects/:token/cover.jpg
+- NO AUTH
+- Calls storage.getProjectByShareToken + look up cover media
+- If no cover photo: 302 redirect to a default placeholder image URL 
+  hosted in the public assets (use whatever existing default project 
+  thumbnail the app uses; if none, redirect to a generic field-view 
+  branded image)
+- If cover photo exists: stream the S3 image bytes (NOT a redirect — 
+  the image URL must be stable for OG scrapers). Set 
+  Content-Type: image/jpeg, Cache-Control: public, max-age=86400.
+- Implementation: fetch from S3 via existing helper, pipe to response
+
+PART E — CLIENT — PUBLIC PROJECT PAGE
+
+New file: client/src/pages/public-project.tsx (~200 LOC)
+Mirror client/src/pages/public-report.tsx structure.
+
+Renders:
+- Header: account.companyLogoUrl (if present) + account.name + 
+  "Project shared with you"
+- Project name (h1)
+- Address, status pill
+- Stats: photoCount, taskCount, completion %
+- Cover photo (large) — pulls from the GET /api/public/projects/:token 
+  response (coverPhoto.url)
+- Recent photos grid (6 thumbnails)
+- "View full project in Field View" CTA → links to /signup or /login 
+  if not authenticated, /projects/:id if already in same account 
+  (light client-side detection: if api.user fetch succeeds, link 
+  to projects/:id; else to signup)
+- No interactivity (read-only)
+
+Loading + error states.
+Uses useQuery({ queryKey: ["/api/public/projects", token] }) calling 
+GET /api/public/projects/:token.
+
+PART F — CLIENT — PUBLIC ROUTE
+
+In client/src/App.tsx, add OUTSIDE the auth gate (alongside 
+/gallery/:token and /report/:token at lines 384-394):
+
+<Route path="/p/:token">
+  {(params) => <PublicProjectPage token={params.token} />}
+</Route>
+
+PART G — CLIENT — SHARE DIALOG
+
+Decide: generalize the existing report-share-dialog into a 
+<ShareDialog kind="project" | "report" /> component, OR create a 
+new project-share-dialog.tsx mirroring it.
+
+Recommended: new component for simplicity, defer generalization 
+unless trivial. ~80 LOC, mirrors:
+- Calls POST /api/projects/:id/share on open (if no existing token)
+- Displays the URL (e.g. https://app.field-view.com/p/<token>)
+- Copy-to-clipboard button
+- Revoke button → DELETE /api/projects/:id/share → closes dialog
+- Loading/error states
+
+PART H — CLIENT — SHARE BUTTON IN PROJECT-DETAIL
+
+In client/src/pages/project-detail.tsx (find the existing share 
+mailto button at line 1857), add a "Share project" button next to 
+it that opens the new ShareDialog. Keep the existing share-gallery 
+mailto button (different flow).
+
+VERIFY
+
+V1. npm run check, show TS error delta
+V2. git diff --stat — expected files:
+    - shared/schema.ts (~5 lines)
+    - script/migrations/migrate_session42_project_share_tokens.ts (NEW)
+    - server/storage.ts (~120 lines added)
+    - server/routes.ts (~140 lines added — 4 new routes)
+    - client/src/pages/public-project.tsx (NEW, ~200 lines)
+    - client/src/App.tsx (~3 lines)
+    - client/src/components/project-share-dialog.tsx (NEW, ~80 lines)
+    - client/src/pages/project-detail.tsx (~10 lines)
+V3. Architect code review per standing instruction. Address any 
+    blocking findings.
+
+V4. Manual test plan to document (for me to execute after prod migration):
+    - Logged-in admin → project detail → tap Share project → dialog 
+      opens with URL https://app.field-view.com/p/<token>
+    - Copy URL → open in a Safari Private window (logged out) → 
+      sees public read-only project page with cover + photos + stats
+    - GET /api/public/projects/<token>/cover.jpg returns image bytes 
+      (not a redirect for present cover, or a 302 to default for none)
+    - Revoke share → DELETE → reopen the URL → 404
+    - Re-mint share → new token → old URL stays 404
+
+DO NOT push. DO NOT run prod migration. Show diff first.
