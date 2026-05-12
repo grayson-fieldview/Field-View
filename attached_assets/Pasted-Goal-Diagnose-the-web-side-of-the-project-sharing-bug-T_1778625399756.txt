@@ -1,0 +1,60 @@
+Goal: Diagnose the web side of the project-sharing bug. Three 
+symptoms:
+1. https://app.field-view.com/project/123 routes recipient to 
+   signup page, NOT the project page
+2. OG preview shows generic site-wide text, not project-specific
+3. Project images don't appear in iMessage preview
+
+This covers the WEB side only (mobile side diagnosed in parallel 
+in mobile agent).
+
+Diagnose only — no code changes.
+
+D1. ROUTING. In client/src/ or wherever client routes are 
+    configured, find the route for /project/:id. Does it exist? 
+    Does it route to a logged-in-only page (which would redirect 
+    unauthenticated users to signup, explaining the bug)?
+
+D2. PUBLIC SHARE TOKEN ROUTING. Check the reports public route 
+    pattern we discovered earlier (/public/reports/:token). Does 
+    a similar pattern exist for projects (/public/projects/:token 
+    or similar)? If not, flag that — projects may not have a 
+    public-share-token flow at all, which is the root cause.
+
+D3. OG TAGS. In the HTML template or wherever OG meta tags are 
+    defined (likely index.html, _document.tsx, or a similar root 
+    file), check:
+    - What og:title, og:description, og:image are currently set 
+      to (probably static generic values)
+    - Whether there's any server-side rendering for project-specific 
+      OG tags (likely no, since Vite SPA)
+
+D4. SERVER ENDPOINT for shared project metadata. Is there a server 
+    endpoint that returns project metadata for share previews? Like 
+    a GET /public/projects/:id/og-meta that returns 
+    {title, description, image} for OG preview rendering? 
+    Probably no.
+
+D5. WHAT THE LINK NEEDS TO DO. The expected behavior:
+    - Tap https://app.field-view.com/project/123 in iMessage
+    - iMessage scrapes OG tags → shows project name, photo, etc.
+    - Tap the preview → opens app.field-view.com/project/123
+    - Recipient (logged out): sees public read-only view of project
+    - Recipient (logged in to a different account): sees public 
+      read-only view (cross-account boundary)
+    - Recipient (logged in, same account): sees full project view
+
+PHASE 2 — REPORT
+
+A. Current /project/:id route behavior (auth-gated or not?)
+B. Whether a public-share-token flow exists for projects
+C. Current OG tag setup (static / dynamic / server-rendered?)
+D. What server changes are needed (new public route, new metadata 
+   endpoint, share token generation, etc.)
+E. What client-side changes are needed
+F. Whether the fix needs server-side rendering (e.g. a small 
+   serverless function that returns HTML with project-specific OG 
+   tags when crawlers hit /public/projects/:token)
+G. Estimated build scope (server PR size, mobile PR size)
+
+Don't change code. Don't commit.
