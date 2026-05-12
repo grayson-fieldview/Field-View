@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, Plus } from "lucide-react";
+import { ArrowLeft, LayoutTemplate, Plus } from "lucide-react";
 import { TemplateSectionEditor } from "@/components/template-section-editor";
 import type {
   ChecklistTemplate,
@@ -201,6 +201,29 @@ export default function ChecklistTemplateEditPage({ id }: { id: string }) {
 
       <main className="flex-1 overflow-y-auto p-4 sm:p-6">
         <div className="max-w-4xl mx-auto space-y-6">
+          {/* Surface banner — makes it unmistakable that this is the template
+              editor, not a per-project checklist. Uses Field View orange as a
+              left border + tinted background so a glance is enough. */}
+          <div
+            className="flex items-start gap-3 rounded-md border border-l-4 bg-orange-50/70 dark:bg-orange-950/20 px-4 py-3"
+            style={{ borderLeftColor: "#f09004" }}
+            data-testid="banner-template-editor"
+          >
+            <LayoutTemplate
+              className="h-5 w-5 mt-0.5 shrink-0"
+              style={{ color: "#f09004" }}
+              aria-hidden
+            />
+            <div className="text-sm">
+              <div className="font-semibold text-foreground" data-testid="text-banner-template-title">
+                Editing template: {template.title}
+              </div>
+              <div className="text-xs text-muted-foreground mt-0.5">
+                Changes here update the template only. They do not affect checklists already created from this template.
+              </div>
+            </div>
+          </div>
+
           {/* Title + description */}
           <div className="space-y-2">
             <Input

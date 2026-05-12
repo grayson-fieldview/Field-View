@@ -187,7 +187,7 @@ export function TemplateItemEditor({
       <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <AlertDialogContent data-testid={`dialog-template-item-delete-${item.id}`}>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete this item?</AlertDialogTitle>
+            <AlertDialogTitle>Delete this template item?</AlertDialogTitle>
             <AlertDialogDescription>
               "{item.label}" will be removed from the template. Existing
               project checklists already created from this template won't
@@ -390,7 +390,11 @@ function TemplateOptionRow({
       )}
       <Button
         size="icon" variant="ghost" className="h-6 w-6 text-muted-foreground hover:text-destructive"
-        onClick={() => { if (confirm(`Delete option "${option.label}"?`)) onDelete(); }}
+        onClick={() => {
+          if (confirm(
+            `Delete option "${option.label}"?\n\nThis removes the choice from the template. Existing project checklists already created from this template won't be affected.`,
+          )) onDelete();
+        }}
         data-testid={`button-template-option-delete-${option.id}`}
       >
         <Trash2 className="h-3 w-3" />

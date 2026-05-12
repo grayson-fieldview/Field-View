@@ -1,0 +1,136 @@
+Goal: Harden the template vs instance editor UX so users can't 
+confuse the two surfaces. Three targeted changes. Pure UI work — 
+no schema, no routes, no storage logic changes.
+
+PHASE 1 — DIAGNOSE (5 min, confirm before changing)
+
+D1. Show me the current page header structure of 
+    client/src/pages/checklist-template-edit.tsx. Specifically: 
+    what does the user see at the top when they land on the page? 
+    Is the template name visible? Is there any indicator that 
+    they're editing a TEMPLATE (vs a per-project checklist)?
+
+D2. List every AlertDialog or confirm dialog used for deleting 
+    items/sections/options across both editors. For each, paste 
+    the title + description text. Files to grep:
+    - client/src/components/template-item-editor.tsx
+    - client/src/components/template-section-editor.tsx
+    - client/src/components/checklist-section-editor.tsx
+    - client/src/components/checklist-field-input.tsx
+    - client/src/pages/project-detail.tsx (if any dialogs live there)
+    - client/src/pages/checklists.tsx (the templates tab card delete)
+
+D3. List the React Query keys used by:
+    - The template editor mutations (delete item, delete section, 
+      delete option, update item, etc.)
+    - The per-project checklist editor mutations (same operations)
+    For each mutation, what query keys does it invalidate via 
+    queryClient.invalidateQueries? Look for any place where a 
+    template mutation invalidates instance queries or vice versa.
+
+PHASE 2 — IMPLEMENT
+
+CHANGE 1: Visual differentiation on the template editor page 
+(client/src/pages/checklist-template-edit.tsx)
+
+Add a prominent banner above the editor body — a colored strip 
+or badge that makes the surface unmistakable. Suggested treatment:
+- A horizontal bar across the top of the editor content area
+- Use the app's accent orange (#f09004 — the canonical Field View 
+  orange) as a left border or background tint
+- Icon (FileText or LayoutTemplate from lucide-react) + text 
+  "Editing template: {template.title}"
+- Subtext below: "Changes here update the template only. They do 
+  not affect checklists already created from this template."
+
+The banner must be visible without scrolling, distinct enough that 
+a user mid-task glancing at the screen knows immediately they're 
+in the template editor, not a project's checklist.
+
+CHANGE 2: Specific AlertDialog text — name the surface
+
+For every delete confirm in the template editor, the title and 
+description must explicitly say "template":
+
+Examples (adapt to the actual existing dialog code):
+- Item delete: 
+  Title: "Delete this template item?"
+  Description: "This removes the item from the template. Checklists 
+  already created from this template will not be affected."
+- Section delete:
+  Title: "Delete this template section?"
+  Description: "Items in this section will move to the Untitled 
+  section. Checklists already created from this template will not 
+  be affected."
+- Option delete (for multiple choice):
+  Title: "Delete this option?"
+  Description: "This removes the choice from the template. 
+  Checklists already created from this template will not be 
+  affected."
+
+For every delete confirm in the per-project checklist editor 
+(checklist-section-editor.tsx etc.), the dialog text should 
+explicitly say "this checklist":
+- Item delete:
+  Title: "Delete this item?"
+  Description: "This removes the item from this checklist only. 
+  The template (if any) is not affected."
+- Section delete:
+  Title: "Delete this section?"
+  Description: "Items in this section will move to Untitled. 
+  This only affects this checklist."
+
+Same template-removal-disclaimer phrasing for the templates tab 
+card delete on /checklists (already exists per Phase 2 — confirm 
+the text matches the new pattern).
+
+CHANGE 3: Cache invalidation audit + fix
+
+For every mutation in the template editor, the invalidation must 
+target ONLY template query keys (e.g. 
+["/api/checklist-templates/:id", ...], 
+["/api/checklist-templates/:id/items"], etc.). It must NOT 
+invalidate any /api/checklists or /api/checklist-items keys.
+
+For every mutation in the per-project checklist editor, the 
+invalidation must target ONLY instance query keys 
+(/api/checklists/:id/items, etc.) and NOT template keys.
+
+If you find any mutation that cross-invalidates 
+(template mutation touching instance cache or vice versa), fix it 
+so each editor's mutations only invalidate its own surface. Paste 
+before/after for any cache key you change.
+
+PHASE 3 — VERIFY
+
+V1. npm run check. Show TS error delta. New errors in our code 
+    must be fixed.
+
+V2. git diff --stat. Expected files:
+    - client/src/pages/checklist-template-edit.tsx
+    - client/src/components/template-item-editor.tsx
+    - client/src/components/template-section-editor.tsx
+    - client/src/components/checklist-section-editor.tsx
+    - client/src/components/checklist-field-input.tsx (only if 
+      it owns dialogs)
+    - client/src/pages/checklists.tsx (only if its delete dialog 
+      text needs updating)
+    Possibly project-detail.tsx if any per-project dialogs live 
+    there.
+    No backend files. No schema files. If ANY backend or schema 
+    file changes, stop and explain.
+
+V3. Document the manual test plan:
+    - Open /checklist-templates/:id/edit → confirm banner visible 
+      with template name + disclaimer
+    - Delete an item from the template → dialog says "template" 
+      and mentions existing checklists are safe
+    - Apply the template to a project
+    - In the project, delete an item from the resulting checklist 
+      → dialog says "this checklist only" and mentions the template 
+      is safe
+    - Confirm the template's items list is unchanged
+    - Confirm the project checklist's items list reflects the 
+      deletion
+
+DO NOT push. Show diff first.

@@ -148,7 +148,12 @@ export function ChecklistSectionEditor({ checklistId, projectId }: ChecklistSect
           title="Untitled"
           items={untitledItems}
           onPatchItem={(itemId, patch) => patchItem.mutate({ itemId, patch })}
-          onDeleteItem={(itemId) => deleteItem.mutate(itemId)}
+          onDeleteItem={(itemId, label) => {
+            if (!confirm(
+              `Delete${label ? ` "${label}"` : " this item"}?\n\nThis removes the item from this checklist only. The template (if any) is not affected.`,
+            )) return;
+            deleteItem.mutate(itemId);
+          }}
           onAddItem={(seed) => createItem.mutate({ ...seed, sortOrder: sectionItemTotals.untitledTotal })}
         />
       )}
@@ -164,13 +169,19 @@ export function ChecklistSectionEditor({ checklistId, projectId }: ChecklistSect
             title={sec.title}
             items={sectionItems}
             onPatchItem={(itemId, patch) => patchItem.mutate({ itemId, patch })}
-            onDeleteItem={(itemId) => deleteItem.mutate(itemId)}
+            onDeleteItem={(itemId, label) => {
+            if (!confirm(
+              `Delete${label ? ` "${label}"` : " this item"}?\n\nThis removes the item from this checklist only. The template (if any) is not affected.`,
+            )) return;
+            deleteItem.mutate(itemId);
+          }}
             onAddItem={(seed) => createItem.mutate({ ...seed, sectionId: sec.id, sortOrder: sectionItemTotals.perSection.get(sec.id) ?? 0 })}
             onRenameSection={(title) => updateSection.mutate({ id: sec.id, title })}
             onDeleteSection={() => {
               const total = sectionItemTotals.perSection.get(sec.id) ?? 0;
-              if (total > 0 && !confirm(`Delete "${sec.title}"? Its ${total} item(s) will move to Untitled.`)) return;
-              if (total === 0 && !confirm(`Delete section "${sec.title}"?`)) return;
+              const tail = "\n\nThis only affects this checklist. The template (if any) is not affected.";
+              if (total > 0 && !confirm(`Delete "${sec.title}"? Its ${total} item(s) will move to Untitled.${tail}`)) return;
+              if (total === 0 && !confirm(`Delete section "${sec.title}"?${tail}`)) return;
               deleteSection.mutate(sec.id);
             }}
           />
@@ -236,7 +247,7 @@ function SectionGroup({
   title: string;
   items: ChecklistItem[];
   onPatchItem: (itemId: number, patch: Record<string, unknown>) => void;
-  onDeleteItem: (itemId: number) => void;
+  onDeleteItem: (itemId: number, label?: string) => void;
   onAddItem: (seed: Record<string, unknown>) => void;
   onRenameSection?: (title: string) => void;
   onDeleteSection?: () => void;
@@ -312,7 +323,7 @@ function SectionGroup({
             item={it}
             projectId={projectId}
             onPatch={(patch) => onPatchItem(it.id, patch)}
-            onDelete={() => onDeleteItem(it.id)}
+            onDelete={() => onDeleteItem(it.id, it.label)}
           />
         ))}
         <AddItemRow onAdd={onAddItem} />
@@ -594,7 +605,11 @@ function OptionRow({
       )}
       <Button
         size="icon" variant="ghost" className="h-6 w-6 text-muted-foreground hover:text-destructive"
-        onClick={() => { if (confirm(`Delete option "${option.label}"?`)) onDelete(); }}
+        onClick={() => {
+          if (confirm(
+            `Delete option "${option.label}"?\n\nThis only affects this checklist. The template (if any) is not affected.`,
+          )) onDelete();
+        }}
         data-testid={`button-delete-option-${option.id}`}
       >
         <Trash2 className="h-3 w-3" />

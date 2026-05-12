@@ -235,11 +235,11 @@ export function TemplateSectionEditor({
       <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <AlertDialogContent data-testid={`dialog-template-section-delete-${section?.id ?? "untitled"}`}>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete this section?</AlertDialogTitle>
+            <AlertDialogTitle>Delete this template section?</AlertDialogTitle>
             <AlertDialogDescription>
               {sortedItems.length > 0
-                ? `"${section?.title}" will be deleted. Its ${sortedItems.length} item(s) will move to Untitled.`
-                : `"${section?.title}" has no items and will be removed.`}
+                ? `"${section?.title}" will be deleted. Its ${sortedItems.length} item(s) will move to Untitled. Existing project checklists already created from this template won't be affected.`
+                : `"${section?.title}" has no items and will be removed. Existing project checklists already created from this template won't be affected.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
