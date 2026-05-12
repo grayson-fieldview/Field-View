@@ -1,0 +1,114 @@
+Goal: Map the current state of Checklists Stage 3 work and scope what's 
+needed to ship. Diagnose only — NO code changes, NO db writes, NO git push.
+
+Stage 3 has three sub-deliverables:
+  A. Template parity with v2 schema (sections, all field types, multiple 
+     choice options, photos_required, notes — templates must be able to 
+     define everything an instance can hold, and instantiation must 
+     clone faithfully)
+  B. Admin/manager gating on template CRUD (only admins/managers can 
+     create/edit/delete templates; all users can instantiate)
+  C. Global /checklists page rebuild/polish (the cross-project view 
+     reachable from the left nav)
+
+Phase 1 — DIAGNOSE only:
+
+A. TEMPLATE PARITY
+
+A1. Show me every template-related pgTable from shared/schema.ts. 
+    Expected: checklist_templates and checklist_template_items at 
+    minimum. List every column with its type for each.
+
+A2. Does the template schema have parity with the instance schema? 
+    Specifically check the template-item table for:
+    - field_type column (with same enum as checklist_items)
+    - notes column
+    - photos_required column
+    - sort_order
+    - section reference (is there a checklist_template_sections table? 
+      Or are template items flat?)
+    - Multiple-choice options storage (checklist_template_item_options 
+      table? JSONB column? Nothing?)
+
+A3. Show me every /api/checklist-templates* route in server/routes.ts 
+    with method + path + one-line summary. Specifically check for:
+    - Template CRUD (we know list/create/delete exist; is there 
+      PATCH for rename/edit?)
+    - Template section CRUD (if sections exist on templates)
+    - Template item CRUD (add/edit/delete/reorder items in a template)
+    - Template item options CRUD (for multiple choice)
+    - Instantiation route: how does a user create a checklist from a 
+      template? Is it POST /api/projects/:id/checklists with a 
+      templateId body field, or a dedicated 
+      POST /api/checklist-templates/:id/instantiate route?
+
+A4. Show me the instantiation logic in server/storage.ts (find by 
+    searching for "template" in storage methods, or the route handler 
+    body in routes.ts). Walk me through what it clones:
+    - Does it clone sections? 
+    - Does it clone field_type, notes, photos_required per item?
+    - Does it clone multiple-choice options per item?
+    - Does it set sort_order correctly on cloned rows?
+    Flag anything the instantiation drops on the floor.
+
+A5. Show me the template management UI. Most likely path: 
+    client/src/pages/checklist-templates.tsx or a tab inside 
+    settings. Where do users land to edit a template? Can they 
+    currently add sections to a template? Set field_types on template 
+    items? Add multiple-choice options? List what works and what's 
+    missing in the editor.
+
+B. ADMIN/MANAGER GATING
+
+B1. How is role-based gating done elsewhere in the codebase? Show me 
+    one example route (e.g. a report template route, team management 
+    route, or account settings route) that gates by admin/manager role. 
+    What middleware or inline check is used?
+
+B2. Are template CRUD routes currently gated? For each template 
+    write route (POST/PATCH/DELETE), show me the auth chain. If 
+    they're not role-gated, confirm that.
+
+B3. Is the template management UI itself gated client-side? E.g. does 
+    the nav entry / button to manage templates only show for 
+    admins/managers? Find where roles are checked in the UI and 
+    confirm.
+
+C. GLOBAL /checklists PAGE
+
+C1. Show me client/src/pages/checklists.tsx in full (or its first ~150 
+    lines + a description of the rest). What does it render today? 
+    Just a flat list of checklists? With which columns/filters/sort?
+
+C2. Compare against the Reports global page (client/src/pages/reports.tsx 
+    if it exists, or wherever the global reports view lives). What 
+    does the reports page do that the checklists page doesn't? List 
+    differences — filtering, sorting, search, project grouping, 
+    status indicators, progress bars, etc.
+
+C3. Does the global checklists page currently respect the 
+    restricted-account filter (restricted users only see checklists 
+    on projects they're assigned to)? Where is that filter applied — 
+    storage method, route handler, or frontend?
+
+OUTPUT FORMAT
+
+End with three verdict lines and a scoping summary:
+
+VERDICT A (template parity): [FULL PARITY / PARTIAL / NONE]
+  - List specifically what's missing from templates vs instances.
+
+VERDICT B (admin/manager gating): [GATED / UNGATED / PARTIAL]
+  - List which routes/UI surfaces are gated vs open.
+
+VERDICT C (global page state): [POLISHED / FUNCTIONAL-BUT-BARE / MISSING]
+  - List specifically what the page does vs what reports.tsx does.
+
+SCOPING SUMMARY:
+  - Estimated work for A (schema migration needed? routes needed? 
+    storage needed? UI needed?)
+  - Estimated work for B (middleware addition + frontend gate)
+  - Estimated work for C (rebuild vs polish)
+  - Recommended order to ship.
+
+No code modified. No DB writes. No git push.
