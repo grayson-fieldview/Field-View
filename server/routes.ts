@@ -2119,8 +2119,8 @@ export async function registerRoutes(
         ? (await presignMediaUrls([{ url: data.coverPhoto.url }]))[0].url
         : null;
 
-      const recentPhotos = await presignMediaUrls(
-        data.recentPhotos.map((p) => ({ id: p.id, url: p.url, takenAt: p.takenAt })),
+      const photos = await presignMediaUrls(
+        data.photos.map((p) => ({ id: p.id, url: p.url, takenAt: p.takenAt })),
       );
 
       const rawLogo = data.account.companyLogoUrl;
@@ -2132,7 +2132,7 @@ export async function registerRoutes(
         project: data.project,
         account: { name: data.account.name, companyLogoUrl },
         coverPhoto: coverPhotoUrl ? { url: coverPhotoUrl } : null,
-        recentPhotos,
+        photos,
       });
     } catch (error) {
       console.error("[public-projects] get error:", error);

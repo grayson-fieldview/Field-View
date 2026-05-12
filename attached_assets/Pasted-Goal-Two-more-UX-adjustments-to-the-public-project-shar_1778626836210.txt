@@ -1,0 +1,71 @@
+Goal: Two more UX adjustments to the public project share page:
+
+(1) Show ALL project photos (not just the 6 most recent) and make 
+them scrollable/tappable so clients can actually browse the photo 
+documentation.
+
+(2) Remove the "Sign in to view full project" button. This page is 
+client-facing — they aren't going to sign in, the button is just 
+visual clutter.
+
+PHASE 1 — SERVER
+
+In server/storage.ts, find getProjectPublicSummary. Change the 
+photos query:
+- Current: ORDER BY taken_at DESC LIMIT 6 (or similar) returning 
+  "recentPhotos"
+- New: return ALL photos for the project, ordered by takenAt DESC 
+  (or createdAt DESC if takenAt is null), no limit
+- Rename the field to "photos" (drop "recent") so the semantics 
+  match. Update the return type accordingly.
+
+Continue to use presigned S3 URLs. Keep the existing 5-min Cache-
+Control on the route — even with many photos, a presigned URL set 
+is small JSON. Note: presigned URLs have their own expiry (~7 days 
+typically), which is more than enough for a share session.
+
+If photo counts can be very high (say >200), consider a soft cap of 
+100 to keep the response payload bounded — but for v1, just return 
+all. Add a TODO comment if you cap.
+
+PHASE 2 — CLIENT
+
+In client/src/pages/public-project.tsx:
+
+(a) Remove the "Sign in to view full project" button in the header. 
+Replace with just the account branding (logo + name) so the header 
+stays as "Project shared with you / Grayson's Team" without a CTA.
+
+(b) Replace the 6-photo grid with the full photos array:
+- Render as a responsive grid (probably 3 columns on desktop, 2 on 
+  tablet, 1-2 on mobile — match whatever the existing project-detail 
+  photo grid uses)
+- Tap/click a photo → opens it in a lightbox/modal viewer
+- In the lightbox: full-size photo + left/right arrows to navigate 
+  between photos + close button + photo index ("3 of 24")
+- Keyboard support: arrow keys navigate, esc closes
+- Swipe support on mobile devices (Web doesn't need touch-perfect 
+  but should at least click L/R arrows to navigate)
+
+(c) Find existing lightbox/gallery code in the codebase to reuse:
+- Search client/src/ for "Lightbox", "PhotoViewer", "Gallery", 
+  any modal photo viewer that already exists (the main app likely 
+  has one for the photos tab)
+- If found, import and use it
+- If not found, build a simple one (~80-120 LOC) — fixed-position 
+  full-screen overlay, semi-transparent black background, image 
+  centered, prev/next buttons, esc/swipe to close
+
+(d) Section heading change: "Recent photos" → "Photos (N)" where N 
+is the total count. This makes it scannable how much has been 
+documented.
+
+VERIFY
+- npm run check
+- git diff --stat — likely 2-3 files modified (server/storage.ts, 
+  client/src/pages/public-project.tsx, maybe a new 
+  client/src/components/photo-lightbox.tsx if no existing component 
+  is reusable)
+- No new server endpoints, no schema changes, no migration
+
+DO NOT push. Show diff first.

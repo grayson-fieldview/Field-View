@@ -1,10 +1,10 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { MapPin, Image as ImageIcon, ListChecks, ExternalLink } from "lucide-react";
+import { MapPin, Image as ImageIcon, ListChecks } from "lucide-react";
+import { PhotoLightbox } from "@/components/photo-lightbox";
 
 interface PublicProjectData {
   project: {
@@ -22,12 +22,7 @@ interface PublicProjectData {
     companyLogoUrl: string | null;
   };
   coverPhoto: { url: string } | null;
-  recentPhotos: Array<{ id: number; url: string; takenAt: string }>;
-}
-
-interface MeResponse {
-  id?: string;
-  accountId?: string;
+  photos: Array<{ id: number; url: string; takenAt: string }>;
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -42,13 +37,7 @@ export default function PublicProjectPage({ token }: { token: string }) {
     queryKey: ["/api/public/projects", token],
   });
 
-  // Light client-side detection — if /api/me returns a user, link the CTA
-  // straight to /projects/:id (full app); otherwise to /signup. We don't
-  // gate any rendering on this — the public payload is always shown.
-  const { data: me } = useQuery<MeResponse | null>({
-    queryKey: ["/api/me"],
-    retry: false,
-  });
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   useEffect(() => {
     // Keep public project pages out of search engines.
@@ -98,37 +87,27 @@ export default function PublicProjectPage({ token }: { token: string }) {
     );
   }
 
-  const { project, account, coverPhoto, recentPhotos } = data;
+  const { project, account, coverPhoto, photos } = data;
   const statusLabel = STATUS_LABELS[project.status] || project.status;
-  const ctaHref = me?.id ? `/projects/${project.id}` : "/signup";
-  const ctaLabel = me?.id ? "Open in Field View" : "Sign in to view full project";
 
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b bg-card sticky top-0 z-10">
-        <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
-            {account.companyLogoUrl && (
-              <img
-                src={account.companyLogoUrl}
-                alt={account.name}
-                className="h-8 w-auto object-contain shrink-0"
-                data-testid="img-public-project-logo"
-              />
-            )}
-            <div className="min-w-0">
-              <p className="text-xs text-muted-foreground truncate">Project shared with you</p>
-              <h1 className="text-base font-semibold truncate" data-testid="text-public-project-account-name">
-                {account.name}
-              </h1>
-            </div>
+        <div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-3">
+          {account.companyLogoUrl && (
+            <img
+              src={account.companyLogoUrl}
+              alt={account.name}
+              className="h-8 w-auto object-contain shrink-0"
+              data-testid="img-public-project-logo"
+            />
+          )}
+          <div className="min-w-0">
+            <p className="text-xs text-muted-foreground truncate">Project shared with you</p>
+            <h1 className="text-base font-semibold truncate" data-testid="text-public-project-account-name">
+              {account.name}
+            </h1>
           </div>
-          <Button asChild variant="secondary" size="sm" data-testid="button-public-project-cta">
-            <a href={ctaHref}>
-              <ExternalLink className="h-4 w-4 mr-1.5" />
-              {ctaLabel}
-            </a>
-          </Button>
         </div>
       </header>
 
@@ -190,41 +169,34 @@ export default function PublicProjectPage({ token }: { token: string }) {
           )}
         </section>
 
-        <section className="space-y-4" data-testid="section-public-project-recent">
-          <h3 className="text-xl font-semibold">Recent photos</h3>
-          {recentPhotos.length === 0 ? (
+        <section className="space-y-4" data-testid="section-public-project-photos">
+          <h3 className="text-xl font-semibold" data-testid="text-public-project-photos-heading">
+            Photos ({project.photoCount})
+          </h3>
+          {photos.length === 0 ? (
             <Card className="p-12 text-center" data-testid="card-public-project-no-photos">
               <p className="text-sm text-muted-foreground">No photos yet.</p>
             </Card>
           ) : (
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-              {recentPhotos.map((photo) => (
-                <a
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+              {photos.map((photo, i) => (
+                <button
                   key={photo.id}
-                  href={photo.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="block aspect-[4/3] rounded-md overflow-hidden bg-muted"
-                  data-testid={`img-public-project-photo-${photo.id}`}
+                  type="button"
+                  onClick={() => setLightboxIndex(i)}
+                  className="block aspect-[4/3] rounded-md overflow-hidden bg-muted focus:outline-none focus:ring-2 focus:ring-primary"
+                  data-testid={`button-public-project-photo-${photo.id}`}
                 >
                   <img
                     src={photo.url}
-                    alt="Project photo"
+                    alt={`Project photo ${i + 1}`}
+                    loading="lazy"
                     className="w-full h-full object-cover hover:opacity-90 transition-opacity"
                   />
-                </a>
+                </button>
               ))}
             </div>
           )}
-        </section>
-
-        <section className="text-center pt-4">
-          <Button asChild size="lg" data-testid="button-public-project-cta-bottom">
-            <a href={ctaHref}>
-              <ExternalLink className="h-4 w-4 mr-2" />
-              {ctaLabel}
-            </a>
-          </Button>
         </section>
       </main>
 
@@ -233,6 +205,14 @@ export default function PublicProjectPage({ token }: { token: string }) {
           <p className="text-xs text-muted-foreground">Shared via Field View</p>
         </div>
       </footer>
+
+      {lightboxIndex !== null && (
+        <PhotoLightbox
+          photos={photos.map((p) => ({ id: p.id, url: p.url }))}
+          startIndex={lightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+        />
+      )}
     </div>
   );
 }

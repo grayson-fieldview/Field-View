@@ -75,7 +75,7 @@ import {
 } from "@shared/schema";
 import { users, accounts, type User } from "@shared/models/auth";
 import { db } from "./db";
-import { eq, desc, sql, asc, and, inArray, lte } from "drizzle-orm";
+import { eq, desc, sql, asc, and, inArray, lte, like } from "drizzle-orm";
 
 type DbOrTx = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -212,7 +212,7 @@ export interface IStorage {
     project: { id: number; name: string; address: string | null; status: string; color: string | null; photoCount: number; taskCount: number; completionPercent: number };
     account: { name: string; companyLogoUrl: string | null };
     coverPhoto: { url: string } | null;
-    recentPhotos: Array<{ id: number; url: string; takenAt: Date }>;
+    photos: Array<{ id: number; url: string; takenAt: Date }>;
   } | undefined>;
 
   getAllChecklistTemplates(accountId: string): Promise<(ChecklistTemplate & { itemCount: number })[]>;
@@ -1377,12 +1377,16 @@ export class DatabaseStorage implements IStorage {
       if (m) coverPhoto = { url: m.url };
     }
 
-    const recent = await db
+    // Images only — the public viewer renders <img>, so videos / other
+    // mime types must be excluded. Soft-capped at 200 to keep payload
+    // bounded; revisit with pagination if any project hits the cap.
+    // TODO: paginate if soft cap is regularly reached.
+    const photos = await db
       .select({ id: media.id, url: media.url, takenAt: media.createdAt })
       .from(media)
-      .where(eq(media.projectId, project.id))
+      .where(and(eq(media.projectId, project.id), like(media.mimeType, "image/%")))
       .orderBy(desc(media.createdAt))
-      .limit(6);
+      .limit(200);
 
     return {
       project: {
@@ -1400,7 +1404,7 @@ export class DatabaseStorage implements IStorage {
         companyLogoUrl: account.companyLogoUrl,
       },
       coverPhoto,
-      recentPhotos: recent,
+      photos,
     };
   }
 
