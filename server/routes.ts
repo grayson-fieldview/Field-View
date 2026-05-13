@@ -5090,6 +5090,29 @@ export async function registerRoutes(
         !!billing.stripeSubscriptionId ||
         user.subscriptionStatus === "active" ||
         !!user.stripeSubscriptionId;
+      // Rewardful: client_reference_id is how Rewardful attributes the
+      // Stripe conversion to the right affiliate. Mirrored into
+      // subscription_data.metadata as defense-in-depth in case the
+      // checkout-session-level attribution misses (e.g., subscription
+      // updates after initial checkout).
+      // Validation: Stripe caps client_reference_id at 200 chars; restrict
+      // to a conservative URL-safe charset to keep abusive payloads out
+      // of Stripe and our subscription metadata.
+      let rewardfulReferral: string | undefined;
+      const rawReferral = req.body?.rewardfulReferral;
+      if (rawReferral != null && rawReferral !== "") {
+        if (typeof rawReferral !== "string") {
+          return res.status(400).json({ message: "rewardfulReferral must be a string" });
+        }
+        const trimmed = rawReferral.trim();
+        if (trimmed.length > 0) {
+          if (trimmed.length > 200 || !/^[A-Za-z0-9_-]+$/.test(trimmed)) {
+            return res.status(400).json({ message: "rewardfulReferral is invalid" });
+          }
+          rewardfulReferral = trimmed;
+        }
+      }
+
       const sessionConfig: any = {
         customer: customerId,
         mode: "subscription",
@@ -5100,6 +5123,7 @@ export async function registerRoutes(
         // BETA100 (100% off, 50-redemption cap) and any future promo
         // codes are surfaced via this flag — DO NOT remove.
         allow_promotion_codes: true,
+        ...(rewardfulReferral ? { client_reference_id: rewardfulReferral } : {}),
       };
       if (!hasSubscription) {
         // Mid-trial card add: anchor Stripe's trial_end to OUR app-side
@@ -5114,6 +5138,15 @@ export async function registerRoutes(
         }
         // Else: trial expired or no trial → no trial_end, charge
         // immediately on Checkout completion.
+      }
+      if (rewardfulReferral) {
+        sessionConfig.subscription_data = {
+          ...(sessionConfig.subscription_data || {}),
+          metadata: {
+            ...((sessionConfig.subscription_data || {}).metadata || {}),
+            rewardful_referral: rewardfulReferral,
+          },
+        };
       }
       const session = await stripe.checkout.sessions.create(sessionConfig);
 

@@ -36,10 +36,21 @@ export default function SubscribePage() {
         .then((res) => res.json())
         .then(() => {
           qc.invalidateQueries({ queryKey: ["/api/auth/user"] });
+          // Rewardful client-side conversion ping — defense in depth
+          // alongside Stripe's client_reference_id attribution.
+          try {
+            const email = user?.email;
+            const rwf = (window as any).rewardful;
+            if (typeof rwf === "function" && email) {
+              rwf("convert", { email });
+            }
+          } catch {
+            // never block the success flow on tracker errors
+          }
         })
         .catch(() => {});
     }
-  }, [qc]);
+  }, [qc, user?.email]);
 
   const { data: prices, isLoading: pricesLoading } = useQuery({
     queryKey: ["/api/stripe/prices"],
@@ -47,11 +58,15 @@ export default function SubscribePage() {
 
   const checkoutMutation = useMutation({
     mutationFn: async (lineItems: { priceId: string; quantity: number }[]) => {
+      // Rewardful referral id (set by the tracker script in client/index.html
+      // when a visitor lands with ?via=<code>). May be undefined for direct
+      // traffic — that's fine, server treats it as optional.
+      const rewardfulReferral = (window as any).Rewardful?.referral || null;
       const res = await fetch("/api/create-checkout-session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ lineItems }),
+        body: JSON.stringify({ lineItems, rewardfulReferral }),
       });
       if (!res.ok) {
         const data = await res.json();

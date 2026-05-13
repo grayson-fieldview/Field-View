@@ -1,0 +1,95 @@
+Goal: Integrate Rewardful referral tracking into Field View (app + 
+backend) and add a "Refer, get $$$" link to the main sidebar nav. 
+Rewardful API key: 4645a8
+
+PHASE 1 — TRACKER SCRIPT
+
+I1. Add Rewardful tracker to client/index.html inside the <head> tag, 
+    BEFORE any other scripts:
+    
+    <script>(function(w,r){w._rwq=r;w[r]=w[r]||function(){(w[r].q=w[r].q||[]).push(arguments)}})(window,'rewardful');</script>
+    <script async src="https://r.wdfl.co/rw.js" data-rewardful="4645a8"></script>
+
+PHASE 2 — STRIPE INTEGRATION (server-side passthrough)
+
+I2. Find the Stripe Checkout Session creation route (likely in 
+    server/routes.ts or a billing module — search for 
+    stripe.checkout.sessions.create). 
+    
+    Modify it to:
+    - Accept an optional `rewardfulReferral` field in the request body
+    - If present, pass it as `client_reference_id` to 
+      stripe.checkout.sessions.create()
+    - This is how Rewardful attributes the conversion to the right 
+      referrer
+
+    Example:
+      const session = await stripe.checkout.sessions.create({
+        // ...existing params...
+        client_reference_id: req.body.rewardfulReferral || undefined,
+      });
+
+I3. If Field View uses Stripe Subscriptions (not Checkout), pass the 
+    referral as customer metadata or subscription metadata:
+      metadata: {
+        rewardful_referral: req.body.rewardfulReferral || '',
+      }
+
+PHASE 3 — CLIENT-SIDE CONVERSION TRACKING
+
+I4. On the subscribe page (client/src/pages/subscribe.tsx or 
+    wherever the subscription POST is made):
+    - Before submitting the subscription request, read 
+      window.Rewardful?.referral
+    - Include it in the request body as `rewardfulReferral`
+
+    Example:
+      const rewardfulReferral = (window as any).Rewardful?.referral || null;
+      // include in POST body
+
+I5. After successful subscription creation (on the success redirect 
+    or wherever the user lands after paying), fire:
+      (window as any).rewardful?.('convert', { 
+        email: user.email 
+      });
+    
+    This is defense-in-depth — it tells Rewardful "this email just 
+    converted" even if the server-side client_reference_id fails.
+
+PHASE 4 — SIDEBAR NAV LINK
+
+I6. Add a "Refer, get $$$" link to the main sidebar nav (probably 
+    in client/src/components/sidebar.tsx or layout component).
+    
+    - Style: matches existing nav items
+    - Icon: Gift from lucide-react
+    - Label: "Refer, get $$$"
+    - Color: standard nav text, but visually distinct (e.g. orange 
+      #f09004 text, or a small orange dot/badge to draw attention)
+    - Position: near the bottom of the sidebar, above Support/Settings
+    - Behavior: clicking opens https://rewardful.com/login in a NEW 
+      TAB (target="_blank" rel="noopener noreferrer")
+    - Note: we'll swap this URL for the dedicated Rewardful affiliate 
+      portal URL (friendsoffieldview.getrewardful.com or similar) 
+      once Rewardful provisions one. For now, generic login is fine.
+
+PHASE 5 — VERIFY
+
+V1. npm run check / typecheck — clean
+V2. git diff --stat — expect 3-4 files modified:
+    - client/index.html (+2 lines for tracker)
+    - server/routes.ts or billing route (+2-5 lines for 
+      client_reference_id)
+    - client/src/pages/subscribe.tsx (+5-10 lines for referral pass + 
+      convert call)
+    - client/src/components/sidebar.tsx (or layout) (+10-15 lines for 
+      nav link)
+V3. Quick manual test plan after deploy:
+    - Open the app in Incognito with ?via=test123 appended to the 
+      URL (e.g. https://app.field-view.com/?via=test123)
+    - In browser console, type: Rewardful.referral
+    - Should return the referral ID Rewardful generated for "test123"
+    - Sidebar should show "Refer, get $$$" link
+    - Clicking it opens Rewardful in new tab
+
+DO NOT push. Show diff first.

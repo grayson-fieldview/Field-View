@@ -26,6 +26,7 @@ import {
   BarChart3,
   CalendarDays,
   Clock,
+  Gift,
 } from "lucide-react";
 import { useLocation, Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -145,6 +146,29 @@ export function AppSidebar() {
             </SidebarGroup>
           );
         })()}
+        {/* Rewardful affiliate program entry. Opens in a new tab — TODO:
+            swap href for the dedicated friendsoffieldview portal once
+            Rewardful provisions one. */}
+        <SidebarGroup data-testid="group-refer">
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild data-testid="nav-refer">
+                  <a
+                    href="https://rewardful.com/login"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => { if (isMobile) setOpenMobile(false); }}
+                    className="text-[#F09000] font-medium"
+                  >
+                    <Gift className="h-4 w-4" />
+                    <span>Refer, get $$$</span>
+                  </a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
       </SidebarContent>
 
       <SidebarFooter className="p-3 space-y-2">
