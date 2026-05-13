@@ -146,32 +146,24 @@ export function AppSidebar() {
             </SidebarGroup>
           );
         })()}
-        {/* Rewardful affiliate program entry. Opens in a new tab — TODO:
-            swap href for the dedicated friendsoffieldview portal once
-            Rewardful provisions one. */}
-        <SidebarGroup data-testid="group-refer">
-          <SidebarGroupContent>
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild data-testid="nav-refer">
-                  <a
-                    href="https://rewardful.com/login"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={() => { if (isMobile) setOpenMobile(false); }}
-                    className="text-[#F09000] font-medium"
-                  >
-                    <Gift className="h-4 w-4" />
-                    <span>Refer, get $$$</span>
-                  </a>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
       </SidebarContent>
 
       <SidebarFooter className="p-3 space-y-2">
+        {/* Rewardful affiliate program entry. Sits directly above the
+            user identity row so it reads as a personal action. Opens in
+            a new tab — TODO: swap href for the dedicated
+            friendsoffieldview portal once Rewardful provisions one. */}
+        <a
+          href="https://app.getrewardful.com/"
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={() => { if (isMobile) setOpenMobile(false); }}
+          className="flex items-center gap-2 px-2 py-2 rounded-md text-sm font-medium text-[#F09000] hover:bg-sidebar-accent/50 transition-colors"
+          data-testid="nav-refer"
+        >
+          <Gift className="h-4 w-4" />
+          <span>Refer, get $$$</span>
+        </a>
         <div className="flex items-center gap-3">
           <Avatar className="h-8 w-8">
             <AvatarImage src={user?.profileImageUrl || undefined} alt={user?.firstName || "User"} />
