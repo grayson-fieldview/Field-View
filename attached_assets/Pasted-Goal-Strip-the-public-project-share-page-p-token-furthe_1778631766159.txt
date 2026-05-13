@@ -1,0 +1,70 @@
+Goal: Strip the public project share page (/p/:token) further. 
+Three issues identified during user testing:
+
+(1) Tasks/Completion cards STILL VISIBLE on the public page. They 
+    were supposed to be removed in the Phase A v2 polish PR but 
+    persisted somewhere. Audit and fully remove.
+
+(2) Project status badge (e.g. "Active", the colored tag near the 
+    project name) is still showing. Remove it — client viewers 
+    don't need to see project workflow status.
+
+(3) Lightbox close (×) button is positioned wrong — currently 
+    middle-left of screen and partially off-screen. Should be 
+    top-right corner, fully visible, comfortable tap target on 
+    mobile (44px+ accessibility size).
+
+CONTEXT
+The public share page is client/src/pages/public-project.tsx.
+The lightbox is its own component (built in Phase A v2) — likely 
+client/src/components/photo-lightbox.tsx or similar.
+
+PHASE 1 — IMPLEMENT
+
+I1. Open client/src/pages/public-project.tsx. Audit the rendered 
+    output:
+    - Find any rendering of "Tasks" + "Completion" cards/badges/
+      stat blocks. There may be a summary section with Photos/
+      Tasks/Completion. Remove Tasks + Completion. Keep Photos 
+      count if it's there, but render it inline with the heading 
+      (e.g. "Photos (24)") rather than as a stat card.
+    - Find any project status badge (e.g. "Active" colored tag, 
+      likely near the project name or in the hero header). 
+      Remove it entirely.
+    - The final page should be: cover photo (if any) + project 
+      name + address (if available) + "Photos (N)" heading + 
+      photo grid. That's it. No other metadata, badges, or stat 
+      blocks.
+
+I2. Open the lightbox component (search for it — likely 
+    photo-lightbox.tsx). Fix the close (×) button:
+    - Position: fixed, top: 16px, right: 16px (or use a tailwind 
+      utility class equivalent — top-4 right-4)
+    - z-index: above all content (z-50 or top-stack)
+    - Size: at least 44x44px tap target (accessibility minimum)
+    - Visual: white × on semi-transparent black circle background, 
+      visible against any photo
+    - Make sure it doesn't overlap the iOS notch — add safe-area-
+      inset-top to the top offset on mobile
+    - Tap area should be the full button, not just the × glyph
+
+I3. While in the lightbox, verify the prev/next arrows are also 
+    well-positioned and fully visible (left and right edges, 
+    vertically centered). If they have the same off-screen 
+    problem, fix them too.
+
+PHASE 2 — VERIFY
+
+V1. npm run check / typecheck — clean
+V2. git diff --stat — expect 2 files modified (public-project.tsx 
+    + photo-lightbox.tsx or equivalent), ~30-60 lines net
+V3. Manual visual check (note for the user):
+    - Open the public share URL on a phone
+    - Header: just project name + address + "Photos (N)" + grid 
+      — no badges, no stat cards
+    - Tap a photo → lightbox opens → × button is top-right corner, 
+      fully visible, easy to tap
+    - Arrows left/right are fully visible
+    - Tap × → lightbox closes cleanly
+
+DO NOT push. Show diff first.

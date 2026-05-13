@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { X, ChevronLeft, ChevronRight } from "lucide-react";
-import { Button } from "@/components/ui/button";
 
 interface PhotoLightboxProps {
   photos: Array<{ id: number; url: string }>;
@@ -8,6 +7,10 @@ interface PhotoLightboxProps {
   onClose: () => void;
 }
 
+// Plain native buttons (NOT shadcn <Button>) for the controls — the shadcn
+// Button's internal flex/inline-flex layout was conflicting with absolute
+// positioning in some viewports and causing the close × to render mid-left
+// off-screen. Native buttons + explicit fixed positioning are bulletproof.
 export function PhotoLightbox({ photos, startIndex, onClose }: PhotoLightboxProps) {
   const [index, setIndex] = useState(startIndex);
   const touchStartX = useRef<number | null>(null);
@@ -71,42 +74,48 @@ export function PhotoLightbox({ photos, startIndex, onClose }: PhotoLightboxProp
       onTouchEnd={onTouchEnd}
       data-testid="overlay-photo-lightbox"
     >
-      <Button
+      {/* Close: top-right, 44x44 tap target, safe-area aware */}
+      <button
         ref={closeButtonRef}
-        variant="ghost"
-        size="icon"
+        type="button"
         aria-label="Close photo viewer"
-        className="absolute top-3 right-3 text-white hover:bg-white/10"
         onClick={(e) => {
           e.stopPropagation();
           onClose();
         }}
+        className="fixed z-[60] flex h-11 w-11 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+        style={{
+          top: "calc(env(safe-area-inset-top, 0px) + 16px)",
+          right: "calc(env(safe-area-inset-right, 0px) + 16px)",
+        }}
         data-testid="button-lightbox-close"
       >
-        <X className="h-5 w-5" />
-      </Button>
+        <X className="h-6 w-6" aria-hidden="true" />
+      </button>
 
+      {/* Counter pill: top-center, also safe-area aware */}
       <div
-        className="absolute top-3 left-1/2 -translate-x-1/2 text-white text-sm bg-black/40 rounded-full px-3 py-1"
+        className="fixed left-1/2 z-[60] -translate-x-1/2 rounded-full bg-black/60 px-3 py-1 text-sm text-white"
+        style={{ top: "calc(env(safe-area-inset-top, 0px) + 18px)" }}
         data-testid="text-lightbox-index"
       >
         {index + 1} of {total}
       </div>
 
       {total > 1 && (
-        <Button
-          variant="ghost"
-          size="icon"
+        <button
+          type="button"
           aria-label="Previous photo"
-          className="absolute left-3 md:left-6 text-white hover:bg-white/10 h-12 w-12"
           onClick={(e) => {
             e.stopPropagation();
             goPrev();
           }}
+          className="fixed top-1/2 z-[60] flex h-12 w-12 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+          style={{ left: "calc(env(safe-area-inset-left, 0px) + 16px)" }}
           data-testid="button-lightbox-prev"
         >
-          <ChevronLeft className="h-7 w-7" />
-        </Button>
+          <ChevronLeft className="h-7 w-7" aria-hidden="true" />
+        </button>
       )}
 
       <img
@@ -118,19 +127,19 @@ export function PhotoLightbox({ photos, startIndex, onClose }: PhotoLightboxProp
       />
 
       {total > 1 && (
-        <Button
-          variant="ghost"
-          size="icon"
+        <button
+          type="button"
           aria-label="Next photo"
-          className="absolute right-3 md:right-6 text-white hover:bg-white/10 h-12 w-12"
           onClick={(e) => {
             e.stopPropagation();
             goNext();
           }}
+          className="fixed top-1/2 z-[60] flex h-12 w-12 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+          style={{ right: "calc(env(safe-area-inset-right, 0px) + 16px)" }}
           data-testid="button-lightbox-next"
         >
-          <ChevronRight className="h-7 w-7" />
-        </Button>
+          <ChevronRight className="h-7 w-7" aria-hidden="true" />
+        </button>
       )}
     </div>
   );
