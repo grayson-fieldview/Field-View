@@ -28,9 +28,11 @@ import {
   Clock,
   Gift,
 } from "lucide-react";
+import { useState } from "react";
 import { useLocation, Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { ThemeToggle } from "@/components/theme-toggle";
+import ReferralModal from "@/components/referral-modal";
 import faviconImg from "@assets/Favicon-01-brand_1778259672.png";
 
 type NavItem = {
@@ -62,6 +64,7 @@ export function AppSidebar() {
   const [location] = useLocation();
   const { user, logout } = useAuth();
   const { isMobile, setOpenMobile } = useSidebar();
+  const [referralModalOpen, setReferralModalOpen] = useState(false);
 
   const initials = user
     ? `${(user.firstName || "")[0] || ""}${(user.lastName || "")[0] || ""}`.toUpperCase() || "U"
@@ -149,21 +152,26 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter className="p-3 space-y-2">
-        {/* Rewardful affiliate program entry. Sits directly above the
-            user identity row so it reads as a personal action. Opens in
-            a new tab — TODO: swap href for the dedicated
-            friendsoffieldview portal once Rewardful provisions one. */}
-        <a
-          href="https://app.getrewardful.com/"
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={() => { if (isMobile) setOpenMobile(false); }}
-          className="flex items-center gap-2 px-2 py-2 rounded-md text-sm font-medium text-[#F09000] hover:bg-sidebar-accent/50 transition-colors"
+        {/* Rewardful affiliate program entry. Opens an in-app modal that
+            lazily provisions the user's affiliate record on first click
+            (GET /api/me/referral). Sits directly above the user identity
+            row so it reads as a personal action. */}
+        <button
+          type="button"
+          onClick={() => {
+            if (isMobile) setOpenMobile(false);
+            setReferralModalOpen(true);
+          }}
+          className="flex w-full items-center gap-2 px-2 py-2 rounded-md text-sm font-medium text-[#F09000] hover:bg-sidebar-accent/50 transition-colors text-left"
           data-testid="nav-refer"
         >
           <Gift className="h-4 w-4" />
           <span>Refer, get $$$</span>
-        </a>
+        </button>
+        <ReferralModal
+          open={referralModalOpen}
+          onClose={() => setReferralModalOpen(false)}
+        />
         <div className="flex items-center gap-3">
           <Avatar className="h-8 w-8">
             <AvatarImage src={user?.profileImageUrl || undefined} alt={user?.firstName || "User"} />

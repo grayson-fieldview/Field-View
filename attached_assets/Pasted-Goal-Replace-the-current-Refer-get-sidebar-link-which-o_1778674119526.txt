@@ -1,0 +1,172 @@
+Goal: Replace the current "Refer, get $$$" sidebar link (which opens 
+rewardful.com/login externally) with an in-app modal showing the 
+user's unique referral URL, CompanyCam-style. Use Rewardful's 
+server-side API to auto-create the affiliate on first request.
+
+CONTEXT
+- Rewardful API base: https://api.getrewardful.com/v1
+- API secret env var (already set in Vercel): REWARDFUL_API_SECRET
+- Public tracker key (already installed in client/index.html): 4645a8 
+  — DO NOT touch
+- Campaign ID for "Friends of Field View": 
+  e64e0035-e50b-4de3-aa78-e4bebbd0e123
+- Affiliate portal URL (for "See Program Details"): 
+  https://field-view.getrewardful.com/signup
+- Marketing site URL: https://www.field-view.com
+
+PHASE 1 — SCHEMA + MIGRATION
+
+I1. Add 2 columns to users table:
+    - rewardful_affiliate_id VARCHAR(64) (nullable)
+    - rewardful_referral_url VARCHAR(255) (nullable)
+    
+    Migration script at 
+    script/migrations/migrate_session43_rewardful_affiliate.ts
+    following existing pattern: 
+    - db.transaction() wrap
+    - env guard (throw unless URL contains rds.amazonaws.com or 
+      neon.tech; require ALLOW_PROD_MIGRATION=yes for RDS)
+    - entry-point guard against dynamic-import auto-execution
+    - log host (no password) and mode before DB call
+    - IF NOT EXISTS guards on both DDL statements
+
+PHASE 2 — BACKEND
+
+I2. Add constant REWARDFUL_CAMPAIGN_ID = 
+    "e64e0035-e50b-4de3-aa78-e4bebbd0e123" in server config or as 
+    a constant in the new module.
+
+I3. New module server/lib/rewardful.ts (or wherever billing utilities 
+    live) with helper functions:
+    - getAffiliateById(id): GET /v1/affiliates/:id
+    - findAffiliateByEmail(email): GET /v1/affiliates?email=... 
+      (returns first match or null)
+    - createAffiliate({ email, first_name, last_name }): POST 
+      /v1/affiliates with body { email, first_name, last_name, 
+      campaign_id: REWARDFUL_CAMPAIGN_ID }
+    
+    All calls authenticated via:
+      Authorization: Basic <base64(REWARDFUL_API_SECRET + ":")>
+    Content-Type: application/json
+    
+    Wrap all calls in try/catch, log failures to Sentry, throw 
+    typed errors so the route handler can return appropriate HTTP 
+    status.
+
+I4. New endpoint: GET /api/me/referral
+    - Auth required (must be logged in)
+    - Logic:
+      1. Read current user (id, email, full_name, 
+         rewardful_affiliate_id, rewardful_referral_url)
+      2. If user.rewardful_affiliate_id AND 
+         user.rewardful_referral_url both exist → return cached 
+         values + fetch fresh stats from Rewardful
+      3. Otherwise, find or create affiliate:
+         a. Try findAffiliateByEmail(user.email) 
+         b. If not found, createAffiliate({ email, first_name, 
+            last_name }) — split user.full_name into first/last 
+            (split on first space; if no space, put all into 
+            first_name and use empty string for last_name)
+         c. Save affiliate.id to users.rewardful_affiliate_id
+         d. Save affiliate.links[0].url to 
+            users.rewardful_referral_url
+      4. Fetch stats:
+         - GET /v1/affiliates/:id should return visitors, leads, 
+           conversions counts and commission totals
+      5. Return JSON:
+         {
+           referralUrl: <users.rewardful_referral_url>,
+           referralCode: <link token from URL, e.g. extract ?via= 
+             param>,
+           stats: {
+             visitors: <number>,
+             leads: <number>,
+             conversions: <number>,
+             unpaidCommissionsCents: <number>,
+             paidCommissionsCents: <number>
+           }
+         }
+    - On Rewardful API error: return 503 with 
+      { error: "Couldn't load referral info, try again shortly" }
+    - Log all errors to Sentry with context
+
+PHASE 3 — FRONTEND MODAL
+
+I5. New component client/src/components/referral-modal.tsx:
+    - Props: { open: boolean; onClose: () => void }
+    - Uses existing Dialog primitive from shadcn/ui (or whatever 
+      modal pattern the app uses — match existing patterns like 
+      project-share-dialog or similar)
+    - Layout:
+      * Headline: "Get $100 for Referrals" (large, bold, dark)
+      * Description: "Share your unique referral link via text, 
+        email, or whatever's easiest. You'll get $100 if your 
+        referral becomes a paying customer for 2 months."
+      * Read-only Input field showing the referralUrl (full width, 
+        slightly muted background, monospace optional)
+      * Copy button to the right of the input (or below on mobile) 
+        — uses navigator.clipboard.writeText(referralUrl). On 
+        success: 
+          - Toast: "Referral link copied"
+          - Button briefly shows checkmark + "Copied" for ~1.5s, 
+            then reverts
+      * Optional small stats row below the input (muted gray text, 
+        small font):
+          "Visitors: {visitors} · Conversions: {conversions} · 
+          Earned: ${(unpaidCommissionsCents + paidCommissionsCents) 
+          / 100}"
+      * "See Program Details" button (bottom right, outlined/ghost 
+        style) → opens https://field-view.getrewardful.com/signup 
+        in new tab (target="_blank" rel="noopener noreferrer")
+      * Brand orange accent (#f09004) on headline and copy button
+    - Loading state: spinner centered in modal while fetching 
+      GET /api/me/referral
+    - Error state: friendly message "Couldn't load your referral 
+      link. Try again shortly." with a "Retry" button that 
+      re-fetches
+    - Fetch GET /api/me/referral on open (use useQuery or whatever 
+      data-fetching pattern the codebase uses)
+
+I6. Update sidebar component (search for "Refer, get $$$"):
+    - Remove external link behavior 
+      (target="_blank" → rewardful.com/login)
+    - Convert to button that toggles a useState 
+      `referralModalOpen`
+    - Render <ReferralModal open={referralModalOpen} 
+      onClose={() => setReferralModalOpen(false)} />
+    - Keep the Gift icon + orange styling
+
+PHASE 4 — VERIFY
+
+V1. npm run check / typecheck — clean
+V2. git diff --stat — expect 5-6 files modified:
+    - shared/schema.ts (+3 lines for new columns)
+    - script/migrations/migrate_session43_rewardful_affiliate.ts 
+      (new, ~50 lines)
+    - server/lib/rewardful.ts (new, ~80-100 lines)
+    - server/routes.ts (+30-40 lines for new endpoint)
+    - client/src/components/sidebar.tsx (~10 line tweak)
+    - client/src/components/referral-modal.tsx (new, ~130-160 lines)
+V3. Manual test plan (note for Grayson, schema migration first):
+    - After migration + deploy: sign in, click "Refer, get $$$"
+    - Modal opens, loading spinner ~1s, then shows referral URL
+    - Click Copy → toast confirms, paste somewhere to verify URL 
+      format: https://www.field-view.com/?via=<code>
+    - Close modal, reopen → loads instantly (cached server-side via 
+      stored user.rewardful_referral_url)
+    - Click "See Program Details" → opens 
+      field-view.getrewardful.com/signup in new tab
+    - In Rewardful dashboard → Affiliates tab → Grayson Gladu 
+      should appear as a new affiliate
+
+PROD MIGRATION SEQUENCE (HARD RULE: schema BEFORE Vercel promote)
+1. RDS snapshot
+2. Whitelist Replit IP on RDS security group  
+3. SET ALLOW_PROD_MIGRATION=yes and run migration
+4. Verify both columns exist via TablePlus
+5. Push code (Vercel deploys to Staged)
+6. Manually promote in Vercel
+7. Smoke test
+8. Remove Replit IP from RDS SG
+
+DO NOT push. Show diff first.

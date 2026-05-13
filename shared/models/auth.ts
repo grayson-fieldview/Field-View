@@ -63,6 +63,12 @@ export const users = pgTable("users", {
   verificationCodeAttempts: integer("verification_code_attempts").notNull().default(0),
   verificationCodeSentAt: timestamp("verification_code_sent_at"),
   expoPushToken: varchar("expo_push_token", { length: 255 }),
+  // S43 Rewardful: cached affiliate id + referral URL so we don't have to
+  // round-trip Rewardful's API on every modal open. Both populated lazily
+  // on first GET /api/me/referral; created in Rewardful campaign
+  // "Friends of Field View".
+  rewardfulAffiliateId: varchar("rewardful_affiliate_id", { length: 64 }),
+  rewardfulReferralUrl: varchar("rewardful_referral_url", { length: 255 }),
   deletedAt: timestamp("deleted_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),

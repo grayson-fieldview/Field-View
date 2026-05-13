@@ -22,6 +22,14 @@ import { toCsv } from "./lib/csv";
 import bcrypt from "bcryptjs";
 import { Sentry } from "./lib/sentry";
 import { sendPushNotification } from "./lib/push";
+import {
+  RewardfulError,
+  REWARDFUL_CAMPAIGN_ID,
+  createAffiliate as rewardfulCreateAffiliate,
+  findAffiliateByEmail as rewardfulFindAffiliateByEmail,
+  getAffiliateById as rewardfulGetAffiliateById,
+  extractReferralCode,
+} from "./lib/rewardful";
 
 async function streamReportPdfById(id: number, res: any): Promise<void> {
   const data = await storage.getReportForPdf(id);
@@ -5254,6 +5262,132 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Error fetching prices:", error.message);
       res.status(500).json({ message: "Failed to fetch prices" });
+    }
+  });
+
+  // ============================================================
+  // S43: Rewardful affiliate / referral
+  // ============================================================
+  // GET /api/me/referral
+  // Returns the current user's Rewardful affiliate referral URL + stats.
+  // Lazily creates the affiliate in the "Friends of Field View" campaign on
+  // first call and caches the affiliate id + URL on the user row so future
+  // calls only need a stats refresh against Rewardful.
+  app.get("/api/me/referral", isAuthenticated, async (req: any, res) => {
+    try {
+      const user = await authStorage.getUser(req.user.id);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      if (!user.email) {
+        return res.status(400).json({
+          error: "Your account needs an email address before you can refer friends.",
+        });
+      }
+
+      let affiliate = null as Awaited<ReturnType<typeof rewardfulGetAffiliateById>> | null;
+
+      if (user.rewardfulAffiliateId && user.rewardfulReferralUrl) {
+        // Cached path — refresh stats only. If the cached id is stale (404),
+        // fall through to the find-or-create flow below.
+        try {
+          affiliate = await rewardfulGetAffiliateById(user.rewardfulAffiliateId);
+        } catch (e) {
+          if (!(e instanceof RewardfulError && e.status === 404)) throw e;
+        }
+      }
+
+      if (!affiliate) {
+        // Lookup is campaign-scoped: the same email may already be enrolled
+        // in a different Rewardful campaign on this account; binding to that
+        // record would hand the user the wrong referral link.
+        affiliate = await rewardfulFindAffiliateByEmail(
+          user.email,
+          REWARDFUL_CAMPAIGN_ID,
+        );
+        if (!affiliate) {
+          // Spec says split full_name on first space; our schema already has
+          // discrete first/last columns, so use them directly. Fall back to
+          // the email local-part when both are blank so Rewardful gets a
+          // non-empty first_name (its API requires it).
+          const first = (user.firstName || "").trim();
+          const last = (user.lastName || "").trim();
+          const fallbackFirst = user.email.split("@")[0] || "Field View";
+          try {
+            affiliate = await rewardfulCreateAffiliate({
+              email: user.email,
+              first_name: first || fallbackFirst,
+              last_name: last,
+            });
+          } catch (createErr) {
+            // Race / duplicate fallback: a concurrent request (or a previous
+            // partial run that failed before persisting) may have already
+            // created the affiliate. Rewardful answers duplicates with
+            // 422/409 — re-query (campaign-scoped) and reuse if present
+            // before bubbling the error.
+            const isDup =
+              createErr instanceof RewardfulError &&
+              (createErr.status === 422 || createErr.status === 409);
+            if (!isDup) throw createErr;
+            const existing = await rewardfulFindAffiliateByEmail(
+              user.email,
+              REWARDFUL_CAMPAIGN_ID,
+            );
+            if (!existing) throw createErr;
+            affiliate = existing;
+          }
+        }
+
+        const referralUrl = affiliate.links?.[0]?.url ?? null;
+        if (!referralUrl) {
+          throw new RewardfulError(
+            "Rewardful affiliate has no referral link",
+            502,
+            affiliate,
+          );
+        }
+        await authStorage.updateUser(user.id, {
+          rewardfulAffiliateId: affiliate.id,
+          rewardfulReferralUrl: referralUrl,
+        });
+        user.rewardfulAffiliateId = affiliate.id;
+        user.rewardfulReferralUrl = referralUrl;
+      }
+
+      const referralUrl =
+        user.rewardfulReferralUrl || affiliate.links?.[0]?.url || "";
+      const referralCode = extractReferralCode(referralUrl);
+
+      // Rewardful returns commissions either as integer cents or as decimal
+      // strings (varies by endpoint). Normalize to cents defensively.
+      const toCents = (v: unknown): number => {
+        if (typeof v === "number" && Number.isFinite(v)) {
+          return Number.isInteger(v) ? v : Math.round(v * 100);
+        }
+        if (typeof v === "string" && v.trim() !== "") {
+          const n = Number(v);
+          if (Number.isFinite(n)) {
+            return Number.isInteger(n) ? n : Math.round(n * 100);
+          }
+        }
+        return 0;
+      };
+
+      res.json({
+        referralUrl,
+        referralCode,
+        stats: {
+          visitors: Number(affiliate.visitors ?? 0),
+          leads: Number(affiliate.leads ?? 0),
+          conversions: Number(affiliate.conversions ?? 0),
+          unpaidCommissionsCents: toCents(affiliate.unpaid_commissions),
+          paidCommissionsCents: toCents(affiliate.paid_commissions),
+        },
+      });
+    } catch (error: any) {
+      console.error("[referral] error:", error?.message || error);
+      Sentry.captureException(error);
+      res.status(503).json({
+        error: "Couldn't load referral info, try again shortly",
+      });
     }
   });
 
