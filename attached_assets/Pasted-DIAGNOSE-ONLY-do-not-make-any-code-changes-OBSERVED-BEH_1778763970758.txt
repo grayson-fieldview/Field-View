@@ -1,0 +1,81 @@
+DIAGNOSE ONLY — do not make any code changes.
+
+OBSERVED BEHAVIOR:
+On the global /projects list (manager workspace), each project row 
+shows "Last updated <date>". This timestamp is stale: a project 
+where a photo was uploaded 5 minutes ago still shows "Last updated 
+May 5, 2026" (which is when the project record itself was last 
+edited — name change, address change, etc.).
+
+The expected behavior: "Last updated" should reflect the most recent 
+activity on the project OR any of its children (photos, reports, 
+checklists, tasks, daily logs, comments — anything a user might 
+consider "activity").
+
+INVESTIGATION:
+
+1. SCHEMA: What's the column behind "Last updated" on the projects 
+   list? Find:
+   - The projects table definition (likely shared/schema.ts or 
+     shared/models/)
+   - The column used by the API to return the timestamp
+   - Whether there's a separate last_activity_at column or just 
+     updated_at
+
+2. CURRENT WRITE PATTERN: Search server/routes.ts and any helper 
+   files for every endpoint that mutates a CHILD of a project. For 
+   each, report:
+   - Endpoint (method + path)
+   - What it mutates (e.g., "creates a photo", "updates a report 
+     section", "completes a checklist item")
+   - Whether it currently bumps projects.updated_at (or 
+     last_activity_at) for the parent project
+   - If yes, how (direct UPDATE, ORM hook, shared helper, etc.)
+   - If no, what would need to change
+
+   Specifically check these child mutations at minimum (not 
+   exhaustive — find all of them):
+   - Photo upload to project (POST /api/projects/:id/photos or 
+     similar)
+   - Photo deletion
+   - Report create / update / delete
+   - Report section add / update / delete
+   - Report photo add / update / delete
+   - Checklist create / update / item complete
+   - Task create / update / status change
+   - Daily log entry
+   - Comments (if they exist)
+   - Geofence-triggered timesheet entries (clock-in/out from auto 
+     and manual)
+
+3. READ PATTERN: Find the projects-list endpoint (GET /api/projects 
+   or similar). Does it:
+   - Return projects.updated_at directly?
+   - Compute a derived "last activity" from a join on children 
+     (MAX(photo.created_at), etc.)?
+   - Use a separate last_activity_at column?
+
+4. SHARED HELPER: Is there already a helper somewhere like 
+   touchProject(projectId) or bumpProjectActivity() that some 
+   endpoints call and others don't? Or does every endpoint do its 
+   own UPDATE?
+
+5. FIX SURFACE COMPARISON: Compare three approaches and report 
+   tradeoffs:
+   - (A) Add a touchProject() helper call to every child mutation 
+     endpoint — many files, many places, easy to miss new endpoints 
+     in the future
+   - (B) Add a separate last_activity_at column and a single helper, 
+     migrated alongside this fix — requires schema change but 
+     cleaner long-term
+   - (C) Compute on read in the projects-list endpoint via a SQL 
+     subquery — no schema change, no write-side fanout, but slower 
+     query and harder to display nicely on every row
+
+END THE REPORT WITH:
+"The current behavior is [...]. The fix surface is [list of 
+endpoints/files]. The recommended approach is [A / B / C] because 
+[reasoning]. Estimated complexity: [small/medium/large]. Requires 
+schema migration: [yes/no]."
+
+Do not implement the fix.
