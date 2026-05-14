@@ -1,0 +1,80 @@
+Implement the fix to the stale "Last updated" on the /projects list. 
+Show me the diff before merging. Run an architect review pass after.
+
+ROOT CAUSE (from prior diagnose):
+projects.updated_at is bumped only by direct project field edits 
+(PATCH /api/projects/:id, cover-photo cleanup, share-token mint). 
+Every other child mutation — photo upload, task complete, checklist 
+update, report section add, timesheet clock-in, etc. — leaves the 
+parent untouched. The /api/projects endpoint reads and sorts by this 
+stale column.
+
+FIX APPROACH: Option C from the diagnose — compute "last activity" 
+on read in the storage method, no schema change, no fanout.
+
+CHANGES:
+
+1. server/storage.ts — getProjectsWithDetails:
+   Rewrite the leading SELECT against projects to compute a 
+   last_activity_at value via correlated subqueries, taking the 
+   GREATEST of:
+   - projects.updated_at (preserves manual-edit timestamps)
+   - MAX(media.created_at) WHERE project_id = projects.id
+   - MAX(tasks.updated_at) WHERE project_id = projects.id
+   - MAX(checklists.updated_at) WHERE project_id = projects.id
+   - MAX(checklist_items.updated_at) (joined via checklist.project_id 
+     or however the schema relates them — verify the exact path)
+   - MAX(reports.updated_at) WHERE project_id = projects.id
+   - MAX(report_sections.updated_at) (joined via report.project_id)
+   - MAX(media_annotations.updated_at) (joined via media.project_id)
+   - MAX(comments.created_at) (joined via media.project_id — 
+     comments have no updated_at per the diagnose)
+   - MAX(time_entries.updated_at) WHERE project_id = projects.id
+
+   Use COALESCE(..., '-infinity') for empty children so GREATEST 
+   doesn't return NULL.
+
+   Update the ORDER BY clause to use the computed last_activity_at 
+   DESC, so the list is also sorted by recency of activity.
+
+2. Return shape: keep the field name as updatedAt on the returned 
+   object (alias the computed value) so the frontend at 
+   client/src/pages/projects.tsx:306 doesn't need to change. The 
+   semantic of updatedAt on this endpoint becomes "last activity" 
+   while the column itself retains its original meaning — this is a 
+   deliberate API-level aliasing.
+
+3. NO frontend changes required. Verify by inspection.
+
+EXPLICITLY OUT OF SCOPE:
+- Do NOT rewrite the existing N+1 in getProjectsWithDetails (the 
+  per-project queries for media, recentPhotos, recentUsers). That 
+  is a separate concern logged for post-launch.
+- Do NOT add a touchProject helper or touch any of the 25-30 child 
+  mutation endpoints. Approach C is read-side only.
+- Do NOT add a last_activity_at column. No schema change.
+
+PERFORMANCE NOTE:
+The subqueries hit indexed FKs (project_id on each child table). For 
+current account sizes (<100 projects) this should be <100ms total. 
+If a future account hits performance issues, the same query can be 
+promoted to a materialized column without changing the API or 
+frontend.
+
+VERIFY:
+- The subquery returns expected results for: a project with no 
+  children (should return projects.updated_at), a project with only 
+  photos (should return MAX(media.created_at) if recent), a project 
+  with mixed activity (should return the most recent across all 
+  child types).
+- Existing tests for /api/projects still pass.
+
+DELIVERABLE:
+1. Show me the full diff (likely 1 file: server/storage.ts)
+2. Show the new SQL in the diff summary, formatted readably
+3. Confirm TypeScript check is clean
+4. Run architect review pass — specifically ask the architect to 
+   verify all child-table joins traverse the schema correctly 
+   (checklist_items → checklists → projects, report_sections → 
+   reports → projects, etc.)
+5. Do NOT push to git until I approve the diff.
