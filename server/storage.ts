@@ -75,7 +75,7 @@ import {
 } from "@shared/schema";
 import { users, accounts, type User } from "@shared/models/auth";
 import { db } from "./db";
-import { eq, desc, sql, asc, and, inArray, lte, like, getTableColumns } from "drizzle-orm";
+import { eq, desc, sql, asc, and, inArray, lte, like } from "drizzle-orm";
 
 type DbOrTx = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -300,80 +300,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getProjectsWithDetails(accountId: string): Promise<ProjectWithDetails[]> {
-    // "Last activity" is computed on read (Approach C) so the value reflects
-    // any work in the project tree, not just direct edits to the projects row.
-    // The result is aliased back into `updatedAt` so the API shape and the
-    // frontend at client/src/pages/projects.tsx do not change.
-    //
-    // Each child subquery picks the column that actually advances when the
-    // user does work on that entity (per shared/schema.ts column inventory):
-    //   media                      → created_at         (no updated_at column)
-    //   media_annotations          → updated_at         (chained via media)
-    //   comments                   → created_at         (no updated_at column; chained via media)
-    //   tasks                      → updated_at
-    //   checklists                 → updated_at
-    //   checklist_sections         → updated_at         (chained via checklists)
-    //   checklist_items            → completed_at       (no updated_at column; only column that moves on user action)
-    //   checklist_item_options     → updated_at         (chained via checklist_items → checklists)
-    //   checklist_item_photos      → created_at         (no updated_at by design — re-attach is delete+create; chained via checklist_items → checklists)
-    //   reports                    → updated_at
-    //   report_sections            → updated_at         (chained via reports)
-    //   report_section_photos      → created_at         (no updated_at; chained via report_sections → reports)
-    //   time_entries               → updated_at
-    //
-    // We include the deep grandchildren explicitly because the existing
-    // mutation handlers do NOT propagate updates up to their immediate
-    // parent (e.g. PATCH /api/checklist-sections/:id only bumps the section
-    // row), so transitive coverage via just checklists/reports would miss
-    // those edits. daily_logs are derived from media activity and need no
-    // separate term.
-    //
-    // COALESCE(..., '-infinity'::timestamp) keeps GREATEST() non-null when
-    // a child table is empty for the project; projects.updated_at itself is
-    // NOT NULL so the outer GREATEST always has a real anchor. Each leaf
-    // table is reached via a project_id FK (directly or via at most two
-    // hops), so cost is bounded for typical account sizes. The expression
-    // appears twice (SELECT + ORDER BY) and Postgres will evaluate the
-    // subqueries twice; if this list endpoint becomes hot for very large
-    // accounts, promote to a materialized last_activity_at column without
-    // changing the API shape (see diagnostic).
-    //
-    // KNOWN LIMITATIONS (inherent to read-side derivation; documented and
-    // accepted when Approach C was chosen over A/B):
-    //   • Edits to checklist_items fields that don't touch completed_at
-    //     (label, notes, fieldType, value_*, sort_order) are invisible —
-    //     the table has no updated_at column. Adding/checking an item or
-    //     attaching an option/photo IS visible via the adjacent subqueries.
-    //   • Edits to report_section_photos caption/description are invisible
-    //     — that table has only created_at. Initial attach IS visible.
-    //   • Deletes cannot move "last activity" backward, but they also
-    //     cannot register as activity themselves. Delete-the-latest-photo
-    //     leaves the timestamp wherever the prior MAX lands.
-    // Promotion path: if any of these become user-visible problems, add
-    // updated_at columns + a touchProject helper called from the affected
-    // mutation endpoints (Approach A/B from the diagnostic).
-    const lastActivity = sql<Date>`GREATEST(
-      ${projects.updatedAt},
-      COALESCE((SELECT MAX(created_at) FROM media WHERE project_id = ${projects.id}), '-infinity'::timestamp),
-      COALESCE((SELECT MAX(ma.updated_at) FROM media_annotations ma JOIN media m ON m.id = ma.media_id WHERE m.project_id = ${projects.id}), '-infinity'::timestamp),
-      COALESCE((SELECT MAX(c.created_at) FROM comments c JOIN media m ON m.id = c.media_id WHERE m.project_id = ${projects.id}), '-infinity'::timestamp),
-      COALESCE((SELECT MAX(updated_at) FROM tasks WHERE project_id = ${projects.id}), '-infinity'::timestamp),
-      COALESCE((SELECT MAX(updated_at) FROM checklists WHERE project_id = ${projects.id}), '-infinity'::timestamp),
-      COALESCE((SELECT MAX(cs.updated_at) FROM checklist_sections cs JOIN checklists cl ON cl.id = cs.checklist_id WHERE cl.project_id = ${projects.id}), '-infinity'::timestamp),
-      COALESCE((SELECT MAX(ci.completed_at) FROM checklist_items ci JOIN checklists cl ON cl.id = ci.checklist_id WHERE cl.project_id = ${projects.id}), '-infinity'::timestamp),
-      COALESCE((SELECT MAX(co.updated_at) FROM checklist_item_options co JOIN checklist_items ci ON ci.id = co.item_id JOIN checklists cl ON cl.id = ci.checklist_id WHERE cl.project_id = ${projects.id}), '-infinity'::timestamp),
-      COALESCE((SELECT MAX(cp.created_at) FROM checklist_item_photos cp JOIN checklist_items ci ON ci.id = cp.item_id JOIN checklists cl ON cl.id = ci.checklist_id WHERE cl.project_id = ${projects.id}), '-infinity'::timestamp),
-      COALESCE((SELECT MAX(updated_at) FROM reports WHERE project_id = ${projects.id}), '-infinity'::timestamp),
-      COALESCE((SELECT MAX(rs.updated_at) FROM report_sections rs JOIN reports r ON r.id = rs.report_id WHERE r.project_id = ${projects.id}), '-infinity'::timestamp),
-      COALESCE((SELECT MAX(rsp.created_at) FROM report_section_photos rsp JOIN report_sections rs ON rs.id = rsp.section_id JOIN reports r ON r.id = rs.report_id WHERE r.project_id = ${projects.id}), '-infinity'::timestamp),
-      COALESCE((SELECT MAX(updated_at) FROM time_entries WHERE project_id = ${projects.id}), '-infinity'::timestamp)
-    )`;
-
-    const allProjects = await db
-      .select({ ...getTableColumns(projects), updatedAt: lastActivity })
-      .from(projects)
-      .where(eq(projects.accountId, accountId))
-      .orderBy(desc(lastActivity));
+    const allProjects = await db.select().from(projects).where(eq(projects.accountId, accountId)).orderBy(desc(projects.updatedAt));
     
     const result: ProjectWithDetails[] = [];
     for (const project of allProjects) {
