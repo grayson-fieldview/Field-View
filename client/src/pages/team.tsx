@@ -759,7 +759,6 @@ export default function TeamPage() {
                         </p>
                       )}
                       {canManageUsers && member.id !== currentUser?.id && (
-                        <>
                         <div className="mt-2 flex items-center gap-1.5">
                           <Shield className="h-3 w-3 text-muted-foreground shrink-0" />
                           <Select
@@ -800,6 +799,8 @@ export default function TeamPage() {
                             </AlertDialogContent>
                           </AlertDialog>
                         </div>
+                      )}
+                      {canManageUsers && (
                         <div className="mt-2 pt-2 border-t border-border space-y-1.5" data-testid={`section-timesheets-${member.id}`}>
                           <div className="flex items-center justify-between gap-2">
                             <div className="flex items-center gap-1.5 min-w-0">
@@ -846,7 +847,6 @@ export default function TeamPage() {
                             </Button>
                           </div>
                         </div>
-                        </>
                       )}
                     </div>
                   </div>

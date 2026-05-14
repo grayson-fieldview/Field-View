@@ -1,0 +1,56 @@
+Implement the fix to the admin self-row timesheet gate. Show me the 
+diff before merging. Run an architect review pass after.
+
+CHANGE:
+File: client/src/pages/team.tsx, lines 761 and 849
+
+The current structure wraps both the role-selector/remove-user block 
+AND the timesheet-tracking/hourly-rate block in a single fragment 
+guarded by:
+
+    {canManageUsers && member.id !== currentUser?.id && (
+      <>
+        ...role selector + remove-user buttons...
+        ...timesheet tracking + hourly rate...
+      </>
+    )}
+
+Split this into two separate conditionals:
+
+1. KEEP behind {canManageUsers && member.id !== currentUser?.id}:
+   - Role selector dropdown
+   - Remove-user button
+   (You still should not be able to demote or delete yourself.)
+
+2. MOVE to {canManageUsers}-only (drop the self-row guard):
+   - Timesheet tracking toggle
+   - Hourly rate row + edit button
+   (Admins should be able to enable/disable their own timesheet 
+   tracking and set their own hourly rate.)
+
+WHY: The current guard is a "you can't edit yourself" check, not a 
+role check. It incidentally hides timesheet controls 100% of the time 
+for admins in single-person accounts (because the only card on screen 
+is the admin's own). Single-person contractor accounts — which will be 
+common in our early signups — cannot use time tracking at all today.
+
+VERIFY (no other layer needs changes, but confirm these are still 
+correct after the diff):
+- GET /api/users in server/routes.ts:2238 still returns 
+  timesheetEnabled and hourlyRateCents for admin viewers (it does — 
+  sanitizeUserForViewer in server/lib/userVisibility.ts:7-18 returns 
+  full rows for managers/admins)
+- PATCH /api/users/:userId in server/routes.ts:3154 accepts the 
+  caller's own id (it does — no self-target restriction)
+- POST /api/timesheets/clock-in in server/routes.ts:3253 has no 
+  admin-role gate (it doesn't — only checks timesheetEnabled and 
+  restricted-role for project scoping)
+
+If any of these have changed since the prior diagnostic, flag it.
+
+DELIVERABLE:
+1. Show me the full diff
+2. Confirm by inspection that on the live page, the admin's own card 
+   would render with the timesheet toggle visible after this change
+3. Run architect review pass
+4. Do not push to git until I approve the diff
