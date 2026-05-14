@@ -1,0 +1,83 @@
+Goal: Switch Express session store from MemoryStore (default) to 
+connect-pg-simple, backed by the existing AWS RDS Postgres database. 
+This fixes the Vercel serverless session-loss bug where express-
+session loses all sessions on every lambda cold-start. The bug 
+surfaces as mobile users being logged out after force-quit + reopen, 
+even with valid cookies.
+
+PHASE 1 — INSTALL + WIRE
+
+I1. Install connect-pg-simple:
+    npm install connect-pg-simple
+    @types/connect-pg-simple --save-dev
+
+I2. In the express-session config (search for express-session in 
+    server/index.ts or wherever the express app is initialized), 
+    replace the default MemoryStore with connect-pg-simple:
+    
+    Before:
+      app.use(session({
+        secret: process.env.SESSION_SECRET,
+        resave: false,
+        saveUninitialized: false,
+        cookie: { ... }
+      }));
+    
+    After:
+      const pgSession = require("connect-pg-simple")(session);
+      const sessionStore = new pgSession({
+        pool: pgPool,           // use existing pg Pool from db connection
+        tableName: "session",   // standard name
+        createTableIfMissing: false,  // explicit, prevents accidental DDL
+        pruneSessionInterval: 60 * 15  // every 15 min, cleanup expired
+      });
+      
+      app.use(session({
+        store: sessionStore,
+        secret: process.env.SESSION_SECRET,
+        resave: false,
+        saveUninitialized: false,
+        cookie: { ... }  // unchanged
+      }));
+
+I3. The "session" table needs to exist in prod RDS. Create migration 
+    script/migrations/migrate_session44_express_session_table.ts. 
+    Standard connect-pg-simple schema:
+    
+    CREATE TABLE IF NOT EXISTS "session" (
+      "sid" varchar NOT NULL COLLATE "default",
+      "sess" json NOT NULL,
+      "expire" timestamp(6) NOT NULL,
+      CONSTRAINT "session_pkey" PRIMARY KEY ("sid") NOT DEFERRABLE INITIALLY IMMEDIATE
+    );
+    CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");
+    
+    Wrap in db.transaction(), env guard (RDS only), ALLOW_PROD_MIGRATION=yes 
+    required.
+
+I4. Ensure pgPool used by connect-pg-simple is the SAME pool used 
+    by the rest of the app (don't create a new connection pool).
+
+PHASE 2 — VERIFY
+
+V1. npm run check
+V2. git diff --stat — expect 3-4 files: package.json + package-
+    lock.json + server/index.ts + script/migrations/migrate_session44_*.ts
+V3. Locally: SESSION_SECRET stays the same so existing user 
+    sessions in the cookie (signed with old secret) will still 
+    validate signature. But the server won't FIND them in the new 
+    session table → users will need to log in once after the deploy. 
+    This is acceptable trade-off.
+
+PROD DEPLOY SEQUENCE (CRITICAL — same drill as session 41/42/43):
+1. RDS snapshot before migration
+2. Whitelist Replit IP on RDS security group
+3. Run migration with DATABASE_URL pointed at prod RDS:
+   DATABASE_URL='<prod-rds-url>' ALLOW_PROD_MIGRATION=yes tsx 
+   script/migrations/migrate_session44_express_session_table.ts
+4. Verify "session" table exists in TablePlus
+5. Push code → Vercel auto-deploys → manually promote
+6. Smoke test: log in fresh, force-quit web tab, reopen → still logged in
+7. Remove Replit IP from RDS SG
+
+DO NOT push. Show diff first.

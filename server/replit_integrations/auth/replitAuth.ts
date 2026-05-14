@@ -281,6 +281,10 @@ export function getSession() {
     createTableIfMissing: false,
     ttl: sessionTtlSeconds,
     tableName: "sessions",
+    // S44: prune expired session rows every 15 min so the table doesn't
+    // grow unbounded under serverless (Vercel) where connections are
+    // short-lived and the default cleanup heuristic rarely fires.
+    pruneSessionInterval: 60 * 15,
   });
   return session({
     secret: process.env.SESSION_SECRET!,
