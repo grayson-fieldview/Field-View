@@ -1,0 +1,44 @@
+DIAGNOSE ONLY — do not make any code changes.
+
+On the Team management page (Manager Workspace → Team), users with role 
+"Standard" show a Timesheet tracking toggle and an Hourly rate field. 
+Users with role "Admin" show neither — just basic info (name, email, 
+joined date). I need to know why, at every layer.
+
+Trace this top to bottom and report:
+
+1. FRONTEND: Find the Team page component. Is there a conditional like 
+   `role !== 'admin' && <TimesheetSection />` or similar? File path + 
+   line + exact conditional.
+
+2. API: When the Team page fetches team members (probably GET /api/team 
+   or similar), does the response include timesheet/hourly-rate fields 
+   for admin users, or are those fields stripped/null for admins? Show 
+   me the endpoint handler and any response shaping.
+
+3. BACKEND AUTH: Is there any middleware or role-based logic that 
+   prevents admin users from having timesheet entries created, updated, 
+   or queried? Check the timesheet-related routes specifically.
+
+4. SCHEMA: Look at the users table (or wherever role + timesheet 
+   tracking + hourly rate live). Are these fields present on all users 
+   regardless of role, or is there a constraint?
+
+5. MOBILE GEOFENCE FLOW: In the silent auto clock-in flow (cron + 
+   middleware), does the logic check user role and skip admins? Does 
+   the timesheet entry creation path work for admin users, or does it 
+   bail out somewhere?
+
+For each layer, output:
+- File path + line numbers
+- The exact gate/conditional/missing-field, if any
+- Whether this layer is the root cause or just a downstream symptom
+
+End the report with: "The root cause is at layer [N] because [reason]. 
+The minimum fix surface is [files/changes]." Do not implement the fix.
+
+Context for why this matters: I'm an admin on my own dev account 
+(grayson@field-view.com) and I need to be able to dogfood time tracking 
++ demo it on sales calls. Also, single-person contractor accounts have 
+exactly one user (admin), so today they literally cannot use time 
+tracking at all.
