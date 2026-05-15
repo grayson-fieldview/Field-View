@@ -1,0 +1,98 @@
+DIAGNOSE + DESIGN ONLY — do not implement yet.
+
+CONTEXT:
+We're adding dwell time to auto-clock-in. Currently when a user 
+enters a geofence, mobile fires clock-in immediately, causing 
+false positives from drive-bys. The fix is a 60-second server-side 
+dwell verification that mirrors the existing pending_geofence_exits 
+pattern (which handles delayed auto-clock-OUT after 5 min).
+
+PHASE 1 — INVENTORY:
+
+Map the existing pending_geofence_exits architecture on this 
+server. Output:
+
+1. Database schema: the actual pending_geofence_exits table 
+   definition (columns, types, indexes, foreign keys, constraints, 
+   any related enums). Show the full schema file location and 
+   contents.
+
+2. Endpoints: implementation of POST /api/geofence/exit-detected 
+   and POST /api/geofence/exit-cancelled. File paths, route 
+   handlers, request/response shapes, validation, error handling, 
+   middleware.
+
+3. Cron: the GET /api/cron/process-pending-exits handler. What 
+   query selects ready rows? What does executeAutoClockOut do 
+   exactly? How does it write the time_entries row with 
+   source='auto_geofence'? How is the cron scheduled (Vercel 
+   cron, Replit Scheduler, external)? What's the cadence?
+
+4. Push fan-out: how does the server send the clock_out_receipt 
+   push notification to the user's Expo token? File path, exact 
+   payload shape, expo-server-sdk usage. (Reminder: expo-server-sdk 
+   is pinned at 5.0.0 — do NOT bump it. v6+ ESM broke prod 
+   previously.)
+
+5. The 60-min auto-undo window for auto-clock-out: where in the 
+   code is the TTL enforced? What endpoint handles the undo?
+
+PHASE 2 — DESIGN:
+
+Propose a pending_geofence_enters mirror with:
+
+1. Table schema (columns, types, indexes). Note: keyed by user_id 
+   instead of time_entry_id since there's no active session at 
+   enter time. Partial unique index on (user_id, project_id) WHERE 
+   status='pending'.
+
+2. Endpoint specs:
+   - POST /api/geofence/enter-detected — request body 
+     { projectId, regionId, detectedAt }, response { id, firesAt, 
+     status }
+   - POST /api/geofence/enter-cancelled — request body 
+     { pendingEnterId }, response 204
+   
+3. Cron: GET /api/cron/process-pending-enters — for each ready 
+   row, call executeAutoClockIn(user_id, project_id, 
+   source='auto_geofence'), send push with payload 
+   { type: "clock_in_receipt", timeEntryId, projectId, clockInAt }
+
+4. Lib function: executeAutoClockIn signature and behavior. Should 
+   parallel executeAutoClockOut but creates an OPENING time_entries 
+   row rather than closing one.
+
+5. Dwell duration: SERVER-SIDE CONSTANT of 60 seconds. NOT 
+   per-user, NOT per-project tunable. firesAt = server_now + 60s.
+
+6. Migration script following the hard-rule pattern:
+   - Wrapped in db.transaction()
+   - Env guard: throw unless URL contains rds.amazonaws.com or 
+     neon.tech; require ALLOW_PROD_MIGRATION=yes for RDS
+   - IF NOT EXISTS guards on every DDL
+   - Template: script/migrations/migrate_session22_timesheets.ts
+
+7. PROD RDS VERIFICATION STEP: before any code is pushed, the new 
+   schema and any new SQL must be runnable against prod RDS via 
+   TablePlus. Document the exact SELECT/INSERT statements I should 
+   run manually to verify, BEFORE the migration runs in production.
+
+PHASE 3 — DELIVERABLE:
+
+Output a single design doc covering:
+- Phase 1 inventory (what exists today)
+- Phase 2 design (proposed mirror, all 7 points above)
+- Migration plan with rollback safety
+- TablePlus verification SQL (the exact statements I'll run against 
+  prod RDS before promoting)
+- Estimated diff size: file count, lines added, files modified
+
+DO NOT IMPLEMENT YET. Wait for my approval of the design before 
+writing any code.
+
+ALSO: confirm by inspection that this work does NOT touch:
+- expo-server-sdk (stays at 5.0.0)
+- the existing pending_geofence_exits table or its endpoints
+- the existing executeAutoClockOut function
+- the session management code
+- the Stripe / billing code
