@@ -1,0 +1,55 @@
+Approved. Implement the auto-clock-in dwell verification per the 
+design doc, using session [44 or 45 — Grayson will confirm].
+
+KEY DECISIONS LOCKED:
+- Already clocked-in at enter-detected: return 200 with 
+  { status: "skipped", reason: "already_clocked_in" }, do NOT 
+  write a row.
+- Idempotency: existing pending row for (userId, projectId) returns 
+  as-is; firesAt is NOT reset on duplicate enter-detected.
+- regionId column: OMIT from the new table. Mobile sends it in the 
+  body for compatibility but server discards it.
+- Dwell duration: 60s hardcoded constant AUTO_CLOCK_IN_DWELL_MS in 
+  server/lib/timesheets.ts.
+
+IMPLEMENTATION ORDER (do NOT skip steps):
+
+1. Write the migration script first. Show me the diff. I will run 
+   the TablePlus pre-verification SQL against prod RDS, then we 
+   run the migration with ALLOW_PROD_MIGRATION=yes. Do NOT push 
+   ANY server code before the migration runs in prod.
+
+2. After migration runs and TablePlus post-verification confirms 
+   the schema is correct on prod RDS, implement the server code:
+   - shared/schema.ts additions
+   - server/storage.ts IStorage methods (mirror the 7 exits 
+     methods at IStorage:267-276)
+   - server/lib/timesheets.ts (AUTO_CLOCK_IN_DWELL_MS constant + 
+     executeAutoClockIn function)
+   - server/routes.ts (3 handlers)
+   - server/lib/push.ts (clock_in_receipt payload variant)
+   - vercel.json (cron entry)
+
+3. Show me the full diff before any push. I will review.
+
+4. After my approval, push to GitHub. Vercel deploys to Staged.
+
+5. I will manually promote per the May 8 rollback rule.
+
+6. Smoke test: hit the new endpoints via curl/Postman from staging 
+   with my session cookie. Verify:
+   - POST /api/geofence/enter-detected with valid body returns 
+     { id, firesAt, status: "pending" }
+   - Duplicate POST returns the same row (idempotency check)
+   - POST /api/geofence/enter-detected with existing active 
+     timesheet returns { status: "skipped" }
+   - POST /api/geofence/enter-cancelled marks the row cancelled
+
+DO NOT TOUCH:
+- expo-server-sdk version (stays at 5.0.0)
+- pending_geofence_exits table or its endpoints  
+- executeAutoClockOut function
+- Existing /api/cron/process-pending-exits
+- Session/auth middleware
+- Stripe billing code
+- Any client-side code (mobile work is separate)
