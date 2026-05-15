@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { boolean, index, integer, jsonb, pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
+import { boolean, index, integer, jsonb, pgEnum, pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
 import { z } from "zod";
 
 export const sessions = pgTable(
@@ -11,6 +11,12 @@ export const sessions = pgTable(
   },
   (table) => [index("IDX_session_expire").on(table.expire)]
 );
+
+// S46: account-level default aspect ratio for the in-app camera.
+// Underscore labels (4_3 etc.) are the DB-level enum format; the wire format
+// (HTTP JSON) uses colons (4:3 etc.). Translation happens in the storage layer
+// so route/UI code only ever sees the colon form.
+export const photoAspectRatioEnum = pgEnum("photo_aspect_ratio", ["4_3", "1_1", "16_9"]);
 
 export const accounts = pgTable("accounts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -28,6 +34,7 @@ export const accounts = pgTable("accounts", {
   companyLogoUrl: varchar("company_logo_url"),
   companyLegalName: text("company_legal_name"),
   companyAddress: text("company_address"),
+  defaultPhotoAspectRatio: photoAspectRatioEnum("default_photo_aspect_ratio").notNull().default("4_3"),
   deletedAt: timestamp("deleted_at"),
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => [

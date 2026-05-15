@@ -553,6 +553,18 @@ export const insertPendingGeofenceEnterSchema = createInsertSchema(pendingGeofen
 export type InsertPendingGeofenceEnter = z.infer<typeof insertPendingGeofenceEnterSchema>;
 export type PendingGeofenceEnter = typeof pendingGeofenceEnters.$inferSelect;
 
+// S46: account-wide camera/capture preferences. WIRE format (colons) — never
+// the DB enum format (underscores). Storage layer translates at the boundary.
+export type PhotoAspectRatio = "4:3" | "1:1" | "16:9";
+export type AccountSettings = {
+  defaultPhotoAspectRatio: PhotoAspectRatio;
+};
+export const photoAspectRatioWireSchema = z.enum(["4:3", "1:1", "16:9"]);
+export const accountSettingsPatchSchema = z.object({
+  defaultPhotoAspectRatio: photoAspectRatioWireSchema.optional(),
+}).strict();
+export type AccountSettingsPatch = z.infer<typeof accountSettingsPatchSchema>;
+
 export const insertCalendarEventSchema = createInsertSchema(calendarEvents, {
   startsAt: z.coerce.date(),
   endsAt: z.coerce.date(),

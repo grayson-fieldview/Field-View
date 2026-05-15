@@ -7,7 +7,7 @@ import { getAccountBilling, isAccountBillingEnabled, overlayAccountBillingOnUser
 import { requireAdmin, requireAdminOrManager } from "./middleware/auth";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
-import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistSectionSchema, insertChecklistItemOptionSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, checklistItems, checklistSections, checklistItemOptions, checklistItemPhotos, checklistTemplates, checklistTemplateSections, checklistTemplateItems, checklistTemplateItemOptions, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, pendingGeofenceExits, pendingGeofenceEnters, templateConfigSchema } from "@shared/schema";
+import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistSectionSchema, insertChecklistItemOptionSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, checklistItems, checklistSections, checklistItemOptions, checklistItemPhotos, checklistTemplates, checklistTemplateSections, checklistTemplateItems, checklistTemplateItemOptions, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, pendingGeofenceExits, pendingGeofenceEnters, templateConfigSchema, accountSettingsPatchSchema } from "@shared/schema";
 import { executeAutoClockOut, executeAutoClockIn, AUTO_CLOCK_IN_DWELL_MS } from "./lib/timesheets";
 import { users, invitations, accounts, assignedProjectIdsSchema } from "@shared/models/auth";
 import { computeSeatUsage } from "./lib/seats";
@@ -2232,6 +2232,37 @@ export async function registerRoutes(
     } catch (error) {
       console.error("[branding PATCH] error:", error);
       res.status(500).json({ message: "Failed to update branding" });
+    }
+  });
+
+  // S46: account-wide capture preferences (default photo aspect ratio).
+  // GET is requireReadAccess (any user — mobile camera fetches this on every
+  // session for every role). PATCH is admin-only via requireAdmin.
+  // Body validation uses .strict() to reject typo'd keys instead of silently
+  // ignoring them.
+  app.get("/api/account/settings", requireReadAccess, async (req: any, res) => {
+    try {
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const settings = await storage.getAccountSettings(accountId);
+      res.json(settings);
+    } catch (error) {
+      console.error("[account/settings GET] error:", error);
+      res.status(500).json({ message: "Failed to load account settings" });
+    }
+  });
+
+  app.patch("/api/account/settings", requireWriteAccess, requireAdmin, async (req: any, res) => {
+    try {
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const parsed = accountSettingsPatchSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: "Invalid body", errors: parsed.error.flatten() });
+      const updated = await storage.updateAccountSettings(accountId, parsed.data);
+      res.json(updated);
+    } catch (error) {
+      console.error("[account/settings PATCH] error:", error);
+      res.status(500).json({ message: "Failed to update account settings" });
     }
   });
 

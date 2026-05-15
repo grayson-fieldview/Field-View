@@ -75,10 +75,41 @@ import {
   pendingGeofenceEnters,
   type PendingGeofenceEnter,
   type InsertPendingGeofenceEnter,
+  type AccountSettings,
+  type AccountSettingsPatch,
+  type PhotoAspectRatio,
 } from "@shared/schema";
-import { users, accounts, type User } from "@shared/models/auth";
+import { users, accounts, photoAspectRatioEnum, type User } from "@shared/models/auth";
 import { db } from "./db";
 import { eq, desc, sql, asc, and, inArray, lte, like } from "drizzle-orm";
+
+// S46: photo_aspect_ratio enum translation. DB ↔ wire format.
+//
+// DbAspectRatio is DERIVED from the Drizzle enum's `enumValues` tuple, so if a
+// new label is added to photoAspectRatioEnum in shared/models/auth.ts, this
+// union widens automatically and the switch statements below stop being
+// exhaustive — TS then errors on the missing return path. The assertNever
+// guards make that error fire at the switch site rather than at some distant
+// caller. This is the actual compile-time exhaustiveness the architect asked
+// for; the original manual union was not.
+type DbAspectRatio = (typeof photoAspectRatioEnum.enumValues)[number];
+function assertNever(x: never): never { throw new Error(`Unhandled aspect ratio variant: ${String(x)}`); }
+function dbToWireRatio(v: DbAspectRatio): PhotoAspectRatio {
+  switch (v) {
+    case "4_3": return "4:3";
+    case "1_1": return "1:1";
+    case "16_9": return "16:9";
+    default: return assertNever(v);
+  }
+}
+function wireToDbRatio(v: PhotoAspectRatio): DbAspectRatio {
+  switch (v) {
+    case "4:3": return "4_3";
+    case "1:1": return "1_1";
+    case "16:9": return "16_9";
+    default: return assertNever(v);
+  }
+}
 
 type DbOrTx = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -202,6 +233,11 @@ export interface IStorage {
 
   getAccountBranding(accountId: string): Promise<{ companyLogoUrl: string | null; companyLegalName: string | null; companyAddress: string | null } | undefined>;
   updateAccountBranding(accountId: string, patch: { companyLogoUrl?: string | null; companyLegalName?: string | null; companyAddress?: string | null }): Promise<{ companyLogoUrl: string | null; companyLegalName: string | null; companyAddress: string | null }>;
+  // S46: account-wide camera/capture preferences. Returns/accepts the WIRE
+  // format (colons); translates to/from the DB enum format (underscores)
+  // internally. Throws if the account does not exist.
+  getAccountSettings(accountId: string): Promise<AccountSettings>;
+  updateAccountSettings(accountId: string, patch: AccountSettingsPatch): Promise<AccountSettings>;
 
   createSharedGallery(gallery: InsertSharedGallery): Promise<SharedGallery>;
   getSharedGalleryByToken(token: string): Promise<SharedGallery | undefined>;
@@ -1305,6 +1341,38 @@ export class DatabaseStorage implements IStorage {
         companyAddress: accounts.companyAddress,
       });
     return updated;
+  }
+
+  // S46: wire ↔ DB translation for the photo_aspect_ratio enum.
+  // DB labels use underscores ('4_3') because numeric-prefixed labels with
+  // colons can be awkward to quote in raw SQL/migrations; the wire format
+  // uses colons ('4:3') because that's what designers and the mobile UI
+  // already speak. These two helpers are the ONLY translation boundary.
+  async getAccountSettings(accountId: string): Promise<AccountSettings> {
+    const [row] = await db
+      .select({ defaultPhotoAspectRatio: accounts.defaultPhotoAspectRatio })
+      .from(accounts)
+      .where(eq(accounts.id, accountId))
+      .limit(1);
+    if (!row) throw new Error(`Account ${accountId} not found`);
+    return { defaultPhotoAspectRatio: dbToWireRatio(row.defaultPhotoAspectRatio) };
+  }
+  async updateAccountSettings(accountId: string, patch: AccountSettingsPatch): Promise<AccountSettings> {
+    const set: { defaultPhotoAspectRatio?: DbAspectRatio } = {};
+    if (patch.defaultPhotoAspectRatio !== undefined) {
+      set.defaultPhotoAspectRatio = wireToDbRatio(patch.defaultPhotoAspectRatio);
+    }
+    // Empty patch ({} after .strict() validation) → no-op UPDATE would be
+    // wasteful; just read and return current state.
+    if (Object.keys(set).length === 0) return this.getAccountSettings(accountId);
+
+    const [updated] = await db
+      .update(accounts)
+      .set(set)
+      .where(eq(accounts.id, accountId))
+      .returning({ defaultPhotoAspectRatio: accounts.defaultPhotoAspectRatio });
+    if (!updated) throw new Error(`Account ${accountId} not found`);
+    return { defaultPhotoAspectRatio: dbToWireRatio(updated.defaultPhotoAspectRatio) };
   }
 
   async createSharedGallery(gallery: InsertSharedGallery): Promise<SharedGallery> {

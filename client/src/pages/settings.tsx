@@ -16,6 +16,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useTheme } from "@/components/theme-provider";
 import { BrandingCard } from "@/components/branding-card";
+import { AccountSettingsCard } from "@/components/account-settings-card";
 import { useToast } from "@/hooks/use-toast";
 import { SiGoogle, SiGooglecalendar, SiApple } from "react-icons/si";
 import {
@@ -889,6 +890,8 @@ export default function SettingsPage() {
       <ProfileCard />
 
       <BrandingCard />
+
+      <AccountSettingsCard />
 
       <Card className="p-6" data-testid="card-appearance">
         <div className="flex items-center gap-2 mb-4">
