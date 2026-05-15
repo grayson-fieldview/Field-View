@@ -3604,11 +3604,13 @@ export async function registerRoutes(
       let fired = 0;
       let skippedAlreadyClockedOut = 0;
       let errored = 0;
+      const pushPromises: Promise<void>[] = [];
 
       for (const pending of due) {
-        // S32b: captured inside the tx, sent AFTER commit. Push send must
-        // never roll back a successful clock-out, so it lives outside the
-        // transaction and is fire-and-forget.
+        // S32b: captured inside the tx, sent AFTER commit. Push send lives
+        // outside the transaction so a push failure can never roll back a
+        // successful clock-out. Sends are collected into pushPromises and
+        // awaited via Promise.allSettled after the loop.
         let pushNotificationParams: { userId: string; projectName: string; clockOutAt: Date } | null = null;
         try {
           // Per-row transaction: defensive re-check + entry update + pending mark in one atom.
@@ -3656,14 +3658,16 @@ export async function registerRoutes(
             fired++;
           });
 
-          // Post-commit: fire-and-forget push receipt. Mirrors mobile's
-          // fireClockInReceipt format ("3:15 PM"). Failure here MUST NOT
-          // affect the cron loop or counters — clock-out has already been
-          // committed atomically above.
+          // Post-commit: collected and awaited via Promise.allSettled at end
+          // of loop. Mirrors mobile's fireClockInReceipt format ("3:15 PM").
+          // Failure here MUST NOT affect the DB counters (fired/errored/
+          // skipped_*) — clock-out has already been committed atomically above.
           if (pushNotificationParams) {
             const params = pushNotificationParams as { userId: string; projectName: string; clockOutAt: Date };
             const formatTime = (d: Date) => d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-            sendPushNotification({
+            // Each send has its own internal 5s timeout so one slow Expo call
+            // cannot stall the cron past Vercel's function budget.
+            const pushPromise = sendPushNotification({
               userId: params.userId,
               title: "Clocked out",
               body: `${params.projectName} · ${formatTime(params.clockOutAt)}`,
@@ -3678,7 +3682,13 @@ export async function registerRoutes(
                 projectName: params.projectName,
                 clockOutTime: params.clockOutAt.toISOString(),
               },
-            }).catch(err => console.error("[cron] push failed:", err));
+            });
+            // Synchronously attach a no-op rejection handler to prevent Node
+            // from emitting unhandledRejection during the await window before
+            // Promise.allSettled below. allSettled still observes the real
+            // resolution/rejection state via the original promise reference.
+            pushPromise.catch(() => {});
+            pushPromises.push(pushPromise);
           }
         } catch (rowErr: any) {
           console.error(`[cron] row ${pending.id} failed:`, rowErr);
@@ -3693,11 +3703,16 @@ export async function registerRoutes(
         }
       }
 
+      const pushResults = await Promise.allSettled(pushPromises);
+      const pushFailed = pushResults.filter(r => r.status === "rejected").length;
+
       return res.status(200).json({
         processed: due.length,
         fired,
         skipped_already_clocked_out: skippedAlreadyClockedOut,
         errored,
+        push_attempted: pushPromises.length,
+        push_failed: pushFailed,
       });
     } catch (error: any) {
       console.error("[cron] process-pending-exits fatal:", error);
@@ -3859,10 +3874,12 @@ export async function registerRoutes(
       let skippedAlreadyClockedIn = 0;
       let suppressed = 0; // user disabled timesheet/auto-tracking during dwell
       let errored = 0;
+      const pushPromises: Promise<void>[] = [];
 
       for (const pending of due) {
-        // Push params captured inside the tx, sent AFTER commit. A push failure must
-        // never roll back a successful clock-in.
+        // Push params captured inside the tx, sent AFTER commit. A push failure
+        // must never roll back a successful clock-in. Sends are collected into
+        // pushPromises and awaited via Promise.allSettled after the loop.
         let pushNotificationParams: { userId: string; projectName: string; clockInAt: Date; timeEntryId: string } | null = null;
 
         try {
@@ -3952,13 +3969,16 @@ export async function registerRoutes(
             fired++;
           });
 
-          // Post-commit: fire-and-forget push receipt. Mirrors the exits cron pattern
-          // and the mobile fireClockInReceipt format ("3:15 PM"). Failure here MUST
-          // NOT affect cron counters — clock-in has already committed atomically.
+          // Post-commit: collected and awaited via Promise.allSettled at end
+          // of loop. Mirrors the exits cron pattern and the mobile
+          // fireClockInReceipt format ("3:15 PM"). Failure here MUST NOT
+          // affect DB counters — clock-in has already committed atomically.
           if (pushNotificationParams) {
             const params = pushNotificationParams as { userId: string; projectName: string; clockInAt: Date; timeEntryId: string };
             const formatTime = (d: Date) => d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-            sendPushNotification({
+            // Each send has its own internal 5s timeout so one slow Expo call
+            // cannot stall the cron past Vercel's function budget.
+            const pushPromise = sendPushNotification({
               userId: params.userId,
               title: "Clocked in",
               body: `${params.projectName} · ${formatTime(params.clockInAt)}`,
@@ -3974,7 +3994,13 @@ export async function registerRoutes(
                 projectName: params.projectName,
                 clockInTime: params.clockInAt.toISOString(),
               },
-            }).catch(err => console.error("[cron] push failed:", err));
+            });
+            // Synchronously attach a no-op rejection handler to prevent Node
+            // from emitting unhandledRejection during the await window before
+            // Promise.allSettled below. allSettled still observes the real
+            // resolution/rejection state via the original promise reference.
+            pushPromise.catch(() => {});
+            pushPromises.push(pushPromise);
           }
         } catch (rowErr: any) {
           // 23505 from executeAutoClockIn = race against the active-entry partial unique
@@ -4000,12 +4026,17 @@ export async function registerRoutes(
         }
       }
 
+      const pushResults = await Promise.allSettled(pushPromises);
+      const pushFailed = pushResults.filter(r => r.status === "rejected").length;
+
       return res.status(200).json({
         processed: due.length,
         fired,
         skipped_already_clocked_in: skippedAlreadyClockedIn,
         suppressed,
         errored,
+        push_attempted: pushPromises.length,
+        push_failed: pushFailed,
       });
     } catch (error: any) {
       console.error("[cron] process-pending-enters fatal:", error);
