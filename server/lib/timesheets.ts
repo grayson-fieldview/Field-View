@@ -36,10 +36,17 @@ export const AUTO_CLOCK_IN_DWELL_MS = 60_000;
  * in a single atomic transaction.
  */
 export async function executeAutoClockOut(
-  opts: { timeEntryId: string; userId: string },
+  opts: { timeEntryId: string; userId: string; clockOutAt?: Date },
   exec: DbOrTx = db,
 ): Promise<TimeEntry | undefined> {
-  const now = new Date();
+  // editAt is always wall-clock-now (audit: when the system actually performed
+  // the edit). clockOut is the *shift end time* — defaults to now for the
+  // exit cron path, but the max-shift safety net (12h orphan cleanup) passes
+  // a clamped value (clock_in + 8h) so payroll reflects a reasonable shift
+  // length, not a 12+ hour ghost shift. Audit fields still record now, so the
+  // edit history shows when the system intervened.
+  const editAt = new Date();
+  const clockOut = opts.clockOutAt ?? editAt;
   // Snapshot the user's current hourly rate onto the entry — mirrors what
   // POST /api/timesheets/clock-out does for user-initiated closures
   // (server/routes.ts ~line 2125). Without this, auto-geofence entries land
@@ -57,10 +64,10 @@ export async function executeAutoClockOut(
   const [updated] = await exec
     .update(timeEntries)
     .set({
-      clockOut: now,
-      editedAt: now,
+      clockOut,
+      editedAt: editAt,
       editedByUserId: opts.userId,
-      updatedAt: now,
+      updatedAt: editAt,
       rateCentsSnapshot,
     })
     .where(eq(timeEntries.id, opts.timeEntryId))

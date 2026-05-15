@@ -9,6 +9,7 @@ import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
 import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistSectionSchema, insertChecklistItemOptionSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, checklistItems, checklistSections, checklistItemOptions, checklistItemPhotos, checklistTemplates, checklistTemplateSections, checklistTemplateItems, checklistTemplateItemOptions, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, pendingGeofenceExits, pendingGeofenceEnters, templateConfigSchema, accountSettingsPatchSchema } from "@shared/schema";
 import { executeAutoClockOut, executeAutoClockIn, AUTO_CLOCK_IN_DWELL_MS } from "./lib/timesheets";
+import { haversineMeters, DEFAULT_GEOFENCE_RADIUS_M, HEARTBEAT_OUTSIDE_BUFFER_M, HEARTBEAT_DWELL_MS } from "./lib/geo";
 import { users, invitations, accounts, assignedProjectIdsSchema } from "@shared/models/auth";
 import { computeSeatUsage } from "./lib/seats";
 import { db } from "./db";
@@ -3520,20 +3521,38 @@ export async function registerRoutes(
 
       // Server-authoritative firesAt; mobile's detectedAt is persisted for diagnostics only.
       const firesAt = new Date(Date.now() + GEOFENCE_EXIT_DEBOUNCE_MS);
-      const created = await storage.createPendingExit({
-        accountId: currentUser.accountId,
-        userId: currentUser.id,
-        projectId,
-        timeEntryId,
-        exitDetectedAt: new Date(detectedAt),
-        firesAt,
-        status: "pending",
-      });
-      return res.status(201).json({
-        id: created.id,
-        firesAt: created.firesAt,
-        status: created.status,
-      });
+      try {
+        const created = await storage.createPendingExit({
+          accountId: currentUser.accountId,
+          userId: currentUser.id,
+          projectId,
+          timeEntryId,
+          exitDetectedAt: new Date(detectedAt),
+          firesAt,
+          status: "pending",
+        });
+        return res.status(201).json({
+          id: created.id,
+          firesAt: created.firesAt,
+          status: created.status,
+        });
+      } catch (insertErr: any) {
+        // Race against /api/heartbeat or a concurrent exit-detected — partial
+        // unique index pending_geofence_exits_one_pending_per_entry caught
+        // the duplicate. Read the winner and return idempotently rather than
+        // 500ing on a perfectly recoverable race.
+        if (insertErr?.code === "23505") {
+          const raceWinner = await storage.getPendingExitByTimeEntryPending(timeEntryId);
+          if (raceWinner) {
+            return res.status(200).json({
+              id: raceWinner.id,
+              firesAt: raceWinner.firesAt,
+              status: raceWinner.status,
+            });
+          }
+        }
+        throw insertErr;
+      }
     } catch (error: any) {
       console.error("exit-detected error:", error);
       Sentry.captureException(error);
@@ -3578,6 +3597,157 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/heartbeat
+  // Mobile foreground heartbeat — defensive backstop for unreliable iOS background
+  // region monitoring. Mobile posts current location every N seconds while the app
+  // is foregrounded; server compares against the active time entry's project geofence
+  // and either schedules a 60s-dwell exit (outside) or cancels any pending exit
+  // (inside). Reuses the same pending_geofence_exits table as the iOS-Exit path so
+  // cancellation, idempotency, and cron firing all work identically.
+  //
+  // Restrictions:
+  //   - Only fires for source === "auto_geofence" entries. Manual entries reflect
+  //     explicit user intent (running an errand, lunch, etc.) and should not be
+  //     auto-closed by drift detection. The 12-hour max-shift safety net handles
+  //     orphan manual entries instead.
+  //   - Honors autoTrackingEnabled — same defense-in-depth as exit-detected.
+  app.post("/api/heartbeat", requireWriteAccess, async (req: any, res) => {
+    try {
+      const currentUser = req.user;
+      const body = z.object({
+        lat: z.number().min(-90).max(90),
+        lng: z.number().min(-180).max(180),
+        timestamp: z.string().datetime(),
+      }).safeParse(req.body ?? {});
+      if (!body.success) {
+        return res.status(400).json({ message: body.error.issues[0]?.message || "Invalid body" });
+      }
+      const { lat, lng, timestamp } = body.data;
+
+      const entry = await storage.getActiveTimeEntryForUser(currentUser.id);
+      if (!entry) return res.status(200).json({ status: "no_active_session" });
+      // Defense in depth — getActiveTimeEntryForUser already scopes by userId, but
+      // confirm account match to keep tenant boundaries explicit on this hot path.
+      if (entry.accountId !== currentUser.accountId) {
+        return res.status(200).json({ status: "no_active_session" });
+      }
+      if (entry.source !== "auto_geofence") {
+        return res.status(200).json({ status: "skipped", reason: "manual_entry" });
+      }
+
+      // Stale mobile may continue posting heartbeats after auto-tracking is disabled
+      // in settings. Silently no-op so mobile doesn't retry.
+      const fresh = await authStorage.getUser(currentUser.id);
+      if (!fresh?.autoTrackingEnabled) {
+        return res.status(200).json({ status: "skipped", reason: "auto_tracking_disabled" });
+      }
+
+      const project = await storage.getProject(entry.projectId);
+      if (!project || project.latitude == null || project.longitude == null) {
+        return res.status(200).json({ status: "skipped", reason: "project_no_coords" });
+      }
+
+      const distance = haversineMeters(
+        { lat, lng },
+        { lat: project.latitude, lng: project.longitude },
+      );
+
+      // Outside core radius + hysteresis buffer → schedule exit.
+      if (distance > DEFAULT_GEOFENCE_RADIUS_M + HEARTBEAT_OUTSIDE_BUFFER_M) {
+        // Idempotent: if a pending exit already exists for this entry, return it
+        // unchanged (do NOT reset firesAt — first detection wins, same semantics
+        // as /api/geofence/exit-detected).
+        const existing = await storage.getPendingExitByTimeEntryPending(entry.id);
+        if (existing) {
+          return res.status(200).json({
+            status: "exit_pending",
+            firesAt: existing.firesAt,
+            source: "existing",
+            distance_m: Math.round(distance),
+          });
+        }
+
+        const firesAt = new Date(Date.now() + HEARTBEAT_DWELL_MS);
+        try {
+          const created = await storage.createPendingExit({
+            accountId: currentUser.accountId,
+            userId: currentUser.id,
+            projectId: entry.projectId,
+            timeEntryId: entry.id,
+            exitDetectedAt: new Date(timestamp),
+            firesAt,
+            status: "pending",
+            // Source tag in the dual-use notes column. The cron treats this as
+            // observability metadata (no special handling), but it lets us filter
+            // heartbeat-driven vs iOS-Exit-driven schedules in support queries.
+            notes: "heartbeat",
+          });
+          return res.status(200).json({
+            status: "exit_pending",
+            firesAt: created.firesAt,
+            source: "heartbeat",
+            distance_m: Math.round(distance),
+          });
+        } catch (insertErr: any) {
+          // Race against /api/geofence/exit-detected or another concurrent
+          // heartbeat — partial unique index pending_geofence_exits_one_pending_per_entry
+          // (status='pending') caught the duplicate insert. Read the winner
+          // and return idempotent 200 instead of 500.
+          if (insertErr?.code === "23505") {
+            const raceWinner = await storage.getPendingExitByTimeEntryPending(entry.id);
+            if (raceWinner) {
+              return res.status(200).json({
+                status: "exit_pending",
+                firesAt: raceWinner.firesAt,
+                source: "race_existing",
+                distance_m: Math.round(distance),
+              });
+            }
+          }
+          throw insertErr;
+        }
+      }
+
+      // Inside the core radius → cancel any pending exit (mobile may have missed
+      // the iOS Enter event after a brief drift outside).
+      if (distance <= DEFAULT_GEOFENCE_RADIUS_M) {
+        const existing = await storage.getPendingExitByTimeEntryPending(entry.id);
+        if (existing) {
+          // Cancel first (correctness), then best-effort tag notes for observability.
+          // If the tag write fails, we log but do not surface it — the cancel already
+          // succeeded so the user stays clocked in correctly.
+          const cancelled = await storage.cancelPendingExit(existing.id);
+          if (cancelled) {
+            try {
+              await db.update(pendingGeofenceExits)
+                .set({
+                  notes: sql`COALESCE(${pendingGeofenceExits.notes} || ', heartbeat_back_inside', 'heartbeat_back_inside')`,
+                })
+                .where(eq(pendingGeofenceExits.id, existing.id));
+            } catch (tagErr) {
+              console.warn("[heartbeat] failed to tag cancelled pending exit:", tagErr);
+            }
+          }
+          return res.status(200).json({
+            status: "inside_geofence",
+            cancelled_pending_exit: existing.id,
+            distance_m: Math.round(distance),
+          });
+        }
+        return res.status(200).json({ status: "inside_geofence", distance_m: Math.round(distance) });
+      }
+
+      // Hysteresis zone (radius < d <= radius+buffer): no-op. Lets the prior
+      // pending/non-pending state ride to avoid flapping when the user is parked
+      // right on the boundary.
+      return res.status(200).json({ status: "in_hysteresis_zone", distance_m: Math.round(distance) });
+    } catch (error: any) {
+      console.error("heartbeat error:", error);
+      Sentry.captureException(error);
+      res.status(500).json({ message: "Failed to process heartbeat" });
+    }
+  });
+
   // GET /api/cron/process-pending-exits
   // Vercel Cron hits this every minute (see vercel.json `crons`).
   //
@@ -3615,11 +3785,18 @@ export async function registerRoutes(
         try {
           // Per-row transaction: defensive re-check + entry update + pending mark in one atom.
           await db.transaction(async (tx) => {
+            // SELECT ... FOR UPDATE so a concurrent cancelPendingExit (from
+            // /api/geofence/exit-cancelled or /api/heartbeat back-inside) blocks
+            // until this tx commits. Without the row lock there is a window
+            // where the cancel commits between our re-check and the final
+            // status='fired' UPDATE, leaving us writing fired over cancelled.
             const [stillPending] = await tx.select().from(pendingGeofenceExits)
               .where(and(
                 eq(pendingGeofenceExits.id, pending.id),
                 eq(pendingGeofenceExits.status, "pending"),
-              )).limit(1);
+              ))
+              .for("update")
+              .limit(1);
             if (!stillPending) return; // another worker handled it; counters unchanged
 
             const [entryNow] = await tx.select().from(timeEntries)
@@ -4040,6 +4217,158 @@ export async function registerRoutes(
       });
     } catch (error: any) {
       console.error("[cron] process-pending-enters fatal:", error);
+      Sentry.captureException(error);
+      res.status(500).json({ message: "Cron run failed" });
+    }
+  });
+
+  // GET /api/cron/max-shift-cleanup
+  // Vercel Cron hits this every 30 minutes (see vercel.json `crons`).
+  //
+  // Auth: `Authorization: Bearer <CRON_SECRET>` — same pattern as the other crons.
+  //
+  // Safety-net for ANY exit-detection failure (iOS Exit miss, heartbeat-app-killed,
+  // network outage, manual-entry forgot-to-clock-out, etc). Closes time entries that
+  // have been open more than 12 hours, clamping clock_out to clock_in + 8 hours so
+  // payroll reflects a reasonable shift length instead of a 12+ hour ghost.
+  //
+  // Covers ALL sources (manual + auto_geofence) — the whole point is "user forgot to
+  // clock out", which doesn't depend on how the entry was created.
+  //
+  // Idempotency: checks for "max_shift_safety" tag in notes and skips already-tagged
+  // entries. A user could in theory undo + re-open + get re-closed 30 min later, but
+  // (a) they'd need to keep it open another 12+ hours for the cron to re-pick it up,
+  // and (b) the tag check still applies to the re-opened row.
+  app.get("/api/cron/max-shift-cleanup", async (req, res) => {
+    try {
+      const expected = process.env.CRON_SECRET;
+      if (!expected) {
+        console.error("[cron] CRON_SECRET not set — refusing");
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const auth = req.headers.authorization || "";
+      if (auth !== `Bearer ${expected}`) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const cutoff = new Date(Date.now() - 12 * 60 * 60 * 1000);
+      const SHIFT_LENGTH_MS = 8 * 60 * 60 * 1000;
+      const SAFETY_TAG = "max_shift_safety";
+
+      const orphans = await db
+        .select({
+          id: timeEntries.id,
+          userId: timeEntries.userId,
+          accountId: timeEntries.accountId,
+          projectId: timeEntries.projectId,
+          clockIn: timeEntries.clockIn,
+          notes: timeEntries.notes,
+          projectName: projects.name,
+        })
+        .from(timeEntries)
+        .leftJoin(projects, eq(timeEntries.projectId, projects.id))
+        .where(and(
+          isNull(timeEntries.clockOut),
+          sql`${timeEntries.clockIn} < ${cutoff}`,
+          or(
+            isNull(timeEntries.notes),
+            sql`${timeEntries.notes} NOT LIKE ${"%" + SAFETY_TAG + "%"}`,
+          ),
+        ))
+        .limit(100);
+
+      let fired = 0;
+      let errored = 0;
+      const pushPromises: Promise<void>[] = [];
+
+      let raceSkipped = 0;
+      for (const orphan of orphans) {
+        try {
+          const clockOutAt = new Date(orphan.clockIn.getTime() + SHIFT_LENGTH_MS);
+          let didFire = false;
+          await db.transaction(async (tx) => {
+            // Re-check inside the tx with FOR UPDATE so a user-initiated
+            // clock-out (or another cron) cannot land between our SELECT
+            // (above, outside the tx) and the executeAutoClockOut UPDATE
+            // — without this we would clobber a legitimate clock_out with
+            // the clamped 8h value and rewrite audit fields on a row the
+            // user already closed.
+            const [recheck] = await tx.select({
+              clockOut: timeEntries.clockOut,
+              notes: timeEntries.notes,
+            })
+              .from(timeEntries)
+              .where(eq(timeEntries.id, orphan.id))
+              .for("update")
+              .limit(1);
+            if (!recheck || recheck.clockOut !== null) return; // already closed
+            if (recheck.notes && recheck.notes.includes(SAFETY_TAG)) return; // already tagged
+
+            await executeAutoClockOut({
+              timeEntryId: orphan.id,
+              userId: orphan.userId,
+              clockOutAt,
+            }, tx);
+            // Append the safety tag so the next 30-min run skips this row.
+            // Bracketed tag is distinguishable from user-typed notes. Tag string
+            // is hardcoded (matches SAFETY_TAG above and the LIKE filter below)
+            // — kept as a literal here instead of interpolated to avoid any
+            // confusion with parameter binding.
+            await tx.update(timeEntries)
+              .set({
+                notes: sql`COALESCE(${timeEntries.notes} || E'\n[max_shift_safety]', '[max_shift_safety]')`,
+              })
+              .where(eq(timeEntries.id, orphan.id));
+            didFire = true;
+          });
+          if (!didFire) {
+            raceSkipped++;
+            continue; // no push for race-skipped rows
+          }
+          fired++;
+
+          // Post-commit push receipt — collected and awaited via Promise.allSettled
+          // at end of loop. Failure here MUST NOT affect DB counters (clock-out
+          // already committed atomically above). Mirrors the pattern from the
+          // exit/enter crons after tonight's push reliability fix.
+          const projectName = orphan.projectName ?? "your project";
+          const pushPromise = sendPushNotification({
+            userId: orphan.userId,
+            title: "Shift auto-closed",
+            body: `Your shift at ${projectName} was auto-closed after 12 hours. Tap to review or correct.`,
+            data: {
+              type: "shift_auto_closed",
+              timeEntryId: orphan.id,
+              projectId: orphan.projectId,
+              clockOutAt: clockOutAt.toISOString(),
+            },
+          });
+          // Synchronously attach a no-op rejection handler to prevent Node from
+          // emitting unhandledRejection during the await window before
+          // Promise.allSettled below. allSettled still observes the real
+          // resolution/rejection state via the original promise reference.
+          pushPromise.catch(() => {});
+          pushPromises.push(pushPromise);
+        } catch (rowErr: any) {
+          console.error(`[cron max-shift] row ${orphan.id} failed:`, rowErr);
+          Sentry.captureException(rowErr);
+          errored++;
+        }
+      }
+
+      const pushResults = await Promise.allSettled(pushPromises);
+      const pushFailed = pushResults.filter(r => r.status === "rejected").length;
+
+      return res.status(200).json({
+        processed: orphans.length,
+        fired,
+        race_skipped: raceSkipped,
+        errored,
+        push_attempted: pushPromises.length,
+        push_failed: pushFailed,
+      });
+    } catch (error: any) {
+      console.error("[cron] max-shift-cleanup fatal:", error);
       Sentry.captureException(error);
       res.status(500).json({ message: "Cron run failed" });
     }
