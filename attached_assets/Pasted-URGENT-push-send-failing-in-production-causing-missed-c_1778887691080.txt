@@ -1,0 +1,59 @@
+URGENT — push send failing in production, causing missed clock-out 
+notifications. Need diagnose + minimum-blast-radius fix tonight.
+
+PRODUCTION EVIDENCE FROM SENTRY (just observed):
+- Issue: TypeError "fetch failed" in GET /api/cron/process-pending-exits
+- Cron itself succeeded: {"processed":1,"fired":1,"errored":0} — DB 
+  is correct, clock-out happened
+- THEN tried to send push notification to https://exp.host/--/api/v2/push/send
+- HTTP call hung for 21.37 seconds (!) before failing
+- Breadcrumb: "Client network socket disconnected before secure TLS 
+  connection was established"
+- Console log: "[push] send failed for user c45a5d55-5481-4562-8bfc-670b382a49d0: TypeError: fetch failed"
+
+This is the issue your diagnose flagged earlier today as "Fire-and-
+forget on Vercel serverless. sendPushNotification(...).catch(...) is 
+unawaited. Vercel can freeze the function as soon as 
+res.status(200).json(...) returns."
+
+That fire-and-forget pattern is now confirmed broken in prod. Vercel 
+function freezes mid-TLS-handshake to Expo, push never completes, 
+user never gets clock-out notification.
+
+DIAGNOSE FIRST. Before any code:
+
+1. Read server/lib/push.ts and the two cron handlers in server/routes.ts 
+   (process-pending-enters AND process-pending-exits). Quote the exact 
+   fire-and-forget pattern at each push call site.
+
+2. Confirm whether the cron handlers AWAIT the push sends today, or 
+   call them fire-and-forget then return res.json(...).
+
+3. Identify all the push.ts error paths that currently log via 
+   console.warn / console.error instead of Sentry.captureException. 
+   These silent failures are why we couldn't see the issue until now.
+
+4. Check sendPushNotification's actual HTTP call — does it have a 
+   timeout? expo-server-sdk has a default but verify.
+
+Then propose the minimum-blast-radius fix:
+
+EXPECTED APPROACH (subject to your diagnose findings):
+- Convert fire-and-forget to awaited Promise.allSettled across all 
+  pushes within a cron iteration
+- Wrap each individual sendPushNotification call with a Promise.race 
+  against a 5-second AbortController timeout (don't let one slow push 
+  hold up the cron — Vercel functions have 10s default timeout)
+- Wire ticket-level errors in push.ts to Sentry.captureException with 
+  full context (userId, type, payload)
+- Apply the same fix to BOTH crons (process-pending-enters and 
+  process-pending-exits) — same pattern, same risk
+- Do NOT add receipt polling (that's a separate cron, post-launch)
+- Do NOT change the wire payload shape (already fixed today)
+
+Report your diagnose findings + proposed fix surface before writing 
+code. Architect review pass after. Show full diff before push.
+
+Auth: I'll handle the push via Replit Git pane (background tasks 
+have auth issues). Promote in Vercel UI per the standard rule. 
+Server-only change, no migration, no schema.
