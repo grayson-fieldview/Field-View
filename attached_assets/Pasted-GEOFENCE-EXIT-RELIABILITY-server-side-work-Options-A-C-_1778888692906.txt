@@ -1,0 +1,80 @@
+GEOFENCE EXIT RELIABILITY — server-side work (Options A + C combined).
+
+CONTEXT: iOS region monitoring is unreliable for Exit events when 
+the app is backgrounded. Tonight's testing showed user clocked into 
+Starbucks, drove 0.3 mi away (well outside the 150m geofence), still 
+clocked in 6+ min later. This is a launch blocker — we can't ship 
+payroll-breaking GPS.
+
+DESIGN — TWO INDEPENDENT SERVER CHANGES:
+
+(A) HEARTBEAT-DRIVEN EXIT DETECTION:
+- New endpoint: POST /api/heartbeat
+  - Auth: requireWriteAccess (any authenticated user)
+  - Body: { lat: number, lng: number, timestamp: ISO string }
+- Logic:
+  1. Look up active time_entries for the user (clock_out IS NULL)
+  2. If no active entry → return 200 { status: "no_active_session" }, 
+     no further action
+  3. If active entry exists → look up its project (projects table for 
+     lat/lng + geofence_radius_meters)
+  4. Calculate haversine distance from heartbeat (lat,lng) to project 
+     center
+  5. If distance > (project.geofence_radius_meters + 50m buffer) → 
+     user is OUTSIDE:
+     - Check if pending_geofence_exits row exists for this 
+       (user_id, time_entry_id) with status='pending'
+     - If yes → no-op (don't reset firesAt)
+     - If no → create pending_geofence_exits row, firesAt = now + 60s, 
+       source tag "heartbeat" in notes column for observability
+     - Return 200 { status: "exit_pending", firesAt }
+  6. If distance <= project.geofence_radius_meters → user is INSIDE:
+     - Cancel any pending_geofence_exits for this user with 
+       status='pending' (mark cancelled, set cancelled_at, notes 
+       += "heartbeat_back_inside")
+     - Return 200 { status: "inside_geofence" }
+- Integrates with existing pending_geofence_exits machinery so 
+  cancellation, idempotency, cron firing all work identically to 
+  iOS Exit path
+- The 60s dwell is shorter than the iOS path's dwell because heartbeat 
+  is a deliberate location check, not a flaky iOS event — confidence 
+  is higher
+
+(C) MAX-SHIFT SAFETY NET:
+- New cron route: GET /api/cron/max-shift-cleanup
+  - Auth: Bearer CRON_SECRET (same pattern as other crons)
+- Logic:
+  1. SELECT time_entries WHERE clock_out IS NULL AND clock_in < 
+     now() - INTERVAL '12 hours'
+  2. For each row, executeAutoClockOut with clock_out = clock_in + 
+     INTERVAL '8 hours' (clamped reasonable shift length)
+  3. Send push notification: title "Shift auto-closed", body 
+     "Your shift at [project] was auto-closed after 12 hours. Tap 
+     to review/correct."
+  4. Add row tag "max_shift_safety" in time_entries.notes for 
+     observability
+- Add to vercel.json cron entries, schedule "*/30 * * * *" (every 
+  30 min)
+- This is the backstop for ANY exit-detection failure — heartbeat, 
+  iOS Exit, network outage, anything
+
+DIAGNOSE FIRST. No code yet. Output:
+1. Where is the haversine distance helper currently? Or do we need 
+   to write one? (lib/geo.ts? services/geofencing.ts?)
+2. Confirm projects table has geofence_radius_meters column (or 
+   equivalent). What's the column name + default?
+3. Existing pending_geofence_exits insert path — show the storage 
+   method signature so heartbeat handler uses the same one
+4. Existing executeAutoClockOut signature — does it accept an 
+   override clock_out time, or does it always use now()?
+5. Auth middleware — confirm requireWriteAccess works for mobile 
+   requests with X-FieldView-Client header
+6. Any blockers you see
+
+After my approval of the diagnose, implement (A) and (C) as ONE 
+diff (or two if you think separating is cleaner — your call, just 
+flag it). Architect review pass. Show full diff before push.
+
+Server change only, no schema migration needed (uses existing 
+pending_geofence_exits table). No mobile change in this task — 
+mobile heartbeat loop is a separate prompt to mobile agent.
