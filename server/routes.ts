@@ -3672,6 +3672,11 @@ export async function registerRoutes(
                 timeEntryId: pending.timeEntryId,
                 projectId: pending.projectId,
                 clockOutAt: params.clockOutAt.toISOString(),
+                // Legacy fields for parseClockOutReceiptData backward-compat
+                // (older mobile builds in users' hands still expect this shape)
+                entryId: pending.timeEntryId,
+                projectName: params.projectName,
+                clockOutTime: params.clockOutAt.toISOString(),
               },
             }).catch(err => console.error("[cron] push failed:", err));
           }
@@ -3962,6 +3967,12 @@ export async function registerRoutes(
                 timeEntryId: params.timeEntryId,
                 projectId: pending.projectId,
                 clockInAt: params.clockInAt.toISOString(),
+                // Legacy fields for parseClockInReceiptData backward-compat
+                // (defensive symmetry with exit cron — older mobile builds
+                // in users' hands may still be on the legacy parser shape)
+                entryId: params.timeEntryId,
+                projectName: params.projectName,
+                clockInTime: params.clockInAt.toISOString(),
               },
             }).catch(err => console.error("[cron] push failed:", err));
           }
