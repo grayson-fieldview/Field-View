@@ -1,0 +1,58 @@
+NEW TASK — aspect ratio capture setting (account-level).
+
+Background: launching the camera capture aspect ratio toggle for 
+iOS Build 9. Web side is schema + endpoint + admin UI only; mobile 
+agent will consume the API separately.
+
+Schema:
+- Add column `default_photo_aspect_ratio` to the `accounts` table
+- Type: postgres enum `photo_aspect_ratio` with values ('4_3', '1_1', '16_9')
+- Default: '4_3'
+- NOT NULL with default backfill on existing rows
+
+Migration script standards (per Session 45 template):
+- script/migrations/migrate_session46_aspect_ratio.ts
+- Wrap DDL in db.transaction() for atomic rollback
+- Env guard: throw unless URL contains rds.amazonaws.com or neon.tech; 
+  require ALLOW_PROD_MIGRATION=yes for RDS
+- Entry-point guard against dynamic-import auto-execution
+- Log host and mode before DB call
+- IF NOT EXISTS guards on all DDL
+- Verify queries after migration
+
+Endpoints:
+- GET /api/account/settings → returns full account settings including 
+  defaultPhotoAspectRatio (camelCase in JSON)
+- PATCH /api/account/settings → accepts partial body; admin-only via 
+  existing requireAdmin middleware
+- Zod schema for PATCH body: defaultPhotoAspectRatio enum '4:3'|'1:1'|'16:9'
+
+Storage layer methods:
+- getAccountSettings(accountId): Promise<AccountSettings>
+- updateAccountSettings(accountId, patch): Promise<AccountSettings>
+
+Web admin UI:
+- In whatever admin settings page already exists for account-level prefs
+- Three-option radio or segmented control: "4:3 (Standard)" / "1:1 (Square)" / "16:9 (Widescreen)"
+- Save button + optimistic toast
+- Admin-only — hide for non-admin users
+
+DO NOT TOUCH:
+- Existing photos or any photo records (this is a capture-time 
+  preference, not a transform)
+- Mobile code (separate agent)
+- Auth/billing flows
+- pending_geofence_enters / pending_geofence_exits
+
+DIAGNOSE FIRST: before writing code, output a plan showing:
+1. Exact accounts table columns being added
+2. Endpoint shapes (request/response JSON)
+3. Where in the admin UI the toggle lives (file path)
+4. Migration script path
+
+After my approval of the plan, implement. Architect review pass 
+before any push. Do NOT push to git until I approve.
+
+Migration applies in the established order: I will run it against 
+prod RDS BEFORE the Vercel deploy is promoted. Same procedure as 
+Session 45.
