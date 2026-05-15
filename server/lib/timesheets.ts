@@ -6,6 +6,19 @@ import { eq } from "drizzle-orm";
 type DbOrTx = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /**
+ * S33: server-authoritative dwell window for auto clock-IN.
+ * Mobile posts /api/geofence/enter-detected immediately on geofence entry; server
+ * holds for this duration before firing the clock-in via cron, allowing mobile to
+ * cancel via /api/geofence/enter-cancelled if the user exits within the window
+ * (drive-by, mis-trigger, etc.).
+ *
+ * Hardcoded — not per-user, not per-project. Single-file edit + redeploy to change.
+ * Mobile is intentionally NOT told the value; clients post on detect, server decides
+ * when to fire.
+ */
+export const AUTO_CLOCK_IN_DWELL_MS = 60_000;
+
+/**
  * Server-authoritative auto clock-out execution.
  *
  * Called by:
@@ -53,4 +66,55 @@ export async function executeAutoClockOut(
     .where(eq(timeEntries.id, opts.timeEntryId))
     .returning();
   return updated;
+}
+
+/**
+ * S33: server-authoritative auto clock-IN execution.
+ *
+ * Called by:
+ *   - GET /api/cron/process-pending-enters when the 60s dwell expires.
+ *
+ * Mirrors POST /api/timesheets/clock-in (server/routes.ts ~line 3253) with these
+ * differences from the manual path:
+ *   - source is fixed to "auto_geofence" (caller may override but shouldn't).
+ *   - rate_cents_snapshot is captured here at insert time (manual path leaves it null).
+ *     This makes auto-clocked-in entries immediately price-accurate for /timesheets
+ *     aggregation without waiting for clock-out's snapshot pass.
+ *   - editedAt / editedByUserId are NOT set: those audit fields denote a *modification*
+ *     of an existing row, not the initial insert. Manual /clock-in leaves them null too.
+ *
+ * May throw Postgres error 23505 if the partial unique index
+ * `time_entries_one_active_per_user` (clock_out IS NULL) catches a concurrent
+ * insert — caller MUST handle this as a "race: already clocked in" outcome,
+ * not a generic failure.
+ *
+ * Accepts an optional tx so the cron can wrap row-recheck + entry-insert + pending-mark
+ * in a single atomic transaction.
+ */
+export async function executeAutoClockIn(
+  opts: { accountId: string; userId: string; projectId: number; source?: "auto_geofence" },
+  exec: DbOrTx = db,
+): Promise<TimeEntry> {
+  const now = new Date();
+  const [fresh] = await exec
+    .select({ hourlyRateCents: users.hourlyRateCents })
+    .from(users)
+    .where(eq(users.id, opts.userId))
+    .limit(1);
+  const rateCentsSnapshot = fresh?.hourlyRateCents ?? null;
+
+  const [created] = await exec
+    .insert(timeEntries)
+    .values({
+      accountId: opts.accountId,
+      userId: opts.userId,
+      projectId: opts.projectId,
+      clockIn: now,
+      clockOut: null,
+      source: opts.source ?? "auto_geofence",
+      notes: null,
+      rateCentsSnapshot,
+    } as any)
+    .returning();
+  return created;
 }

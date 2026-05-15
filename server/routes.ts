@@ -7,8 +7,8 @@ import { getAccountBilling, isAccountBillingEnabled, overlayAccountBillingOnUser
 import { requireAdmin, requireAdminOrManager } from "./middleware/auth";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
-import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistSectionSchema, insertChecklistItemOptionSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, checklistItems, checklistSections, checklistItemOptions, checklistItemPhotos, checklistTemplates, checklistTemplateSections, checklistTemplateItems, checklistTemplateItemOptions, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, pendingGeofenceExits, templateConfigSchema } from "@shared/schema";
-import { executeAutoClockOut } from "./lib/timesheets";
+import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistSectionSchema, insertChecklistItemOptionSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, checklistItems, checklistSections, checklistItemOptions, checklistItemPhotos, checklistTemplates, checklistTemplateSections, checklistTemplateItems, checklistTemplateItemOptions, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, pendingGeofenceExits, pendingGeofenceEnters, templateConfigSchema } from "@shared/schema";
+import { executeAutoClockOut, executeAutoClockIn, AUTO_CLOCK_IN_DWELL_MS } from "./lib/timesheets";
 import { users, invitations, accounts, assignedProjectIdsSchema } from "@shared/models/auth";
 import { computeSeatUsage } from "./lib/seats";
 import { db } from "./db";
@@ -3665,6 +3665,308 @@ export async function registerRoutes(
       });
     } catch (error: any) {
       console.error("[cron] process-pending-exits fatal:", error);
+      Sentry.captureException(error);
+      res.status(500).json({ message: "Cron run failed" });
+    }
+  });
+
+  // ==========================================================================
+  // S33 — auto clock-IN dwell verification (mirror of S32a exits architecture)
+  // ==========================================================================
+
+  // POST /api/geofence/enter-detected
+  // Mobile reports user crossed into a registered project's geofence. Server
+  // schedules a 60s debounce; if the user doesn't cancel (by exiting), the cron
+  // fires the clock-in.
+  //
+  // Locked decisions:
+  //   - Already clocked-in: 200 { status: "skipped", reason: "already_clocked_in" }
+  //     and DO NOT write a row.
+  //   - Idempotent: duplicate enter-detected for the same (user, project) returns
+  //     the existing pending row as-is — firesAt is NOT reset (flapping must not
+  //     extend the dwell window).
+  //   - regionId: accepted in the body for mobile compatibility, then discarded.
+  app.post("/api/geofence/enter-detected", requireWriteAccess, async (req: any, res) => {
+    try {
+      const currentUser = req.user;
+      const accountId = currentUser.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+
+      const body = z.object({
+        projectId: z.coerce.number().int().positive(),
+        regionId: z.string().optional(), // accepted for mobile compat; discarded
+        detectedAt: z.string().datetime(),
+      }).safeParse(req.body ?? {});
+      if (!body.success) {
+        return res.status(400).json({ message: body.error.issues[0]?.message || "Invalid body" });
+      }
+      const { projectId, detectedAt } = body.data;
+
+      // Mirror the user/flag checks from the manual clock-in route (~line 3253).
+      const fresh = await authStorage.getUser(currentUser.id);
+      if (!fresh) return res.status(404).json({ message: "User not found" });
+      if (!fresh.timesheetEnabled) {
+        return res.status(403).json({ error: "timesheet_disabled" });
+      }
+      if (!fresh.autoTrackingEnabled) {
+        return res.status(403).json({ error: "auto_tracking_disabled" });
+      }
+
+      // Project must exist within the user's account; if restricted, must be assigned.
+      const project = await storage.getProject(projectId);
+      if (!project || project.accountId !== accountId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      if (currentUser.role === "restricted") {
+        const assigned = await getRestrictedAssignedProjectIds(currentUser.id);
+        if (!assigned.has(project.id) && project.createdById !== currentUser.id) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+      }
+
+      // Locked: already clocked in → skip with no row written.
+      const existingActive = await storage.getActiveTimeEntryForUser(currentUser.id);
+      if (existingActive) {
+        return res.status(200).json({ status: "skipped", reason: "already_clocked_in" });
+      }
+
+      // Idempotency: existing pending row for (user, project) returned as-is.
+      const existingPending = await storage.getPendingEnterByUserProjectPending(currentUser.id, project.id);
+      if (existingPending) {
+        return res.status(200).json({
+          id: existingPending.id,
+          firesAt: existingPending.firesAt,
+          status: existingPending.status,
+        });
+      }
+
+      // Server-authoritative firesAt; mobile's detectedAt is persisted for diagnostics only.
+      const firesAt = new Date(Date.now() + AUTO_CLOCK_IN_DWELL_MS);
+      try {
+        const created = await storage.createPendingEnter({
+          accountId,
+          userId: currentUser.id,
+          projectId: project.id,
+          enterDetectedAt: new Date(detectedAt),
+          firesAt,
+          status: "pending",
+        });
+        return res.status(201).json({
+          id: created.id,
+          firesAt: created.firesAt,
+          status: created.status,
+        });
+      } catch (err: any) {
+        // Race: partial unique index caught a concurrent enter-detected for same (user, project).
+        // Re-fetch and return the existing row (idempotent semantics preserved).
+        if (err?.code === "23505") {
+          const raced = await storage.getPendingEnterByUserProjectPending(currentUser.id, project.id);
+          if (raced) {
+            return res.status(200).json({ id: raced.id, firesAt: raced.firesAt, status: raced.status });
+          }
+        }
+        throw err;
+      }
+    } catch (error: any) {
+      console.error("enter-detected error:", error);
+      Sentry.captureException(error);
+      res.status(500).json({ message: "Failed to schedule auto clock-in" });
+    }
+  });
+
+  // POST /api/geofence/enter-cancelled
+  // Mobile reports user exited the geofence within the dwell window — cancel the pending enter.
+  // Idempotent: 404 covers not-found / cross-user / already-non-pending uniformly.
+  app.post("/api/geofence/enter-cancelled", requireWriteAccess, async (req: any, res) => {
+    try {
+      const currentUser = req.user;
+      const body = z.object({
+        pendingEnterId: z.string().uuid(),
+      }).safeParse(req.body ?? {});
+      if (!body.success) {
+        return res.status(400).json({ message: body.error.issues[0]?.message || "Invalid body" });
+      }
+
+      const pending = await storage.getPendingEnterById(body.data.pendingEnterId);
+      // Don't leak existence: 404 covers not-found, cross-user, and already-non-pending uniformly.
+      if (!pending) return res.status(404).json({ message: "Pending enter not found" });
+      if (pending.userId !== currentUser.id) return res.status(404).json({ message: "Pending enter not found" });
+      if (pending.status !== "pending") return res.status(404).json({ message: "Pending enter not found" });
+
+      const cancelled = await storage.cancelPendingEnter(pending.id);
+      if (!cancelled) return res.status(404).json({ message: "Pending enter not found" });
+      return res.status(200).json({ id: cancelled.id, status: cancelled.status });
+    } catch (error: any) {
+      console.error("enter-cancelled error:", error);
+      Sentry.captureException(error);
+      res.status(500).json({ message: "Failed to cancel pending enter" });
+    }
+  });
+
+  // GET /api/cron/process-pending-enters
+  // Vercel Cron hits this every minute (see vercel.json `crons`). Same auth model
+  // as process-pending-exits: Authorization: Bearer <CRON_SECRET>.
+  app.get("/api/cron/process-pending-enters", async (req, res) => {
+    try {
+      const expected = process.env.CRON_SECRET;
+      if (!expected) {
+        console.error("[cron] CRON_SECRET not set — refusing");
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const auth = req.headers.authorization || "";
+      if (auth !== `Bearer ${expected}`) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const due = await storage.getPendingEntersDue(100);
+      let fired = 0;
+      let skippedAlreadyClockedIn = 0;
+      let suppressed = 0; // user disabled timesheet/auto-tracking during dwell
+      let errored = 0;
+
+      for (const pending of due) {
+        // Push params captured inside the tx, sent AFTER commit. A push failure must
+        // never roll back a successful clock-in.
+        let pushNotificationParams: { userId: string; projectName: string; clockInAt: Date; timeEntryId: string } | null = null;
+
+        try {
+          await db.transaction(async (tx) => {
+            // 1. Claim the row with SELECT ... FOR UPDATE. Holding the row lock
+            //    through the entire tx is what gives us the dwell-cancel guarantee:
+            //    a concurrent /enter-cancelled will block on this lock and see
+            //    status='fired' (or 'cancelled' if it ran first → we see no row
+            //    here and abort). Without the lock, cancellation could commit
+            //    between this SELECT and the final status='fired' UPDATE, leaving
+            //    a clock-in committed for a row the user explicitly cancelled.
+            const [stillPending] = await tx.select().from(pendingGeofenceEnters)
+              .where(and(
+                eq(pendingGeofenceEnters.id, pending.id),
+                eq(pendingGeofenceEnters.status, "pending"),
+              ))
+              .for("update")
+              .limit(1);
+            if (!stillPending) return;
+
+            const now = new Date();
+
+            // 2. Re-verify user flags. If user toggled either off during the dwell
+            //    window, suppress the clock-in (mark fired with a tag — no entry created).
+            const [u] = await tx.select({
+              timesheetEnabled: users.timesheetEnabled,
+              autoTrackingEnabled: users.autoTrackingEnabled,
+            }).from(users).where(eq(users.id, pending.userId)).limit(1);
+            if (!u || !u.timesheetEnabled) {
+              await tx.update(pendingGeofenceEnters)
+                .set({ status: "fired", firedAt: now, notes: "timesheet_disabled", updatedAt: now })
+                .where(eq(pendingGeofenceEnters.id, pending.id));
+              suppressed++;
+              return;
+            }
+            if (!u.autoTrackingEnabled) {
+              await tx.update(pendingGeofenceEnters)
+                .set({ status: "fired", firedAt: now, notes: "auto_tracking_disabled", updatedAt: now })
+                .where(eq(pendingGeofenceEnters.id, pending.id));
+              suppressed++;
+              return;
+            }
+
+            // 3. Existing active entry (race or manual clock-in landed during dwell).
+            const [existingActive] = await tx.select().from(timeEntries)
+              .where(and(
+                eq(timeEntries.userId, pending.userId),
+                isNull(timeEntries.clockOut),
+              )).limit(1);
+            if (existingActive) {
+              await tx.update(pendingGeofenceEnters)
+                .set({ status: "fired", firedAt: now, notes: "already_clocked_in", updatedAt: now })
+                .where(eq(pendingGeofenceEnters.id, pending.id));
+              skippedAlreadyClockedIn++;
+              return;
+            }
+
+            // 4. Project still exists and belongs to the same account.
+            const [proj] = await tx.select({ name: projects.name, accountId: projects.accountId })
+              .from(projects).where(eq(projects.id, pending.projectId)).limit(1);
+            if (!proj || proj.accountId !== pending.accountId) {
+              await tx.update(pendingGeofenceEnters)
+                .set({ status: "failed", notes: "project_missing_or_moved", updatedAt: now })
+                .where(eq(pendingGeofenceEnters.id, pending.id));
+              errored++;
+              return;
+            }
+
+            // 5. Clock in. May throw 23505 if a concurrent insert beat us — caught below.
+            const created = await executeAutoClockIn({
+              accountId: pending.accountId,
+              userId: pending.userId,
+              projectId: pending.projectId,
+              source: "auto_geofence",
+            }, tx);
+
+            pushNotificationParams = {
+              userId: pending.userId,
+              projectName: proj.name ?? "your job site",
+              clockInAt: created.clockIn,
+              timeEntryId: created.id,
+            };
+
+            await tx.update(pendingGeofenceEnters)
+              .set({ status: "fired", firedAt: now, createdTimeEntryId: created.id, updatedAt: now })
+              .where(eq(pendingGeofenceEnters.id, pending.id));
+            fired++;
+          });
+
+          // Post-commit: fire-and-forget push receipt. Mirrors the exits cron pattern
+          // and the mobile fireClockInReceipt format ("3:15 PM"). Failure here MUST
+          // NOT affect cron counters — clock-in has already committed atomically.
+          if (pushNotificationParams) {
+            const params = pushNotificationParams as { userId: string; projectName: string; clockInAt: Date; timeEntryId: string };
+            const formatTime = (d: Date) => d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+            sendPushNotification({
+              userId: params.userId,
+              title: "Clocked in",
+              body: `${params.projectName} · ${formatTime(params.clockInAt)}`,
+              data: {
+                type: "clock_in_receipt",
+                timeEntryId: params.timeEntryId,
+                projectId: pending.projectId,
+                clockInAt: params.clockInAt.toISOString(),
+              },
+            }).catch(err => console.error("[cron] push failed:", err));
+          }
+        } catch (rowErr: any) {
+          // 23505 from executeAutoClockIn = race against the active-entry partial unique
+          // index. Treat as "already_clocked_in", not a failure. Mark the row from
+          // outside the (now aborted) tx via storage helper.
+          if (rowErr?.code === "23505") {
+            try {
+              await storage.markPendingEnterFired(pending.id, { notes: "already_clocked_in" });
+            } catch (markErr) {
+              console.error(`[cron] also failed to mark ${pending.id} fired (race):`, markErr);
+            }
+            skippedAlreadyClockedIn++;
+          } else {
+            console.error(`[cron] enters row ${pending.id} failed:`, rowErr);
+            Sentry.captureException(rowErr);
+            try {
+              await storage.markPendingEnterFailed(pending.id, String(rowErr?.message ?? rowErr));
+            } catch (markErr) {
+              console.error(`[cron] also failed to mark ${pending.id} as failed:`, markErr);
+            }
+            errored++;
+          }
+        }
+      }
+
+      return res.status(200).json({
+        processed: due.length,
+        fired,
+        skipped_already_clocked_in: skippedAlreadyClockedIn,
+        suppressed,
+        errored,
+      });
+    } catch (error: any) {
+      console.error("[cron] process-pending-enters fatal:", error);
       Sentry.captureException(error);
       res.status(500).json({ message: "Cron run failed" });
     }

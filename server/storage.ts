@@ -72,6 +72,9 @@ import {
   pendingGeofenceExits,
   type PendingGeofenceExit,
   type InsertPendingGeofenceExit,
+  pendingGeofenceEnters,
+  type PendingGeofenceEnter,
+  type InsertPendingGeofenceEnter,
 } from "@shared/schema";
 import { users, accounts, type User } from "@shared/models/auth";
 import { db } from "./db";
@@ -274,6 +277,14 @@ export interface IStorage {
   markPendingExitFired(id: string, notes?: string): Promise<PendingGeofenceExit | undefined>;
   markPendingExitFailed(id: string, notes: string): Promise<PendingGeofenceExit | undefined>;
   deletePendingExit(id: string): Promise<void>;
+  // Pending geofence enters (S33 auto clock-in dwell verification)
+  createPendingEnter(data: InsertPendingGeofenceEnter): Promise<PendingGeofenceEnter>;
+  getPendingEnterById(id: string): Promise<PendingGeofenceEnter | undefined>;
+  getPendingEnterByUserProjectPending(userId: string, projectId: number): Promise<PendingGeofenceEnter | undefined>;
+  getPendingEntersDue(limit: number): Promise<PendingGeofenceEnter[]>;
+  cancelPendingEnter(id: string): Promise<PendingGeofenceEnter | undefined>;
+  markPendingEnterFired(id: string, opts?: { notes?: string; createdTimeEntryId?: string }): Promise<PendingGeofenceEnter | undefined>;
+  markPendingEnterFailed(id: string, notes: string): Promise<PendingGeofenceEnter | undefined>;
   // Returns the first overlapping entry for the same user within the account, or undefined.
   // Boundary touch (existing.clockOut == newStart, or existing.clockIn == newEnd) is allowed.
   // An active entry (clock_out IS NULL) is treated as extending to +infinity.
@@ -1873,6 +1884,81 @@ export class DatabaseStorage implements IStorage {
   }
   async deletePendingExit(id: string): Promise<void> {
     await db.delete(pendingGeofenceExits).where(eq(pendingGeofenceExits.id, id));
+  }
+
+  // ===== S33: pending geofence enters (auto clock-in dwell) =====
+  async createPendingEnter(data: InsertPendingGeofenceEnter): Promise<PendingGeofenceEnter> {
+    const [row] = await db.insert(pendingGeofenceEnters).values(data as any).returning();
+    return row;
+  }
+  async getPendingEnterById(id: string): Promise<PendingGeofenceEnter | undefined> {
+    const [row] = await db.select().from(pendingGeofenceEnters)
+      .where(eq(pendingGeofenceEnters.id, id)).limit(1);
+    return row;
+  }
+  async getPendingEnterByUserProjectPending(userId: string, projectId: number): Promise<PendingGeofenceEnter | undefined> {
+    // Backed by partial unique index: at most one row matches.
+    const [row] = await db.select().from(pendingGeofenceEnters)
+      .where(and(
+        eq(pendingGeofenceEnters.userId, userId),
+        eq(pendingGeofenceEnters.projectId, projectId),
+        eq(pendingGeofenceEnters.status, "pending"),
+      )).limit(1);
+    return row;
+  }
+  async getPendingEntersDue(limit: number): Promise<PendingGeofenceEnter[]> {
+    return db.select().from(pendingGeofenceEnters)
+      .where(and(
+        eq(pendingGeofenceEnters.status, "pending"),
+        lte(pendingGeofenceEnters.firesAt, new Date()),
+      ))
+      .orderBy(pendingGeofenceEnters.firesAt)
+      .limit(limit);
+  }
+  async cancelPendingEnter(id: string): Promise<PendingGeofenceEnter | undefined> {
+    const now = new Date();
+    const [row] = await db.update(pendingGeofenceEnters)
+      .set({ status: "cancelled", cancelledAt: now, updatedAt: now })
+      .where(and(
+        eq(pendingGeofenceEnters.id, id),
+        eq(pendingGeofenceEnters.status, "pending"),
+      ))
+      .returning();
+    return row;
+  }
+  async markPendingEnterFired(id: string, opts?: { notes?: string; createdTimeEntryId?: string }): Promise<PendingGeofenceEnter | undefined> {
+    // Status guard: only fire a row that is still 'pending'. Prevents an
+    // out-of-tx caller (e.g., the cron's 23505 race-recovery path, which runs
+    // after its tx aborted and released its row lock) from clobbering a row
+    // that another actor (cancellation) just transitioned. Returns undefined
+    // when the guard fails — caller treats that as "another actor won".
+    const now = new Date();
+    const [row] = await db.update(pendingGeofenceEnters)
+      .set({
+        status: "fired",
+        firedAt: now,
+        updatedAt: now,
+        ...(opts?.notes !== undefined ? { notes: opts.notes } : {}),
+        ...(opts?.createdTimeEntryId !== undefined ? { createdTimeEntryId: opts.createdTimeEntryId } : {}),
+      })
+      .where(and(
+        eq(pendingGeofenceEnters.id, id),
+        eq(pendingGeofenceEnters.status, "pending"),
+      ))
+      .returning();
+    return row;
+  }
+  async markPendingEnterFailed(id: string, notes: string): Promise<PendingGeofenceEnter | undefined> {
+    // Status guard: same rationale as markPendingEnterFired.
+    const now = new Date();
+    const [row] = await db.update(pendingGeofenceEnters)
+      .set({ status: "failed", notes, updatedAt: now })
+      .where(and(
+        eq(pendingGeofenceEnters.id, id),
+        eq(pendingGeofenceEnters.status, "pending"),
+      ))
+      .returning();
+    return row;
   }
 
   async hasOverlappingEntry(opts: {

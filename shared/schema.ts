@@ -507,6 +507,52 @@ export const insertPendingGeofenceExitSchema = createInsertSchema(pendingGeofenc
 export type InsertPendingGeofenceExit = z.infer<typeof insertPendingGeofenceExitSchema>;
 export type PendingGeofenceExit = typeof pendingGeofenceExits.$inferSelect;
 
+// S33 (session 45): mirror of pending_geofence_exits for auto clock-IN dwell verification.
+// Structural deviations from the exits table:
+//   - No timeEntryId (no active session at enter-time).
+//   - Partial unique index keys on (user_id, project_id) instead.
+//   - Adds createdTimeEntryId (FK SET NULL): populated by the cron when the row fires
+//     successfully, giving downstream consumers (e.g. /auto-undo) a precise pointer to
+//     the time_entries row this debounce produced.
+export const pendingEnterStatusEnum = pgEnum("pending_enter_status", [
+  "pending", "fired", "cancelled", "failed",
+]);
+
+export const pendingGeofenceEnters = pgTable("pending_geofence_enters", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  accountId: varchar("account_id").references(() => accounts.id).notNull(),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+  projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }).notNull(),
+  enterDetectedAt: timestamp("enter_detected_at", { withTimezone: true }).defaultNow().notNull(),
+  firesAt: timestamp("fires_at", { withTimezone: true }).notNull(),
+  status: pendingEnterStatusEnum("status").default("pending").notNull(),
+  cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+  firedAt: timestamp("fired_at", { withTimezone: true }),
+  // Same dual-use convention as pending_geofence_exits.notes:
+  //   - status='failed' → error text
+  //   - status='fired'  → optional short tag ("already_clocked_in",
+  //     "auto_tracking_disabled", "timesheet_disabled", "project_missing_or_moved")
+  notes: text("notes"),
+  createdTimeEntryId: varchar("created_time_entry_id").references(() => timeEntries.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index("pending_geofence_enters_status_fires_at_idx").on(table.status, table.firesAt),
+  index("pending_geofence_enters_user_project_status_idx").on(table.userId, table.projectId, table.status),
+  uniqueIndex("pending_geofence_enters_one_pending_per_user_project")
+    .on(table.userId, table.projectId)
+    .where(sql`status = 'pending'`),
+]);
+
+export const insertPendingGeofenceEnterSchema = createInsertSchema(pendingGeofenceEnters, {
+  enterDetectedAt: z.coerce.date().optional(),
+  firesAt: z.coerce.date(),
+  cancelledAt: z.coerce.date().nullable().optional(),
+  firedAt: z.coerce.date().nullable().optional(),
+}).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertPendingGeofenceEnter = z.infer<typeof insertPendingGeofenceEnterSchema>;
+export type PendingGeofenceEnter = typeof pendingGeofenceEnters.$inferSelect;
+
 export const insertCalendarEventSchema = createInsertSchema(calendarEvents, {
   startsAt: z.coerce.date(),
   endsAt: z.coerce.date(),
