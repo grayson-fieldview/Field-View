@@ -1,0 +1,58 @@
+NEW DIAGNOSE TASK — clock-out push notifications failing intermittently.
+
+User reports clock-IN push notifications work consistently, but 
+clock-OUT pushes are missing most of the time. Data is correct 
+(clock-out timestamps appear correctly in time_entries) — only the 
+push notification fails to surface to the user.
+
+DIAGNOSE ONLY. No code changes yet.
+
+Investigate the exit-side push fan-out path:
+
+1. Sentry events for the exit cron / push send code path over the 
+   last 7 days. Look for: silent exceptions in sendPushNotification 
+   when called from the exit cron, expo-server-sdk receipt errors 
+   for clock_out_receipt sends, or any uncaught errors in the cron 
+   handler.
+
+2. Read server/lib/timesheets.ts executeAutoClockOut and 
+   server/routes.ts /api/cron/process-pending-exits handler. 
+   Compare with the equivalent enter-side code we just shipped 
+   (executeAutoClockIn / process-pending-enters). Specifically: 
+   does the exit path actually call sendPushNotification on success, 
+   with the right payload shape? Is the call awaited or fire-and-
+   forget?
+
+3. Cross-reference user grayson@field-view.com (userId 
+   c45a5d55-5481-4562-8bfc-670b382a49d0): query time_entries for 
+   clock-out events in the last 7 days where source='auto_geofence', 
+   then check if there's a corresponding sentry breadcrumb / log 
+   entry for a clock_out_receipt push at the same timestamp. Look 
+   for the pattern of "clock-out happened in DB, no push send 
+   recorded."
+
+4. Verify the clock_out_receipt push payload shape on the server side 
+   matches what the mobile parser parseClockOutReceiptData expects. 
+   The mobile parser was NOT changed today; it expects (per the 
+   existing code we reviewed earlier) the legacy shape with 
+   entryId/projectName/clockOutTime. If the server changed to 
+   send timeEntryId/clockOutAt without legacy field names, the 
+   parser silently rejects.
+
+5. Check the user's push token: is there one registered for this 
+   user, when was it last refreshed, has the cron's send attempt 
+   received any DeviceNotRegistered errors from Expo?
+
+Hypotheses to validate or reject, ranked by likelihood:
+a. Server-side push send for clock-out is silently failing (await 
+   missing, error swallowed, exception in payload construction)
+b. Push payload shape mismatch — server sends new-shape, mobile parser 
+   only knows old-shape (or vice versa)
+c. iOS notification grouping / collapse-id deduping clock-outs against 
+   the matching clock-ins
+d. Push token rotation issue — token gets invalidated, exit cron fails 
+   silently while enter cron succeeded because they hit different 
+   send paths
+
+Report findings + ranked hypotheses + proposed minimum-blast-radius 
+fix. Do NOT modify any code until I approve the fix path.
