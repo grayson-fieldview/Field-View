@@ -4076,6 +4076,321 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/geofence/fire-now
+  // Mobile-driven early fire of a pending auto-clock-in. Build 13+ runs a
+  // client-side dwell timer in parallel with the server-scheduled cron sweep;
+  // when the timer reaches AUTO_CLOCK_IN_DWELL_MS the mobile app posts here
+  // to bypass cron latency (worst case before this: 60s dwell + up to 60s
+  // until the next per-minute cron tick = 120s total). With fire-now the
+  // mobile receipt arrives within ~one RTT of the dwell completing.
+  //
+  // Relationship to /api/cron/process-pending-enters:
+  //   This is the same per-row transaction the cron runs, scoped to one row
+  //   and triggered by a user request instead of a sweep. Cron remains the
+  //   fallback for the offline/killed-app/network-lost cases. Whichever path
+  //   wins the SELECT FOR UPDATE race fires the clock-in; the other observes
+  //   status='fired' and no-ops. Push is sent exactly once (the path that
+  //   committed sends it).
+  //
+  // Auth: session (requireWriteAccess) + X-FieldView-Client CSRF header.
+  // No CRON_SECRET bypass — this endpoint is purely user-driven.
+  //
+  // Response statuses:
+  //   201 { timeEntryId, project: { id, name, latitude, longitude }, clockInAt }
+  //         — clock-in committed, push fan-out in flight
+  //   404 { message: "Pending enter not found" }
+  //         — row missing OR belongs to another user (generic message both
+  //           cases to preserve no-existence-leak across principals)
+  //   409 { status: "already_clocked_in", timeEntryId }
+  //         — active time entry already exists (manual clock-in or cron beat
+  //           us); pending row is marked fired with notes='already_clocked_in'
+  //   410 { status: "project_missing" }    — project deleted or moved accounts
+  //   410 { status: "already_fired" | "cancelled" }
+  //         — pending row already transitioned (cron beat us, or user cancelled)
+  //   403 { error: "timesheet_disabled" | "auto_tracking_disabled" }
+  //         — user toggled the flag off during the dwell window
+  app.post("/api/geofence/fire-now", requireWriteAccess, async (req: any, res) => {
+    try {
+      const currentUser = req.user;
+      const body = z.object({
+        pendingEnterId: z.string().uuid(),
+      }).safeParse(req.body ?? {});
+      if (!body.success) {
+        return res.status(400).json({ message: body.error.issues[0]?.message || "Invalid body" });
+      }
+
+      // Outer ownership check — mirrors enter-cancelled. 404 generic for both
+      // missing and cross-user. Must happen BEFORE we open the tx so an
+      // attacker probing UUIDs cannot influence row state.
+      const pending = await storage.getPendingEnterById(body.data.pendingEnterId);
+      if (!pending) return res.status(404).json({ message: "Pending enter not found" });
+      if (pending.userId !== currentUser.id) return res.status(404).json({ message: "Pending enter not found" });
+      if (pending.status !== "pending") {
+        // Common case: cron beat the mobile timer by a few seconds. 410 Gone
+        // signals "this resource is no longer actionable, do not retry."
+        // Normalize the status to the mobile-facing contract: only
+        // `already_fired` and `cancelled` are exposed. `failed` collapses
+        // to `already_fired` (not actionable from the client's perspective —
+        // the row has terminated; raw internal states aren't part of the API).
+        const exposed = pending.status === "cancelled" ? "cancelled" : "already_fired";
+        return res.status(410).json({ status: exposed });
+      }
+
+      // Captured inside the tx, sent post-commit fire-and-forget — push send
+      // must NEVER roll back a successful clock-in. Same pattern as the cron.
+      let pushNotificationParams: {
+        userId: string;
+        projectName: string;
+        projectLat: number | null;
+        projectLng: number | null;
+        clockInAt: Date;
+        timeEntryId: string;
+      } | null = null;
+
+      // Response payload captured inside the tx; sent after commit + push
+      // dispatch. We can't res.send from inside the tx callback because a
+      // post-commit failure would have already responded; capture intent
+      // here and respond once at the bottom.
+      type FireNowOutcome =
+        | { kind: "fired"; timeEntryId: string; project: { id: number; name: string; latitude: number | null; longitude: number | null }; clockInAt: Date }
+        | { kind: "race_lost"; status: "fired" | "cancelled" }
+        | { kind: "suppressed"; reason: "timesheet_disabled" | "auto_tracking_disabled" }
+        | { kind: "already_clocked_in"; timeEntryId: string }
+        | { kind: "project_missing" };
+      let outcome: FireNowOutcome | null = null;
+
+      try {
+        await db.transaction(async (tx) => {
+          // 1. Claim with SELECT ... FOR UPDATE. Cron is doing the exact same
+          //    SELECT every minute; whichever lock-acquirer wins fires, the
+          //    other sees stillPending == undefined (status already 'fired')
+          //    and returns cleanly. Same dwell-cancel guarantee as the cron.
+          const [stillPending] = await tx.select().from(pendingGeofenceEnters)
+            .where(and(
+              eq(pendingGeofenceEnters.id, pending.id),
+              eq(pendingGeofenceEnters.status, "pending"),
+            ))
+            .for("update")
+            .limit(1);
+          if (!stillPending) {
+            // Re-read the row's current status outside the pending filter so
+            // we can tell mobile whether it was fired (cron beat us) or
+            // cancelled (user backed out in another tab) since the outer read.
+            const [latest] = await tx.select({ status: pendingGeofenceEnters.status })
+              .from(pendingGeofenceEnters)
+              .where(eq(pendingGeofenceEnters.id, pending.id))
+              .limit(1);
+            outcome = { kind: "race_lost", status: (latest?.status === "cancelled" ? "cancelled" : "fired") };
+            return;
+          }
+
+          const now = new Date();
+
+          // 2. Re-verify user flags — user may have toggled off during dwell.
+          //    Mark fired with the suppression tag so the row reflects why no
+          //    entry was created (matches cron semantics exactly).
+          const [u] = await tx.select({
+            timesheetEnabled: users.timesheetEnabled,
+            autoTrackingEnabled: users.autoTrackingEnabled,
+          }).from(users).where(eq(users.id, pending.userId)).limit(1);
+          if (!u || !u.timesheetEnabled) {
+            await tx.update(pendingGeofenceEnters)
+              .set({ status: "fired", firedAt: now, notes: "timesheet_disabled", updatedAt: now })
+              .where(eq(pendingGeofenceEnters.id, pending.id));
+            outcome = { kind: "suppressed", reason: "timesheet_disabled" };
+            return;
+          }
+          if (!u.autoTrackingEnabled) {
+            await tx.update(pendingGeofenceEnters)
+              .set({ status: "fired", firedAt: now, notes: "auto_tracking_disabled", updatedAt: now })
+              .where(eq(pendingGeofenceEnters.id, pending.id));
+            outcome = { kind: "suppressed", reason: "auto_tracking_disabled" };
+            return;
+          }
+
+          // 3. Active entry already exists (manual clock-in or cron raced us
+          //    between our outer read and this lock). Mark fired with the
+          //    same tag the cron uses; respond 409 with the existing entry
+          //    id so mobile can navigate to the live receipt screen.
+          const [existingActive] = await tx.select().from(timeEntries)
+            .where(and(
+              eq(timeEntries.userId, pending.userId),
+              isNull(timeEntries.clockOut),
+            )).limit(1);
+          if (existingActive) {
+            await tx.update(pendingGeofenceEnters)
+              .set({ status: "fired", firedAt: now, notes: "already_clocked_in", updatedAt: now })
+              .where(eq(pendingGeofenceEnters.id, pending.id));
+            outcome = { kind: "already_clocked_in", timeEntryId: existingActive.id };
+            return;
+          }
+
+          // 4. Project still exists and belongs to the entry's account. Use
+          //    pending.accountId (trusted — we authorized via pending.userId
+          //    above) rather than anything from the request body.
+          const [proj] = await tx.select({
+            id: projects.id,
+            name: projects.name,
+            accountId: projects.accountId,
+            latitude: projects.latitude,
+            longitude: projects.longitude,
+          }).from(projects).where(eq(projects.id, pending.projectId)).limit(1);
+          if (!proj || proj.accountId !== pending.accountId) {
+            await tx.update(pendingGeofenceEnters)
+              .set({ status: "failed", notes: "project_missing_or_moved", updatedAt: now })
+              .where(eq(pendingGeofenceEnters.id, pending.id));
+            outcome = { kind: "project_missing" };
+            return;
+          }
+
+          // 5. Clock in via the shared helper. May throw 23505 if the active-
+          //    entry partial unique index catches a concurrent insert — caught
+          //    outside the tx as "already_clocked_in" (matches cron behavior).
+          const created = await executeAutoClockIn({
+            accountId: pending.accountId,
+            userId: pending.userId,
+            projectId: pending.projectId,
+            source: "auto_geofence",
+          }, tx);
+
+          // 6. Mark fired. Note: cron leaves notes NULL on a clean success;
+          //    we tag with "fire_now_mobile" so analytics queries can split
+          //    mobile-triggered vs cron-triggered fires (e.g., to measure
+          //    how often the client timer actually wins the race).
+          await tx.update(pendingGeofenceEnters)
+            .set({
+              status: "fired",
+              firedAt: now,
+              createdTimeEntryId: created.id,
+              notes: "fire_now_mobile",
+              updatedAt: now,
+            })
+            .where(eq(pendingGeofenceEnters.id, pending.id));
+
+          pushNotificationParams = {
+            userId: pending.userId,
+            projectName: proj.name ?? "your job site",
+            projectLat: proj.latitude ?? null,
+            projectLng: proj.longitude ?? null,
+            clockInAt: created.clockIn,
+            timeEntryId: created.id,
+          };
+          outcome = {
+            kind: "fired",
+            timeEntryId: created.id,
+            project: {
+              id: proj.id,
+              name: proj.name,
+              latitude: proj.latitude ?? null,
+              longitude: proj.longitude ?? null,
+            },
+            clockInAt: created.clockIn,
+          };
+        });
+      } catch (txErr: any) {
+        // 23505 = active-entry partial unique index caught a concurrent insert.
+        // Same recovery as the cron: mark the pending row fired with the
+        // standard tag (outside the aborted tx via storage helper), then look
+        // up the winning entry so we can return it to mobile.
+        if (txErr?.code === "23505") {
+          try {
+            await storage.markPendingEnterFired(pending.id, { notes: "already_clocked_in" });
+          } catch (markErr) {
+            console.error(`[fire-now] also failed to mark ${pending.id} fired (race):`, markErr);
+          }
+          // Prefer the row-derived createdTimeEntryId if the racing cron/path
+          // already populated it — that's the deterministic winner. Fall back
+          // to the active-entry lookup only if the row hasn't been updated yet
+          // (e.g., concurrent insert came from a non-pending-row code path).
+          let timeEntryId: string | null = null;
+          const [latestPending] = await db.select({ createdTimeEntryId: pendingGeofenceEnters.createdTimeEntryId })
+            .from(pendingGeofenceEnters)
+            .where(eq(pendingGeofenceEnters.id, pending.id))
+            .limit(1);
+          if (latestPending?.createdTimeEntryId) {
+            timeEntryId = latestPending.createdTimeEntryId;
+          } else {
+            const [existingActive] = await db.select({ id: timeEntries.id }).from(timeEntries)
+              .where(and(
+                eq(timeEntries.userId, pending.userId),
+                isNull(timeEntries.clockOut),
+              )).limit(1);
+            timeEntryId = existingActive?.id ?? null;
+          }
+          return res.status(409).json({
+            status: "already_clocked_in",
+            timeEntryId,
+          });
+        }
+        throw txErr;
+      }
+
+      if (!outcome) {
+        // Defensive — tx committed but no outcome was set. Treat as server error.
+        console.error(`[fire-now] tx committed with no outcome for ${pending.id}`);
+        return res.status(500).json({ message: "Failed to fire clock-in" });
+      }
+
+      // Cast required: TS narrows `outcome` to `never` after the awaited tx
+      // closure even though we've guarded against null above. The closure
+      // writes via capture, which TS conservatively treats as unobservable.
+      const outcomeFinal = outcome as FireNowOutcome;
+      switch (outcomeFinal.kind) {
+        case "race_lost":
+          return res.status(410).json({ status: outcomeFinal.status === "fired" ? "already_fired" : "cancelled" });
+        case "suppressed":
+          return res.status(403).json({ error: outcomeFinal.reason });
+        case "already_clocked_in":
+          return res.status(409).json({ status: "already_clocked_in", timeEntryId: outcomeFinal.timeEntryId });
+        case "project_missing":
+          return res.status(410).json({ status: "project_missing" });
+        case "fired": {
+          // Post-commit, pre-response push fan-out: fire-and-forget so the
+          // mobile receipt response isn't gated on Expo's latency. The
+          // catch() wraps Sentry capture in try/catch so observability
+          // failures can never surface as an unhandled rejection — equivalent
+          // to the safeCapture pattern in server/lib/push.ts.
+          if (pushNotificationParams) {
+            const params = pushNotificationParams as {
+              userId: string; projectName: string;
+              projectLat: number | null; projectLng: number | null;
+              clockInAt: Date; timeEntryId: string;
+            };
+            const pushPromise = sendPushNotification({
+              userId: params.userId,
+              title: "Clocked in",
+              body: `${params.projectName} · ${formatLocalTime(params.clockInAt, params.projectLat, params.projectLng)}`,
+              data: {
+                type: "clock_in_receipt",
+                timeEntryId: params.timeEntryId,
+                projectId: pending.projectId,
+                clockInAt: params.clockInAt.toISOString(),
+                // Legacy fields for parseClockInReceiptData backward-compat
+                // (mirrors the cron's payload shape; older mobile parsers in
+                // users' hands may still expect entryId/projectName/clockInTime).
+                entryId: params.timeEntryId,
+                projectName: params.projectName,
+                clockInTime: params.clockInAt.toISOString(),
+              },
+            });
+            pushPromise.catch((pushErr) => {
+              try { Sentry.captureException(pushErr); } catch { /* observability must never throw */ }
+            });
+          }
+          return res.status(201).json({
+            timeEntryId: outcomeFinal.timeEntryId,
+            project: outcomeFinal.project,
+            clockInAt: outcomeFinal.clockInAt.toISOString(),
+          });
+        }
+      }
+    } catch (error: any) {
+      console.error("fire-now error:", error);
+      Sentry.captureException(error);
+      res.status(500).json({ message: "Failed to fire clock-in" });
+    }
+  });
+
   // GET /api/cron/process-pending-enters
   // Vercel Cron hits this every minute (see vercel.json `crons`). Same auth model
   // as process-pending-exits: Authorization: Bearer <CRON_SECRET>.
