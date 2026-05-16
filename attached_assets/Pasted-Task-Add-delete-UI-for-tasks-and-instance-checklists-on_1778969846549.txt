@@ -1,0 +1,41 @@
+Task: Add delete UI for tasks and instance checklists on web.
+
+CONTEXT
+Server DELETE endpoints exist and work, but no web UI calls them:
+- DELETE /api/tasks/:id (server/routes.ts:1205-1221) — 204 on success
+- DELETE /api/checklists/:id (server/routes.ts:1333-1342) — 200 {message:"Deleted"} on success
+- Permission gate for both: requireWriteAccess + account scope. Any role in the account can delete.
+- Both are HARD deletes. Checklists cascade to sections, items, item options, and photo joins.
+
+Reports already have delete UI in client/src/pages/report-edit.tsx (mutation at 227-236, dialog at 501-528) — DO NOT TOUCH report deletion.
+
+REFERENCE PATTERN
+Mirror the existing report delete pattern exactly:
+- useMutation calling DELETE → on success, invalidate queries + navigate back to parent
+- AlertDialog with title "Delete X?", destructive body copy, "Cancel" / "Delete" buttons
+- Affordance in the detail/edit page header
+
+DIAGNOSE FIRST — answer before writing any fix:
+
+1. Where does task detail/edit live in web — a dedicated page, or only inline editing in pages/tasks.tsx? Show me the files and how a user currently opens a single task.
+
+2. Where does a single checklist instance detail/edit live? Show me the file.
+
+3. For each (task, checklist), propose where the delete button should go to match the visual language of the report-edit header. Show me the surrounding JSX so the placement makes sense.
+
+4. After delete, where should the user be navigated? Pick the most sensible parent based on the URL structure for each entity.
+
+5. Draft the exact dialog copy for each:
+   - Task: no cascade, simple "Delete task?" / "This will permanently remove the task."
+   - Checklist: warn about cascade — "Delete checklist?" / "This will permanently remove the checklist and all its sections, items, and recorded responses."
+
+After 1-5, propose the diff covering both task delete and checklist delete. Show them as separate logical chunks even though they're in one diff.
+
+Do NOT apply until I approve.
+
+CONSTRAINTS:
+- Do not modify report delete UI; it works.
+- Do not modify the server DELETE endpoints.
+- Any role can see the delete button — server validates, no client-side role hiding.
+- Confirmation dialog only. No optimistic delete. No undo banner.
+- Match the report delete interaction shape exactly.

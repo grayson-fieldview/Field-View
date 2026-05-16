@@ -1,0 +1,35 @@
+Task: Implement role/project-aware filtering for the task assignee picker.
+
+CONTEXT
+Currently GET /api/users (server/routes.ts:2270-2280) returns every user in the account regardless of role or project membership, and the task picker in client/src/components/task-form-dialog.tsx renders all of them. A restricted user who isn't a member of project X can currently be assigned a task on project X — they'll never see it. That's the bug.
+
+DESIRED BEHAVIOR for the task assignee picker on a given project X:
+- Show all admin, manager, and standard users in the account (regardless of project membership)
+- Show restricted users ONLY if they are members of project X (via project_assignments)
+- Behavior of /api/users for any other consumer must not change
+
+APPROACH
+Add an optional query param to /api/users:
+- GET /api/users (no params) → unchanged, returns all users
+- GET /api/users?assignableForProjectId=39 → returns the filtered list per the rule above
+
+DIAGNOSE FIRST — answer before writing any fix:
+
+1. What does the user role enum look like — exactly what strings? Show me the type/schema definition.
+
+2. How does getRestrictedAssignedProjectIds at routes.ts:286-291 check restricted-user project membership? Can we reuse that helper or do we need a new query? Show me the implementation.
+
+3. List every callsite of GET /api/users in client/src. Confirm passing the new param from task-form-dialog won't affect any other callsite (it shouldn't since the param is optional and additive — but verify).
+
+4. What style does this codebase use for optional query params on existing routes? Show me one or two examples so the new param matches the convention.
+
+After 1-4, propose the diff covering:
+- Server route change (add the optional query param + filtering logic, fall back to unfiltered behavior if param is missing/invalid)
+- task-form-dialog.tsx change (pass current projectId to the query)
+
+Do NOT apply until I approve.
+
+CONSTRAINTS:
+- /api/users without the param must remain bit-for-bit identical to today
+- Invalid/missing projectId values fall back to current behavior, don't 400
+- Existing access rules on /api/users still apply
