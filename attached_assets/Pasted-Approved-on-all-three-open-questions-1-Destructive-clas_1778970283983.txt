@@ -1,0 +1,34 @@
+Approved on all three open questions:
+
+1. Destructive-class styling on AlertDialogAction: KEEP destructive red on both new dialogs (task and checklist). The "match report-edit" instruction was about interaction shape, not pixel-perfect visual. Report-edit not using destructive class is itself a minor inconsistency we can address later — don't propagate it.
+
+2. Checklist row-level delete: Editor-header only. Do NOT add row-level delete affordance on collapsed cards. Keep scope tight.
+
+3. task-form-dialog projectId behavior: Option (a) — prop-driven, no live refilter when project is changed inside the dialog. Add a comment near the useQuery noting this is intentional minimal scope and live-refilter is future polish.
+
+Proceed to apply both task diffs.
+
+ONE THING TO VERIFY DURING APPLY (Task 1):
+You noted needing to check how queryClient.ts's default queryFn serializes the { assignableForProjectId: N } object key into a URL param. Verify this before declaring done — open the browser devtools Network tab after applying and confirm the actual request hits /api/users?assignableForProjectId=39 (or whatever the project id is). If the default queryFn doesn't handle the object-key shape cleanly, fall back to an explicit queryFn that builds the URL inline. Do NOT ship a request that doesn't actually serialize the param.
+
+POST-APPLY VERIFICATION GATES — run all before declaring complete:
+
+Task 1 (assignee filter):
+a) Create a restricted user. Do NOT add them to any project. Open Add Task from inside a project → confirm they do NOT appear in the assignee picker.
+b) Add that restricted user to the project (via project_assignments) → reopen the picker → confirm they DO now appear.
+c) Confirm a standard, admin, and manager user each appear in the picker regardless of project membership.
+d) Open Add Task from the global /tasks list (no project context) → confirm the full user list appears (unfiltered — current behavior preserved).
+e) Open Team page and Settings page → confirm both still show all users (untouched /api/users callsites).
+f) Vercel logs: confirm both GET /api/users (no param) and GET /api/users?assignableForProjectId=X return 200.
+
+Task 2 (delete UI):
+g) Delete a task from the global /tasks list → row disappears, toast shows, no page navigation.
+h) Delete a task from inside a project's Tasks tab → same.
+i) Delete a checklist from inside the expanded editor → editor collapses, returns to Checklists tab, checklist gone from the list.
+j) Cascade check: before deleting a checklist, note its section count and item count. After delete, inspect TablePlus and confirm related checklist_sections, checklist_items, and item-photo joins are also gone (FK cascade should handle this automatically).
+k) Confirm report delete UI on report-edit page still works unchanged.
+l) Confirm checklist template delete on checklists.tsx still works unchanged.
+
+If any gate fails, stop and report. Do not speculate, do not fix blindly.
+
+Once all gates pass, leave the diff staged-but-unpushed per the standard workflow. I push.

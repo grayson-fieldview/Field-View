@@ -24,7 +24,19 @@ import {
   Circle,
   Clock,
   Plus,
+  Trash2,
 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { useToast } from "@/hooks/use-toast";
 import type { Task, Project } from "@shared/schema";
 import TaskFormDialog from "@/components/task-form-dialog";
 
@@ -49,10 +61,12 @@ const priorityLabels: Record<string, { label: string; variant: "default" | "seco
 };
 
 export default function TasksPage() {
+  const { toast } = useToast();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<FilterStatus>("all");
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [isAddTaskOpen, setIsAddTaskOpen] = useState(false);
+  const [confirmDeleteTask, setConfirmDeleteTask] = useState<number | null>(null);
   const [, navigate] = useLocation();
 
   const { data: allTasks, isLoading } = useQuery<TaskWithDetails[]>({
@@ -70,6 +84,22 @@ export default function TasksPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/activity"] });
+    },
+  });
+
+  const deleteTask = useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("DELETE", `/api/tasks/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/activity"] });
+      setConfirmDeleteTask(null);
+      toast({ title: "Task deleted" });
+    },
+    onError: (e: Error) => {
+      toast({ title: "Failed to delete task", description: e.message, variant: "destructive" });
     },
   });
 
@@ -234,12 +264,48 @@ export default function TasksPage() {
                   {priorityLabels[task.priority]?.label || task.priority}
                 </Badge>
 
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  aria-label="Delete task"
+                  className="h-7 w-7 text-muted-foreground hover:text-destructive shrink-0"
+                  onClick={(e) => { e.stopPropagation(); setConfirmDeleteTask(task.id); }}
+                  data-testid={`button-delete-task-${task.id}`}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+
                 <ArrowRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
               </div>
             );
           })}
         </div>
       )}
+
+      <AlertDialog open={confirmDeleteTask !== null} onOpenChange={(open) => { if (!open) setConfirmDeleteTask(null); }}>
+        <AlertDialogContent data-testid="dialog-confirm-delete-task">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete task?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently remove the task.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteTask.isPending} data-testid="button-cancel-delete-task">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                if (confirmDeleteTask !== null && !deleteTask.isPending) deleteTask.mutate(confirmDeleteTask);
+              }}
+              disabled={deleteTask.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-delete-task"
+            >
+              {deleteTask.isPending ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

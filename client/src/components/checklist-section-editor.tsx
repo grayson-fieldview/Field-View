@@ -8,6 +8,10 @@ import { Switch } from "@/components/ui/switch";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Plus, Trash2, GripVertical, Pencil, Check, X, Camera, ChevronDown, ChevronRight, AlertTriangle } from "lucide-react";
 import { ChecklistFieldInput, type ChecklistFieldType } from "./checklist-field-input";
 import { useAuth } from "@/hooks/use-auth";
@@ -18,14 +22,20 @@ import type { ChecklistItem, ChecklistSection, ChecklistItemOption, ChecklistIte
 interface ChecklistSectionEditorProps {
   checklistId: number;
   projectId: string;
+  // Optional: when provided, the editor renders its own header with a Delete
+  // button (mirrors report-edit's header pattern). onDeleted is called after
+  // the server confirms the delete so the parent can collapse the panel.
+  onDeleted?: () => void;
 }
 
 // Untitled-section sentinel for items with section_id NULL.
 const UNTITLED_SECTION_ID = -1;
 
-export function ChecklistSectionEditor({ checklistId, projectId }: ChecklistSectionEditorProps) {
+export function ChecklistSectionEditor({ checklistId, projectId, onDeleted }: ChecklistSectionEditorProps) {
   const { user } = useAuth() as { user?: { id?: string } };
+  const { toast } = useToast();
   const currentUserId = user?.id;
+  const [confirmDeleteChecklist, setConfirmDeleteChecklist] = useState(false);
 
   // Stage 2 — client-side filters. Saved per-checklist in component state
   // (intentionally non-persistent; reset on remount). "showOnlyMine" needs the
@@ -91,6 +101,22 @@ export function ChecklistSectionEditor({ checklistId, projectId }: ChecklistSect
     onSuccess: invalidate,
   });
 
+  const deleteChecklist = useMutation({
+    mutationFn: async () => {
+      await apiRequest("DELETE", `/api/checklists/${checklistId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/checklists"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
+      setConfirmDeleteChecklist(false);
+      toast({ title: "Checklist deleted" });
+      onDeleted?.();
+    },
+    onError: (e: Error) => {
+      toast({ title: "Failed to delete checklist", description: e.message, variant: "destructive" });
+    },
+  });
+
   // Apply Stage 2 client-side filters BEFORE grouping so per-section counts
   // reflect only the visible subset. The unfiltered total is still reachable
   // via "X visible / Y total" on the toggle bar.
@@ -130,6 +156,20 @@ export function ChecklistSectionEditor({ checklistId, projectId }: ChecklistSect
 
   return (
     <div className="space-y-4">
+      {onDeleted && (
+        <div className="flex items-center justify-end">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setConfirmDeleteChecklist(true)}
+            data-testid="button-delete-checklist"
+          >
+            <Trash2 className="h-4 w-4 mr-1.5" />
+            Delete
+          </Button>
+        </div>
+      )}
+
       <FilterBar
         hideCompleted={hideCompleted}
         showOnlyMine={showOnlyMine}
@@ -189,6 +229,31 @@ export function ChecklistSectionEditor({ checklistId, projectId }: ChecklistSect
       })}
 
       <AddSectionRow onAdd={(t) => createSection.mutate(t)} />
+
+      <AlertDialog open={confirmDeleteChecklist} onOpenChange={(open) => { if (!open) setConfirmDeleteChecklist(false); }}>
+        <AlertDialogContent data-testid="dialog-confirm-delete-checklist">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete checklist?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently remove the checklist and all its sections, items, and recorded responses.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteChecklist.isPending} data-testid="button-cancel-delete-checklist">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                if (!deleteChecklist.isPending) deleteChecklist.mutate();
+              }}
+              disabled={deleteChecklist.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-delete-checklist"
+            >
+              {deleteChecklist.isPending ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

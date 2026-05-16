@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   AlertDialog,
+  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -334,6 +335,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const [showCoverPicker, setShowCoverPicker] = useState(false);
   const [selectedMedia, setSelectedMedia] = useState<(Media & { uploadedBy?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } }) | null>(null);
   const [isAddTaskOpen, setIsAddTaskOpen] = useState(false);
+  const [confirmDeleteTask, setConfirmDeleteTask] = useState<number | null>(null);
   const [newChecklistTitle, setNewChecklistTitle] = useState("");
   const [createChecklistDialogOpen, setCreateChecklistDialogOpen] = useState(false);
   const [isCreateReportOpen, setIsCreateReportOpen] = useState(false);
@@ -441,6 +443,22 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
+    },
+  });
+
+  const deleteTask = useMutation({
+    mutationFn: async (taskId: number) => {
+      await apiRequest("DELETE", `/api/tasks/${taskId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/activity"] });
+      setConfirmDeleteTask(null);
+      toast({ title: "Task deleted" });
+    },
+    onError: (e: Error) => {
+      toast({ title: "Failed to delete task", description: e.message, variant: "destructive" });
     },
   });
 
@@ -1539,6 +1557,16 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                         <Badge variant="secondary" className={`text-xs shrink-0 no-default-hover-elevate no-default-active-elevate ${taskPriorityColors[task.priority]}`}>
                           {task.priority}
                         </Badge>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          aria-label="Delete task"
+                          className="h-7 w-7 text-muted-foreground hover:text-destructive shrink-0"
+                          onClick={() => setConfirmDeleteTask(task.id)}
+                          data-testid={`button-delete-task-${task.id}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
                       </Card>
                     );
                   })}
@@ -1660,6 +1688,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                         progress={progress}
                         isExpanded={isExpanded}
                         onToggle={() => setExpandedChecklist(isExpanded ? null : cl.id)}
+                        onDeleted={() => setExpandedChecklist(null)}
                         getInitials={getInitials}
                         projectId={id}
                       />
@@ -1772,6 +1801,31 @@ export default function ProjectDetailPage({ id }: { id: string }) {
           onNavigate={(m) => setSelectedMedia(m)}
         />
       )}
+
+      <AlertDialog open={confirmDeleteTask !== null} onOpenChange={(open) => { if (!open) setConfirmDeleteTask(null); }}>
+        <AlertDialogContent data-testid="dialog-confirm-delete-task">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete task?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently remove the task.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteTask.isPending} data-testid="button-cancel-delete-task">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                if (confirmDeleteTask !== null && !deleteTask.isPending) deleteTask.mutate(confirmDeleteTask);
+              }}
+              disabled={deleteTask.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-delete-task"
+            >
+              {deleteTask.isPending ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={showDeleteConfirm} onOpenChange={(open) => { if (!isDeleting) setShowDeleteConfirm(open); }}>
         <AlertDialogContent>
@@ -2218,6 +2272,7 @@ function ChecklistCard({
   progress,
   isExpanded,
   onToggle,
+  onDeleted,
   getInitials,
   projectId,
 }: {
@@ -2227,6 +2282,7 @@ function ChecklistCard({
   progress: number;
   isExpanded: boolean;
   onToggle: () => void;
+  onDeleted: () => void;
   getInitials: (firstName: string | null, lastName: string | null) => string;
   projectId: string;
 }) {
@@ -2271,7 +2327,11 @@ function ChecklistCard({
       </div>
       {isExpanded && (
         <div className="mt-3 pl-8 border-t pt-3" onClick={(e) => e.stopPropagation()}>
-          <ChecklistSectionEditor checklistId={checklist.id} projectId={projectId} />
+          <ChecklistSectionEditor
+            checklistId={checklist.id}
+            projectId={projectId}
+            onDeleted={onDeleted}
+          />
         </div>
       )}
     </Card>

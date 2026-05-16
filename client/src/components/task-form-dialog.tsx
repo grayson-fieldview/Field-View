@@ -68,8 +68,24 @@ export default function TaskFormDialog({ open, onOpenChange, projectId }: TaskFo
     enabled: open && isGlobalMode,
   });
 
+  // When mounted with a fixed projectId (project-detail's Tasks tab), filter
+  // the assignee list to users assignable for that project — restricted users
+  // not in project_assignments are dropped server-side. In global mode (the
+  // /tasks page picker), we don't know the project until the user picks one,
+  // so we intentionally fetch the unfiltered list. Live-refilter on the
+  // in-dialog project change is future polish; out of scope here.
   const usersQuery = useQuery<AccountUser[]>({
-    queryKey: ["/api/users"],
+    queryKey: projectId !== undefined
+      ? ["/api/users", { assignableForProjectId: projectId }]
+      : ["/api/users"],
+    queryFn: async () => {
+      const url = projectId !== undefined
+        ? `/api/users?assignableForProjectId=${projectId}`
+        : "/api/users";
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+      return res.json();
+    },
     enabled: open,
   });
 

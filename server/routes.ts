@@ -2272,7 +2272,35 @@ export async function registerRoutes(
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
       const usersList = await storage.getUsers(accountId);
-      const safeUsers = usersList.map(({ password, ...rest }) => sanitizeUserForViewer(rest, req.user));
+
+      // Optional filter: ?assignableForProjectId=<id>. When the param resolves
+      // to a project in the caller's account, restricted users not assigned to
+      // that project are dropped; admin/manager/standard always pass through.
+      // Missing/invalid param OR project-not-in-account => silent fallback to
+      // the unfiltered list (bit-identical to pre-filter behavior). Never 400
+      // here — the caller is a UI picker; falling back to the full list is
+      // safer than erroring.
+      let filtered = usersList;
+      const rawProjectId = req.query.assignableForProjectId;
+      // Strict numeric validation — parseInt would accept "39abc" as 39.
+      // Anything malformed silently falls back to the unfiltered list.
+      const rawStr = typeof rawProjectId === "string" ? rawProjectId.trim() : "";
+      const projectId = /^[1-9]\d*$/.test(rawStr) ? Number(rawStr) : NaN;
+      if (Number.isInteger(projectId) && projectId > 0) {
+        const project = await storage.getProject(projectId);
+        if (project && project.accountId === accountId) {
+          const assignedRows = await db
+            .select({ userId: projectAssignments.userId })
+            .from(projectAssignments)
+            .where(eq(projectAssignments.projectId, projectId));
+          const assignedUserIds = new Set(assignedRows.map(r => r.userId));
+          filtered = usersList.filter(u =>
+            u.role !== "restricted" || assignedUserIds.has(u.id),
+          );
+        }
+      }
+
+      const safeUsers = filtered.map(({ password, ...rest }) => sanitizeUserForViewer(rest, req.user));
       res.json(safeUsers);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch users" });
