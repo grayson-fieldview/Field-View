@@ -1,0 +1,72 @@
+NEW TASK — fix UTC notification times in push body.
+
+BUG: clock-in/clock-out push notifications display UTC time in the 
+body. User in EDT sees "Clocked in to Toreros · 10:51 PM" when 
+actual local time is 6:51 PM. We need local-time formatting based 
+on the project's geographic timezone, not the server's UTC.
+
+DESIGN: derive timezone from the project's lat/lng using tz-lookup 
+(lightweight, pure JS, no external API call), format the timestamp 
+using toLocaleString with that timezone.
+
+WHY project lat/lng, not user device timezone: server doesn't 
+reliably know the user's device timezone, but every project has 
+lat/lng (we use it for geofencing). A painter clocked in at a job 
+site should see the time in that site's local time — even if 
+they're traveling and their phone is set to a different zone, the 
+job-site time is what matters for payroll.
+
+SCOPE:
+
+1) Add dependency: tz-lookup (~30KB, pure JS, no native deps). 
+   pnpm add tz-lookup
+   Note: not @types/tz-lookup — the package ships its own types or 
+   we use require with a small ambient declaration if needed.
+
+2) Add helper to server/lib/geo.ts (we already created this file 
+   tonight for haversine math — keep geo helpers consolidated):
+
+   formatLocalTime(date: Date, lat: number, lng: number): string
+   
+   Returns something like "8:51 PM" — 12-hour format with AM/PM, 
+   no date (the push notification implies "today" by context).
+   Uses tz-lookup to get IANA timezone from lat/lng, then 
+   date.toLocaleString("en-US", { timeZone, hour: "numeric", 
+   minute: "2-digit", hour12: true }).
+   
+   Fallback if tz-lookup throws (e.g., invalid lat/lng): format as 
+   UTC with " UTC" suffix so we know the fallback fired in logs.
+
+3) Find ALL push body construction sites that include timestamps. 
+   Likely candidates:
+   - server/routes.ts in /api/geofence/enter-detected (clock-in push)
+   - server/routes.ts in /api/cron/process-pending-exits (clock-out 
+     push)  
+   - server/routes.ts in /api/cron/max-shift-cleanup (max-shift 
+     auto-close push — new tonight)
+   - server/routes.ts in /api/cron/process-pending-enters (dwell-time 
+     clock-in push — shipped this morning)
+   
+   Each site needs the project's lat/lng available (should already be 
+   in scope since clock-in/out is project-bound).
+
+4) Replace any current UTC time formatting in push bodies with 
+   formatLocalTime(timestamp, project.latitude, project.longitude).
+
+5) NO database migration. NO schema changes. NO mobile changes. 
+   No user-facing string changes beyond the time format itself.
+
+DIAGNOSE FIRST. No code. Output:
+- All push body construction sites you found (file:line)
+- Whether project lat/lng is in scope at each site (or needs to be 
+  fetched)
+- Confirmation tz-lookup is the right library choice vs alternatives 
+  you considered
+- Edge cases (project with null lat/lng — what happens?)
+- Expected diff size
+
+After my approval: implement, typecheck, architect-review, show diff, 
+ready for push.
+
+This is the LAST web task before Grayson's Build 12 device QA drive. 
+Tight scope.
