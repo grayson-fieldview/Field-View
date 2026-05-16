@@ -1,0 +1,76 @@
+NEW TASK — implement POST /api/geofence/fire-now endpoint.
+
+CONTEXT: Mobile Build 13 adds a client-driven dwell timer that 
+posts a "fire-now" request at the 60s mark to bypass cron latency 
+(current worst case: dwell 60s + cron wait up to 60s = 120s 
+auto-clock-in). This endpoint is the server side of that.
+
+ARCHITECTURE: This endpoint does exactly what 
+/api/cron/process-pending-enters does for a single row, just 
+triggered from a mobile user request instead of a cron sweep. 
+REUSE existing helpers — do NOT duplicate logic.
+
+ENDPOINT: POST /api/geofence/fire-now
+
+Request: { pendingEnterId: string }
+Auth: session-based (same as enter-cancelled — requireWriteAccess + 
+X-FieldView-Client header)
+
+LOGIC (mirror the cron's per-row block):
+1. Lookup pending enter row by id WHERE userId === currentUser.id 
+   (auth boundary — same pattern as enter-cancelled to prevent 
+   cross-user existence leaks)
+2. If row not found OR cross-user: 404 with same generic 
+   "Pending enter not found" message (no existence leak)
+3. If row.status !== 'pending': 410 Gone with status indicator 
+   ("already_fired" or "cancelled")
+4. BEGIN tx with SELECT ... FOR UPDATE on the pending row 
+   (race-safe, same lock pattern as cron)
+5. Re-check row.status inside tx (in case it transitioned between 
+   read and lock)
+6. Re-check user state: SELECT active time_entry for userId
+   - If active session exists: mark pending row fired with 
+     notes='already_clocked_in', commit, return 409 Conflict with 
+     {status: "already_clocked_in"}
+7. Otherwise: call existing executeAutoClockIn() helper — same path 
+   cron uses. Pass projectId from the pending row.
+8. Mark pending row fired with notes='fire_now_mobile' (different 
+   from cron's 'fired_by_cron' so we can distinguish in analytics 
+   later)
+9. Commit tx
+10. Fan out push notification using existing safeCapture + 
+    Promise.allSettled pattern from other geofence endpoints
+11. Return 201 with { timeEntryId, project: {id, name, latitude, 
+    longitude}, clockInAt }
+
+ERROR HANDLING:
+- Same 23505 idempotency catch we added to heartbeat last night 
+  (in case concurrent fire-now + cron race hits the partial unique 
+  index)
+- Push send failures use the safeCapture wrapper we shipped last 
+  night — don't crash on push errors
+
+NO CHANGES TO:
+- Existing cron at /api/cron/process-pending-enters (stays as 
+  fallback — if mobile is killed or offline at 60s, cron catches it 
+  on next sweep)
+- executeAutoClockIn helper (REUSE, don't fork)
+- Schema (no new columns, no migration)
+- Any existing endpoint
+
+DIAGNOSE FIRST. No code. Output:
+1. Confirm the file you'll add the route to (server/routes.ts I 
+   assume, near other geofence routes around line 4000+)
+2. Whether executeAutoClockIn's current signature accepts everything 
+   we need or if we need a small param addition
+3. The exact tx pattern you'll use — point me at the cron block 
+   you're mirroring so I can verify it's the same one with the 
+   FOR UPDATE lock
+4. Any auth boundary concerns I should know about
+5. Expected diff size
+
+After my approval: implement, typecheck, architect review, show 
+diff, I push from Git pane, Vercel auto-deploys, I promote.
+
+Tight scope — one new route, mirrors existing cron logic, no new 
+helpers, no schema, no breaking changes.

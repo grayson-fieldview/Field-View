@@ -1,0 +1,209 @@
+BUILD 13 — TWO DIFFS, scope-locked. Geofence reliability + UX.
+
+CONTEXT: Last night's Build 12 device QA revealed two architectural 
+gaps in auto-clock-in:
+1. iOS region monitoring doesn't fire Enter events while the app's 
+   background task is suspended. User can arrive at a site with the 
+   app backgrounded and nothing fires.
+2. Cron-driven dwell processing adds up to 60s of latency on top of 
+   the 60s dwell, making practical worst-case auto-clock-in delay 
+   ~120 seconds. CompanyCam-competitive target is <60s.
+
+This build addresses both.
+
+============================================================
+DIFF 1 — Already-inside-on-foreground detection
+============================================================
+
+PROBLEM: iOS region monitoring fires Enter only when the device 
+CROSSES the boundary. If the task is suspended (app not opened 
+recently, OS power management, etc.) when user arrives at a site, 
+no Enter fires. User opens the app while inside → still no Enter, 
+nothing happens.
+
+FIX: On app foreground transition AND after geofence registration 
+completes, query current location and check against all registered 
+geofence projects. If inside any, post 
+/api/geofence/enter-detected for that project as if iOS had fired 
+Enter.
+
+IMPLEMENTATION:
+- New function: checkInsideRegisteredGeofences() — place it where 
+  cleanest (suggest a new services/insideCheck.ts or extend 
+  services/geofencing.ts, your call)
+- Triggers: 
+  (a) AppState 'active' transition listener (mounted somewhere 
+      durable — likely root layout or TimesheetContext)
+  (b) After successful registerGeofences() in services/geofencing.ts
+- Uses Location.getCurrentPositionAsync (one-shot, balanced 
+  accuracy, ~5s timeout)
+- Compares against each project's lat/lng using haversine 
+  (DEFAULT_GEOFENCE_RADIUS_M = 150m)
+- For nearest project where distance ≤ 150m, post 
+  /api/geofence/enter-detected (existing endpoint, server idempotency 
+  handles duplicates if iOS region monitoring also fires Enter 
+  concurrently)
+- Guard against spam: AsyncStorage flag 
+  @fv/inside_check_last_run_at — skip if last successful check 
+  was < 30s ago
+- Guard against pending enter: if TimesheetContext shows a 
+  pendingEnter in state, don't post (already in dwell)
+- Guard against active session: if activeTimesheet is non-null, 
+  don't post (already clocked in)
+- If multiple projects within radius (rare edge case), post for 
+  NEAREST one only — this is the most likely intended site
+
+EDGE CASES:
+- Permission downgraded since registration → fail silently, no 
+  Sentry spam (log to console only)
+- Location request times out → silent skip
+- Network failure on enter-detected POST → silent skip, retry on 
+  next foreground
+
+============================================================
+DIFF 2 — Client-driven dwell countdown + fire-now (TWO PARTS: 
+mobile + server)
+============================================================
+
+PROBLEM: After enter-detected fires, server schedules firesAt=+60s 
+and waits for cron (runs every minute). Worst-case actual clock-in 
+latency = dwell (60s) + cron wait (up to 60s) = 120s.
+
+FIX: Mobile drives the dwell timer locally. At 60s expiry, mobile 
+posts a "fire-now" request and server fires immediately. Cron 
+remains as fallback (mobile killed, offline, etc.).
+
+============================
+MOBILE SIDE
+============================
+
+1) After enter-detected succeeds, store pending state in BOTH:
+   - AsyncStorage @fv/pending_enter_v1 = 
+     { pendingEnterId, firesAt, projectId, projectName, createdAt }
+   - TimesheetContext exposes pendingEnter from this same source
+   
+2) Top-level banner component: components/PendingEnterBanner.tsx
+   - Mount at app root (likely app/_layout.tsx) so it's always 
+     visible regardless of screen
+   - Renders conditionally when TimesheetContext.pendingEnter is 
+     non-null AND no activeTimesheet
+   - Content: "Auto-clock-in to [Project Name] in 0:47..." with 
+     live MM:SS countdown updating every second via setInterval
+   - Right side: small "Cancel" button (X icon)
+   - Tap "Cancel" → POST /api/geofence/enter-cancelled with 
+     pendingEnterId → clear local state → dismiss banner
+   - Tap banner body (not cancel) → navigate to project detail
+   - Style: matches existing notification pill aesthetic (similar 
+     to ClockReceiptBanner pattern)
+
+3) Countdown timer logic:
+   - On mount (with pendingEnter present): setInterval 1000ms
+   - Each tick: secondsRemaining = max(0, 
+     (firesAt - now()) / 1000)
+   - At 0 seconds remaining: call fire-now (see below)
+   - Cleanup interval on unmount and on transition to active
+
+4) Fire-now trigger:
+   - When countdown reaches 0:
+     a. Re-verify location via Location.getCurrentPositionAsync 
+        with ~5s timeout
+     b. Compute haversine to project center
+     c. If still inside (≤ 150m + 50m buffer): POST 
+        /api/geofence/fire-now with { pendingEnterId }
+     d. If outside: POST /api/geofence/enter-cancelled (user moved 
+        away during dwell, normal exit)
+   - On fire-now success: server returns the created time entry, 
+     TimesheetContext updates from response, banner dismisses, 
+     ClockReceiptBanner takes over (existing flow)
+   - On fire-now failure (404, 410, network): silent, cron 
+     fallback will catch it. Don't error-toast — UX-noisy for the 
+     edge case.
+
+5) State cleanup paths:
+   - User taps cancel → clear local state, post 
+     enter-cancelled
+   - User moves outside geofence during dwell → at fire time, 
+     post enter-cancelled instead of fire-now
+   - User cold-launches during dwell → restore pendingEnter from 
+     AsyncStorage on app start, banner resumes countdown
+   - firesAt has already passed when restoring (cold launch after 
+     dwell expired) → immediately attempt fire-now (re-verify 
+     location first)
+   - activeTimesheet appears (cron fired before mobile could) → 
+     clear pendingEnter, dismiss banner
+
+============================
+SERVER SIDE  
+============================
+
+NEW ENDPOINT: POST /api/geofence/fire-now
+
+Request body: { pendingEnterId: string }
+Auth: session (same as other geofence endpoints)
+Returns: 
+  201 { timeEntryId, project, clockInAt } on success
+  404 if pending enter not found or doesn't belong to caller
+  409 if user already has an active session (race)
+  410 if pending was already fired or cancelled
+
+LOGIC (in server/routes.ts):
+- Lookup pending enter by id + userId (same auth pattern as 
+  enter-cancelled)
+- If status !== 'pending': 410
+- BEGIN tx with SELECT FOR UPDATE on the pending row (same as cron)
+- Re-check status inside tx (race-safe)
+- Re-check user state: if active time entry exists → 409, mark 
+  pending fired with notes='already_clocked_in'  
+- Otherwise: call existing executeAutoClockIn() (same path the 
+  cron uses), mark pending fired with notes='fire_now_mobile'
+- Commit tx
+- Fan out push notification (same Promise.allSettled pattern as 
+  existing endpoints)
+- Return 201 with time entry
+
+This is essentially the cron's per-row processing logic, just 
+triggered from a mobile request instead of a cron sweep. Reuse 
+existing helpers — DO NOT duplicate logic.
+
+============================================================
+NO TOUCHES TO:
+============================================================
+- services/heartbeat.ts (independent)
+- services/geofencing.ts iOS task body (kept for cross-boundary 
+  case)
+- TimesheetContext transition watcher (still fires on 
+  activeTimesheet changes)
+- Cron logic in /api/cron/process-pending-enters (still active as 
+  fallback)
+- All existing UI (ClockReceiptBanner, FiredEnter consumer, etc.)
+
+============================================================
+DIAGNOSE BOTH DIFFS FIRST. No code. Output:
+============================================================
+
+For DIFF 1:
+1. File-by-file plan (which files touched, why)
+2. Where exactly to mount the AppState listener (TimesheetContext 
+   vs app root vs new top-level component)
+3. Whether services/insideCheck.ts as a new file makes sense, or 
+   if this belongs inside services/geofencing.ts
+4. Expected diff size
+
+For DIFF 2:
+5. File-by-file plan for mobile side
+6. File-by-file plan for server side (just routes.ts, or new file?)
+7. How TimesheetContext exposes pendingEnter (new state slice?)
+8. PendingEnterBanner component placement — confirm app root 
+   (app/_layout.tsx) is the right mount point
+9. How the banner interacts with existing ClockReceiptBanner (they 
+   shouldn't show simultaneously — banner shows during dwell, 
+   ClockReceiptBanner shows after auto-clock-in fires)
+10. Edge case verification: cold launch during dwell window — how 
+    does AsyncStorage rehydration work in TimesheetContext?
+11. Expected diff size for each side
+
+Architect review on each diff SEPARATELY (one at a time). I'll 
+approve diagnose, then approve diff 1 implementation, push, then 
+diagnose diff 2, approve, push. Two commits, bisectable.
+
+NO scope creep. Just these two diffs.
