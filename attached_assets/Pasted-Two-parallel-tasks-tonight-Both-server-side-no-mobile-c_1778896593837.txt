@@ -1,0 +1,56 @@
+Two parallel tasks tonight. Both server-side, no mobile changes needed.
+
+TASK 1 — SHIP NOW (hotfix):
+
+Remove source === "auto_geofence" restriction from heartbeat exit.
+
+File: server/routes.ts, POST /api/heartbeat handler.
+
+Current logic (approximate):
+  if (distance > radius + buffer && entry.source === "auto_geofence") {
+    create pending exit
+  }
+
+Change to:
+  if (distance > radius + buffer) {
+    create pending exit
+  }
+
+Also remove the same restriction from POST /api/geofence/exit-detected 
+if present. Manual clock-ins must get the same exit safety net as 
+auto ones.
+
+Evidence from Vercel logs tonight: during Grayson's 9:19-9:29 PM 
+drive, heartbeats fired every ~5 seconds, all 200, all returning 
+{status:"skipped", reason:"manual_entry"} because his entry was 
+manual. This is the only thing blocking auto-clock-out from working.
+
+Architect review pass. Show diff. I'll handle push + Vercel promote.
+
+TASK 2 — DIAGNOSE ONLY, no code:
+
+We need ground truth on the enter-detected → dwell → fire timeline 
+for Grayson's test tonight at Ella Hadaway's.
+
+Look up in production database:
+1. The pending_geofence_enters row created at ~21:19:24 EDT tonight 
+   for userId c45a5d55-5481-4562-8bfc-670b382a49d0 (project Ella 
+   Hadaway's, id likely 43 based on logs).
+2. What was the firesAt value? What was the createdAt? Compute the 
+   actual dwell time in seconds.
+3. What was the row's status field if it has one (fired/cancelled/
+   processed)?
+
+Also inspect code:
+4. What's the dwell time constant for ENTER (not exit)? Look in 
+   server/routes.ts /api/geofence/enter-detected handler.
+5. How does /api/cron/process-pending-enters decide which rows to 
+   process? Does it process all rows or only those with firesAt <= 
+   now? The log at 21:20:02 showed {processed:1, fired:0, 
+   skipped_already_clocked_in} — was it processed because firesAt 
+   had passed, or because the cron processes all rows regardless?
+
+Goal: confirm whether the dwell time is what we think it is, and 
+whether the cron handles "not yet due" rows correctly. Don't write 
+any code yet — just report findings. Grayson and I will decide 
+fixes based on what you find.

@@ -3398,8 +3398,12 @@ export async function registerRoutes(
   //                                                         = undo the whole thing, even if user
   //                                                         manually clocked out a wrongly auto-clocked
   //                                                         session).
-  // Cross-account → 404. Cross-user same-account → 403. Source ≠ auto_geofence → 403. Outside any
-  // 60-min window → 410 Gone.
+  // Cross-account → 404. Cross-user same-account → 403. Outside any 60-min window → 410 Gone.
+  // Source check: allow when entry.source === "auto_geofence" OR when a recent fired pending
+  // exit row exists for this entry (the heartbeat / exit-detected paths now schedule exits for
+  // manual entries too, so a manual entry that was auto-clocked-out by drift must also be
+  // undo-able). Pure manual entries with no auto-closure history still 403 — manager dashboard
+  // is the right place to edit those.
   app.delete("/api/timesheets/:id/auto-undo", requireWriteAccess, async (req: any, res) => {
     try {
       const currentUser = req.user;
@@ -3412,7 +3416,18 @@ export async function registerRoutes(
       if (entry.userId !== currentUser.id) {
         return res.status(403).json({ message: "You can only undo your own auto clock-in entries" });
       }
-      if (entry.source !== "auto_geofence") {
+
+      // Pre-fetch the pending exit row — used both for source-gate widening
+      // (manual entry that was auto-closed by drift is undo-able) and for the
+      // Case 2 re-open path below.
+      const pending = await storage.getPendingExitByTimeEntryAny(id);
+      const hasRecentAutoCloseFired = !!(
+        pending &&
+        pending.status === "fired" &&
+        pending.firedAt &&
+        (Date.now() - new Date(pending.firedAt).getTime()) <= TIME_ENTRY_DELETE_WINDOW_MS
+      );
+      if (entry.source !== "auto_geofence" && !hasRecentAutoCloseFired) {
         return res.status(403).json({ message: "Only auto clock-in entries can be undone via this endpoint. Use the manager dashboard to edit or delete manual entries." });
       }
 
@@ -3430,7 +3445,7 @@ export async function registerRoutes(
       }
 
       // Case 2: clocked out, has a recent pending row that fired → re-open
-      const pending = await storage.getPendingExitByTimeEntryAny(id);
+      // (pending fetched above for the source-gate widening)
       if (pending && pending.status === "fired" && pending.firedAt) {
         const firedAgeMs = now - new Date(pending.firedAt).getTime();
         if (firedAgeMs <= TIME_ENTRY_DELETE_WINDOW_MS) {
@@ -3492,9 +3507,11 @@ export async function registerRoutes(
       if (entry.userId !== currentUser.id) {
         return res.status(403).json({ message: "Cannot schedule exit for another user's entry" });
       }
-      if (entry.source !== "auto_geofence") {
-        return res.status(400).json({ message: "Only auto-geofence entries can be auto-clocked-out" });
-      }
+      // NOTE: source restriction intentionally removed. Manual clock-ins must
+      // get the same exit safety net as auto ones — otherwise heartbeats
+      // return {skipped, manual_entry} and auto-clock-out never fires for a
+      // user who tapped Clock In manually. autoTrackingEnabled check below
+      // is the remaining gate for users who opted out entirely.
       if (entry.clockOut !== null) {
         return res.status(400).json({ message: "Time entry is already clocked out" });
       }
@@ -3606,11 +3623,17 @@ export async function registerRoutes(
   // cancellation, idempotency, and cron firing all work identically.
   //
   // Restrictions:
-  //   - Only fires for source === "auto_geofence" entries. Manual entries reflect
-  //     explicit user intent (running an errand, lunch, etc.) and should not be
-  //     auto-closed by drift detection. The 12-hour max-shift safety net handles
-  //     orphan manual entries instead.
+  //   - Fires for ALL sources (manual + auto_geofence). Earlier the heartbeat
+  //     skipped manual entries on the theory that manual = "explicit intent
+  //     to stay clocked in even when wandering" — in practice this disabled
+  //     auto-clock-out for every user who tapped Clock In manually, which
+  //     was every real-world user during testing. The 12-hour max-shift
+  //     safety net is still there for orphan entries, but the 5-min-after-
+  //     drive-away signal is the one users actually notice.
   //   - Honors autoTrackingEnabled — same defense-in-depth as exit-detected.
+  //     A user who has explicitly disabled auto-tracking in settings still
+  //     gets a no-op response (so the drift safety net is the user-level
+  //     opt-out, not a per-entry source flag).
   app.post("/api/heartbeat", requireWriteAccess, async (req: any, res) => {
     try {
       const currentUser = req.user;
@@ -3631,9 +3654,9 @@ export async function registerRoutes(
       if (entry.accountId !== currentUser.accountId) {
         return res.status(200).json({ status: "no_active_session" });
       }
-      if (entry.source !== "auto_geofence") {
-        return res.status(200).json({ status: "skipped", reason: "manual_entry" });
-      }
+      // NOTE: source !== "auto_geofence" skip removed. See route doc comment
+      // above for rationale. autoTrackingEnabled (below) is the remaining
+      // gate for users who opted out at the account/user level.
 
       // Stale mobile may continue posting heartbeats after auto-tracking is disabled
       // in settings. Silently no-op so mobile doesn't retry.
