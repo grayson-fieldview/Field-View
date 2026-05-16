@@ -1,0 +1,63 @@
+Task: Design and build hard-delete-from-gallery for photos, with cross-context reference detection. Server-side only this round — no web UI changes.
+
+CONTEXT
+Mobile is adding a photo delete affordance to the gallery. Semantics:
+- Hard delete: removes the media row, the S3 file, and ALL join rows pointing to it (checklist item refs, report section refs, task refs, etc.)
+- 2-step confirm: if the photo is referenced anywhere, a second dialog lists the contexts ("This photo is in 1 report and 2 checklists. Are you sure?")
+- Shared report warning: if the photo is in a report with an active share token, the dialog adds a stronger warning ("...this is a shared report — deleting will break the shared link.")
+
+Web parity for the UI is NOT in scope this round. We're building the server endpoints only.
+
+DIAGNOSE FIRST — answer all of these before proposing any code:
+
+1. Photos / media table: schema (file + line range, all columns). Where is the S3 key stored? CloudFront URL pattern? Any existing soft-delete columns (deleted_at, archived)?
+
+2. For each context a photo can appear in, document the join table:
+   a. Project photo gallery
+   b. Checklist item photos
+   c. Report section photos
+   d. Task photos (do these exist?)
+   e. Any other context I haven't listed — search aggressively
+   For each: schema, cascade behavior, and the endpoints that create/delete rows.
+
+3. Every existing photo-related DELETE endpoint: route + file + line + what it deletes (join only? media too?) + S3 cleanup behavior (if any). The report-edit section-photo dialog is one we know about — find anything else.
+
+4. S3 cleanup: grep the server code for s3.deleteObject / DeleteObjectCommand / similar. Where (if anywhere) does the system actually clean up S3 files when a media row is deleted? If no cleanup exists today, say so explicitly — we may need to add the utility.
+
+5. Shared report detection: how do we know if a report has an active share token? Column on reports table? Separate table? Show me the schema and the query shape.
+
+6. Cross-context reference query: given a photo_id, sketch the Drizzle/SQL to list every join row pointing to it. This becomes the new GET /api/photos/:id/references endpoint.
+
+7. Any existing photo delete UI in client/src? Search and document — especially confirm whether the report-edit section-photo dialog removes the join only, or also the media row. We need to know if mobile's new behavior conflicts with web's existing behavior.
+
+8. Mobile's likely photo endpoints: list any /api/* routes that look photo-related and that mobile probably consumes (upload, list-by-project, list-by-item, etc.). We want to know the existing API surface mobile already calls.
+
+After 1-8, propose the diff covering:
+
+A. New endpoint: GET /api/photos/:id/references
+   - Response shape: { reports: [{id, title, isShared}], checklists: [{id, title}], tasks: [{id, title}], ...any other context }
+   - Permission: requireReadAccess + same-account verification on the photo
+   - 404 if photo not found / wrong account (collapsed, don't leak)
+
+B. New endpoint: DELETE /api/photos/:id
+   - Hard delete: media row + all join rows + S3 file
+   - Permission: requireWriteAccess + same-account verification
+   - Returns 204 on success, 404 if not found / wrong account
+   - Wrap multi-table DB work in db.transaction so partial failure rolls back
+   - S3 cleanup: if S3 delete fails, log + Sentry but don't fail the DB delete (orphaned files are recoverable via later cleanup; user's request succeeds)
+
+C. S3 cleanup utility — only if one doesn't exist
+   - Takes an S3 key, calls DeleteObjectCommand
+   - Called from inside DELETE /api/photos/:id
+   - Don't bother with CloudFront invalidation (URLs are permanent per the system design)
+
+D. NO web UI changes. NO modification to existing photo endpoints, existing upload flows, or the existing report-edit section-photo dialog. Net new endpoints only.
+
+Do NOT apply A/B/C until I approve the diagnostic findings and proposed diff.
+
+CONSTRAINTS:
+- All existing photo flows must remain bit-identical
+- Match existing route style and error response shapes in this codebase
+- Transaction-wrap the multi-table delete
+- If S3 cleanup utility already exists, reuse it — don't duplicate
+- Don't add any audit logging unless one exists today (deferred to tech debt)
