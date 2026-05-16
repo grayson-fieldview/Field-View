@@ -1,0 +1,50 @@
+1. Route prefix: Mount under /api/media/* for consistency with existing API. ONLY add GET /api/media/:id/references. Do NOT create a parallel DELETE endpoint. Mobile will call references first, then the existing DELETE /api/media/:id (already does hard delete + S3 cleanup + FK cascade — bit-identical to what mobile needs).
+
+2. tasks: [] bucket: KEEP it in the response shape as an empty array. Forward-compat for if we ever add task photos later. Mobile iterates only non-empty buckets when building the dialog message, so empty tasks: [] is harmless.
+
+3. Restricted-user filtering in references response: YES. Apply the same project-assignment scoping as /api/reports and /api/checklists. Don't leak titles of reports/checklists the caller can't otherwise see. Mirror whatever scoping logic those endpoints use today.
+
+4. shared_galleries.media_ids array scrubbing: OUT OF SCOPE. Add to TECH_DEBT.md (or surface for me to add). Existing DELETE /api/media/:id already leaves them stale — that bug isn't worse after this work.
+
+ALSO TO ADDRESS:
+
+5. You flagged "[sentry] SENTRY_DSN not set" — that's stale. SENTRY_DSN IS set in Vercel (All Environments) and verified active in prod as of May 9, 2026. The dev environment may show it as unset, which is fine, but for the implementation: do reuse Sentry.captureException if the import is present in the codebase. It will work in prod.
+
+6. Existing DELETE /api/media/:id returns 200 {success:true}, not 204. My spec said 204 — that was wrong. Don't touch that endpoint. Mobile expects 200.
+
+7. You flagged the existing DELETE /api/media/:id has no restricted-user write check beyond verifyMediaAccess — restricted users can today delete any in-account photo. Confirmed out of scope for this round. Add to TECH_DEBT.md as a separate security note: "DELETE /api/media/:id allows restricted users to delete any photo in their account; should be scoped to media on projects they're assigned to."
+
+PROCEED TO APPLY:
+
+Build just GET /api/media/:id/references. No other changes. Specifically:
+
+- Route: GET /api/media/:id/references
+- Permission: requireReadAccess + verifyMediaAccess(mediaId, accountId)
+- 404 collapsed for not-found and wrong-account
+- Response shape:
+  {
+    "reports": [{ "id": number, "title": string, "isShared": boolean }],
+    "checklists": [{ "id": number, "title": string }],
+    "tasks": []
+  }
+- isShared = report.share_token IS NOT NULL
+- For restricted-user callers: filter reports[] and checklists[] to only include items they can otherwise read, mirroring the scoping logic in /api/reports and /api/checklists
+- Two Drizzle queries as you sketched in §6 — selectDistinct on reports via report_section_photos → report_sections → reports, and on checklists via checklist_item_photos → checklist_items → checklists
+- Match existing route style + error response shapes
+
+Do NOT modify:
+- DELETE /api/media/:id or any existing media/photo endpoints
+- Existing photo-viewer.tsx, project-detail.tsx batch delete, report-edit section-photo dialog
+- Any upload flows
+
+Post-apply verification gates — run before declaring done:
+
+a) Upload a photo via web. Call GET /api/media/:id/references for it → expect { reports: [], checklists: [], tasks: [] }.
+b) Add that photo to a checklist item → call references → expect checklists array with one entry, correct title.
+c) Add it to a report section → call references → expect reports array with one entry, isShared: false.
+d) Share that report (POST /api/reports/:id/share) → call references → expect isShared: true on the report entry.
+e) Revoke the share → call references → expect isShared: false again.
+f) Test as a restricted user not assigned to the project containing the report → call references on a photo in that report → expect the report to be filtered out of the response.
+g) Call references with an invalid id / wrong-account id → expect 404, no leak.
+
+Leave staged-but-unpushed. I push.

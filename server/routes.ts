@@ -1054,6 +1054,90 @@ export async function registerRoutes(
     }
   });
 
+  // Cross-context reference inspector for a single photo. Mobile calls this
+  // before offering a hard-delete confirm so the dialog can say "this photo
+  // is in 1 report and 2 checklists" — and warn when one of the reports has
+  // an active share token. The actual delete still goes through the existing
+  // DELETE /api/media/:id (hard delete + S3 cleanup + FK cascade across the
+  // four join tables). Per spec: 404 collapsed for not-found AND wrong-account
+  // to avoid leaking cross-account media IDs.
+  //
+  // `tasks: []` is returned as a forward-compat stub — no task↔photo join
+  // table exists today. When/if it lands, populate this bucket and mobile's
+  // dialog picks it up without a shape change.
+  app.get("/api/media/:id/references", requireReadAccess, async (req: any, res) => {
+    try {
+      const mediaId = parseInt(req.params.id as string);
+      if (!Number.isInteger(mediaId) || mediaId <= 0) {
+        return res.status(404).json({ message: "Media not found" });
+      }
+      if (!(await verifyMediaAccess(mediaId, req.user.accountId))) {
+        return res.status(404).json({ message: "Media not found" });
+      }
+
+      // Reports that include the photo on any of their sections. Distinct on
+      // report id so a photo placed on multiple sections of one report still
+      // appears once in the confirm dialog.
+      const reportRows = await db
+        .selectDistinct({
+          id: reports.id,
+          title: reports.title,
+          shareToken: reports.shareToken,
+          projectId: reports.projectId,
+          createdById: reports.createdById,
+        })
+        .from(reportSectionPhotos)
+        .innerJoin(reportSections, eq(reportSectionPhotos.sectionId, reportSections.id))
+        .innerJoin(reports, eq(reportSections.reportId, reports.id))
+        .where(eq(reportSectionPhotos.mediaId, mediaId));
+
+      // Checklists that include the photo on any of their items. Same
+      // distinct-on-id collapse so multi-item attachments don't double-count.
+      const checklistRows = await db
+        .selectDistinct({
+          id: checklists.id,
+          title: checklists.title,
+          projectId: checklists.projectId,
+          createdById: checklists.createdById,
+        })
+        .from(checklistItemPhotos)
+        .innerJoin(checklistItems, eq(checklistItemPhotos.itemId, checklistItems.id))
+        .innerJoin(checklists, eq(checklistItems.checklistId, checklists.id))
+        .where(eq(checklistItemPhotos.mediaId, mediaId));
+
+      // Restricted-user scoping — mirrors /api/reports (routes.ts:1702) and
+      // /api/checklists (routes.ts:1232): only surface reports/checklists
+      // for projects the user created or is assigned to. Without this filter
+      // the dialog would leak titles of reports/checklists the caller cannot
+      // otherwise see.
+      let visibleReports = reportRows;
+      let visibleChecklists = checklistRows;
+      if (req.user.role === "restricted") {
+        const assigned = await getRestrictedAssignedProjectIds(req.user.id);
+        const userId = req.user.id;
+        visibleReports = reportRows.filter(r => assigned.has(r.projectId) || r.createdById === userId);
+        visibleChecklists = checklistRows.filter(c => assigned.has(c.projectId) || c.createdById === userId);
+      }
+
+      res.json({
+        reports: visibleReports.map(r => ({
+          id: r.id,
+          title: r.title,
+          isShared: r.shareToken !== null,
+        })),
+        checklists: visibleChecklists.map(c => ({
+          id: c.id,
+          title: c.title,
+        })),
+        tasks: [],
+      });
+    } catch (error) {
+      Sentry.captureException(error);
+      console.error("[media/references] error:", error);
+      res.status(500).json({ message: "Failed to fetch references" });
+    }
+  });
+
   app.get("/api/media/:id/comments", requireReadAccess, async (req: any, res) => {
     try {
       const mediaId = parseInt(req.params.id as string);
