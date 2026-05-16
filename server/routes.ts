@@ -9,7 +9,7 @@ import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
 import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistSectionSchema, insertChecklistItemOptionSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, checklistItems, checklistSections, checklistItemOptions, checklistItemPhotos, checklistTemplates, checklistTemplateSections, checklistTemplateItems, checklistTemplateItemOptions, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, pendingGeofenceExits, pendingGeofenceEnters, templateConfigSchema, accountSettingsPatchSchema } from "@shared/schema";
 import { executeAutoClockOut, executeAutoClockIn, AUTO_CLOCK_IN_DWELL_MS } from "./lib/timesheets";
-import { haversineMeters, DEFAULT_GEOFENCE_RADIUS_M, HEARTBEAT_OUTSIDE_BUFFER_M, HEARTBEAT_DWELL_MS } from "./lib/geo";
+import { haversineMeters, formatLocalTime, DEFAULT_GEOFENCE_RADIUS_M, HEARTBEAT_OUTSIDE_BUFFER_M, HEARTBEAT_DWELL_MS } from "./lib/geo";
 import { users, invitations, accounts, assignedProjectIdsSchema } from "@shared/models/auth";
 import { computeSeatUsage } from "./lib/seats";
 import { db } from "./db";
@@ -3781,7 +3781,7 @@ export async function registerRoutes(
         // outside the transaction so a push failure can never roll back a
         // successful clock-out. Sends are collected into pushPromises and
         // awaited via Promise.allSettled after the loop.
-        let pushNotificationParams: { userId: string; projectName: string; clockOutAt: Date } | null = null;
+        let pushNotificationParams: { userId: string; projectName: string; projectLat: number | null; projectLng: number | null; clockOutAt: Date } | null = null;
         try {
           // Per-row transaction: defensive re-check + entry update + pending mark in one atom.
           await db.transaction(async (tx) => {
@@ -3822,11 +3822,17 @@ export async function registerRoutes(
               { timeEntryId: entryNow.id, userId: pending.userId },
               tx,
             );
-            const [proj] = await tx.select({ name: projects.name })
+            const [proj] = await tx.select({
+              name: projects.name,
+              latitude: projects.latitude,
+              longitude: projects.longitude,
+            })
               .from(projects).where(eq(projects.id, pending.projectId)).limit(1);
             pushNotificationParams = {
               userId: pending.userId,
               projectName: proj?.name ?? "your job site",
+              projectLat: proj?.latitude ?? null,
+              projectLng: proj?.longitude ?? null,
               clockOutAt: now,
             };
             await tx.update(pendingGeofenceExits)
@@ -3840,14 +3846,16 @@ export async function registerRoutes(
           // Failure here MUST NOT affect the DB counters (fired/errored/
           // skipped_*) — clock-out has already been committed atomically above.
           if (pushNotificationParams) {
-            const params = pushNotificationParams as { userId: string; projectName: string; clockOutAt: Date };
-            const formatTime = (d: Date) => d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+            const params = pushNotificationParams as { userId: string; projectName: string; projectLat: number | null; projectLng: number | null; clockOutAt: Date };
+            // Project-local time (not server UTC) — see formatLocalTime in
+            // server/lib/geo.ts for the "painter at a job site" rationale.
+            // Falls back to UTC + " UTC" suffix if project has no coords.
             // Each send has its own internal 5s timeout so one slow Expo call
             // cannot stall the cron past Vercel's function budget.
             const pushPromise = sendPushNotification({
               userId: params.userId,
               title: "Clocked out",
-              body: `${params.projectName} · ${formatTime(params.clockOutAt)}`,
+              body: `${params.projectName} · ${formatLocalTime(params.clockOutAt, params.projectLat, params.projectLng)}`,
               data: {
                 type: "clock_out_receipt",
                 timeEntryId: pending.timeEntryId,
@@ -4057,7 +4065,7 @@ export async function registerRoutes(
         // Push params captured inside the tx, sent AFTER commit. A push failure
         // must never roll back a successful clock-in. Sends are collected into
         // pushPromises and awaited via Promise.allSettled after the loop.
-        let pushNotificationParams: { userId: string; projectName: string; clockInAt: Date; timeEntryId: string } | null = null;
+        let pushNotificationParams: { userId: string; projectName: string; projectLat: number | null; projectLng: number | null; clockInAt: Date; timeEntryId: string } | null = null;
 
         try {
           await db.transaction(async (tx) => {
@@ -4115,7 +4123,12 @@ export async function registerRoutes(
             }
 
             // 4. Project still exists and belongs to the same account.
-            const [proj] = await tx.select({ name: projects.name, accountId: projects.accountId })
+            const [proj] = await tx.select({
+              name: projects.name,
+              accountId: projects.accountId,
+              latitude: projects.latitude,
+              longitude: projects.longitude,
+            })
               .from(projects).where(eq(projects.id, pending.projectId)).limit(1);
             if (!proj || proj.accountId !== pending.accountId) {
               await tx.update(pendingGeofenceEnters)
@@ -4136,6 +4149,8 @@ export async function registerRoutes(
             pushNotificationParams = {
               userId: pending.userId,
               projectName: proj.name ?? "your job site",
+              projectLat: proj.latitude ?? null,
+              projectLng: proj.longitude ?? null,
               clockInAt: created.clockIn,
               timeEntryId: created.id,
             };
@@ -4151,14 +4166,16 @@ export async function registerRoutes(
           // fireClockInReceipt format ("3:15 PM"). Failure here MUST NOT
           // affect DB counters — clock-in has already committed atomically.
           if (pushNotificationParams) {
-            const params = pushNotificationParams as { userId: string; projectName: string; clockInAt: Date; timeEntryId: string };
-            const formatTime = (d: Date) => d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+            const params = pushNotificationParams as { userId: string; projectName: string; projectLat: number | null; projectLng: number | null; clockInAt: Date; timeEntryId: string };
+            // Project-local time (not server UTC) — see formatLocalTime in
+            // server/lib/geo.ts for the "painter at a job site" rationale.
+            // Falls back to UTC + " UTC" suffix if project has no coords.
             // Each send has its own internal 5s timeout so one slow Expo call
             // cannot stall the cron past Vercel's function budget.
             const pushPromise = sendPushNotification({
               userId: params.userId,
               title: "Clocked in",
-              body: `${params.projectName} · ${formatTime(params.clockInAt)}`,
+              body: `${params.projectName} · ${formatLocalTime(params.clockInAt, params.projectLat, params.projectLng)}`,
               data: {
                 type: "clock_in_receipt",
                 timeEntryId: params.timeEntryId,
@@ -4264,6 +4281,8 @@ export async function registerRoutes(
           clockIn: timeEntries.clockIn,
           notes: timeEntries.notes,
           projectName: projects.name,
+          projectLat: projects.latitude,
+          projectLng: projects.longitude,
         })
         .from(timeEntries)
         .leftJoin(projects, eq(timeEntries.projectId, projects.id))
@@ -4332,10 +4351,15 @@ export async function registerRoutes(
           // already committed atomically above). Mirrors the pattern from the
           // exit/enter crons after tonight's push reliability fix.
           const projectName = orphan.projectName ?? "your project";
+          // Project-local time (not server UTC) — push may arrive hours after
+          // the effective clock-out (clockIn + 8h), so the user needs a concrete
+          // local-time reference to verify their timesheet rather than guess.
+          // Falls back to UTC + " UTC" suffix if project has no coords.
+          const localClockOut = formatLocalTime(clockOutAt, orphan.projectLat, orphan.projectLng);
           const pushPromise = sendPushNotification({
             userId: orphan.userId,
             title: "Shift auto-closed",
-            body: `Your shift at ${projectName} was auto-closed after 12 hours. Tap to review or correct.`,
+            body: `Your shift at ${projectName} was auto-closed at ${localClockOut} after 12 hours. Tap to review or correct.`,
             data: {
               type: "shift_auto_closed",
               timeEntryId: orphan.id,
