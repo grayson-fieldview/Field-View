@@ -1,0 +1,45 @@
+Diagnostic task — READ-ONLY. Do not modify any code. Goal: document the source-of-truth behavior for two features so we can mirror them on mobile.
+
+ITEM 1 — Task assignment permissions
+
+Question: On web, when an admin or manager assigns a task, which users appear in the assignee picker, and which users will the server actually accept as an assignee?
+
+Find and report:
+
+1. The endpoint the web UI calls to populate the assignee picker dropdown on the create/edit task screen. Show:
+   - Route (path + method)
+   - File path + line range of the handler
+   - The user-filtering logic — is it filtered by project membership, by org role, or a combination?
+   - Response shape (fields returned per user)
+
+2. The server-side validation on POST/PATCH task for the assigned user_id. Show:
+   - Route + file + line range
+   - What it validates — "must be project member"? "must be in same org and role != restricted"? Something else?
+
+3. Trace through the code and answer concretely:
+   - Can a STANDARD user (role = "standard") who is NOT a project member be assigned a task on that project? Yes or no, with the lines that prove it.
+   - Can a RESTRICTED user who is NOT a project member be assigned a task on that project? Yes or no, with proof.
+
+4. What role is required to PERFORM the assignment action? (admin only? admin + manager? anyone with task edit access?)
+
+ITEM 2 — Delete capability for tasks, checklists, reports
+
+For each of the three entities (task, checklist, report), find and report:
+
+1. The DELETE route — path, method, file path, line range
+2. The role/permission gate — who can call it? (admin only? admin + manager? creator? anyone with edit access?)
+3. Hard delete vs soft delete — if soft, what column flips (deleted_at, archived, status, etc.)
+4. Cascade behavior:
+   - Delete a checklist → what happens to its sections, items, completed responses?
+   - Delete a task → what happens to photos, comments, assignments?
+   - Delete a report → what happens to associated photos, sections?
+5. Response shape on success and on permission failure (status code + body)
+
+Also report the web UI pattern for each delete:
+- Where does the delete affordance live (detail view header? row action? overflow menu?)
+- What does the confirmation dialog say?
+- Is there any undo / soft-delete recovery pattern?
+
+Look at the actual React components for each, not just the API routes.
+
+Format: two clear sections (Item 1 / Item 2). Show actual code snippets, not paraphrased summaries. Do not speculate about mobile or propose mobile changes — your job here is to document web, full stop.
