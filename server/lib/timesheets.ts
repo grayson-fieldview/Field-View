@@ -22,7 +22,7 @@ export const AUTO_CLOCK_IN_DWELL_MS = 60_000;
  * Server-authoritative auto clock-out execution.
  *
  * Called by:
- *   - GET /api/cron/process-pending-exits when a 5-min S32a debounce expires
+ *   - GET /api/cron/process-pending-exits when a 3-min S32a debounce expires
  *   (POST /api/timesheets/clock-out remains user-initiated and is NOT routed here —
  *    it has its own concerns like notes concatenation and rate snapshots.)
  *

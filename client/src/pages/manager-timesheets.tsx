@@ -1378,7 +1378,7 @@ function NestedEntries({
                     >
                       {SOURCE_LABELS[entry.source] || entry.source}
                     </Badge>
-                    {entry.editedAt && (
+                    {entry.editedAt && entry.editedByUserId !== entry.userId && (
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Badge

@@ -3279,7 +3279,12 @@ export async function registerRoutes(
 
   // Auto clock-in undo window — narrow to prevent retroactive timesheet manipulation
   const TIME_ENTRY_DELETE_WINDOW_MS = 60 * 60 * 1000;
-  const GEOFENCE_EXIT_DEBOUNCE_MS = 5 * 60 * 1000;
+  // S32a auto clock-out debounce. Originally 5 min; tightened to 3 min after
+  // field testing — heartbeat path (60s) usually beats region monitoring, but
+  // when region monitoring fires first, 3 min is closer to the painter use
+  // case ("I left the site, close me out") without being so tight that a
+  // quick run-to-the-truck trips it. Roughly aligned with CompanyCam.
+  const GEOFENCE_EXIT_DEBOUNCE_MS = 3 * 60 * 1000;
 
   // POST /api/timesheets/clock-in
   app.post("/api/timesheets/clock-in", requireWriteAccess, async (req: any, res) => {
@@ -3482,7 +3487,7 @@ export async function registerRoutes(
   // ============================================================
 
   // POST /api/geofence/exit-detected
-  // Mobile reports a geofence exit; server schedules an auto clock-out 5 min later.
+  // Mobile reports a geofence exit; server schedules an auto clock-out 3 min later.
   // Cron (/api/cron/process-pending-exits) fires when the debounce expires.
   // Idempotent: duplicate exit-detected for the same active entry returns 200 with the
   // existing pending row (does NOT reset firesAt — first detection wins).
@@ -3578,7 +3583,7 @@ export async function registerRoutes(
   });
 
   // POST /api/geofence/exit-cancelled
-  // Mobile reports user re-entered the geofence within the 5-min debounce; cancel the pending exit.
+  // Mobile reports user re-entered the geofence within the 3-min debounce; cancel the pending exit.
   // Idempotent: 404 is a fine no-op response if the row was already fired or cancelled.
   app.post("/api/geofence/exit-cancelled", requireWriteAccess, async (req: any, res) => {
     try {
@@ -3628,7 +3633,7 @@ export async function registerRoutes(
   //     to stay clocked in even when wandering" — in practice this disabled
   //     auto-clock-out for every user who tapped Clock In manually, which
   //     was every real-world user during testing. The 12-hour max-shift
-  //     safety net is still there for orphan entries, but the 5-min-after-
+  //     safety net is still there for orphan entries, but the 3-min-after-
   //     drive-away signal is the one users actually notice.
   //   - Honors autoTrackingEnabled — same defense-in-depth as exit-detected.
   //     A user who has explicitly disabled auto-tracking in settings still
@@ -4035,7 +4040,11 @@ export async function registerRoutes(
 
   // POST /api/geofence/enter-cancelled
   // Mobile reports user exited the geofence within the dwell window — cancel the pending enter.
-  // Idempotent: 404 covers not-found / cross-user / already-non-pending uniformly.
+  // Idempotent semantics:
+  //   - 404 for not-found and cross-user (preserves no-existence-leak across principals).
+  //   - 200 { id, status } when the row exists, belongs to caller, but is already
+  //     non-pending (fired/cancelled). Mobile commonly retries cancellation after
+  //     the cron has already fired, and the 404 noise was filling Sentry.
   app.post("/api/geofence/enter-cancelled", requireWriteAccess, async (req: any, res) => {
     try {
       const currentUser = req.user;
@@ -4047,10 +4056,15 @@ export async function registerRoutes(
       }
 
       const pending = await storage.getPendingEnterById(body.data.pendingEnterId);
-      // Don't leak existence: 404 covers not-found, cross-user, and already-non-pending uniformly.
+      // Don't leak existence: keep 404 for not-found and cross-user (mobile
+      // cannot distinguish a missing UUID from someone else's UUID).
       if (!pending) return res.status(404).json({ message: "Pending enter not found" });
       if (pending.userId !== currentUser.id) return res.status(404).json({ message: "Pending enter not found" });
-      if (pending.status !== "pending") return res.status(404).json({ message: "Pending enter not found" });
+      // Already-non-pending → 200 idempotent. The row exists and belongs to
+      // the caller, so no existence leak; this is the common "mobile retried
+      // a cancel after the cron already fired" case and was generating Sentry
+      // noise. Status echoed for mobile to log if helpful.
+      if (pending.status !== "pending") return res.status(200).json({ id: pending.id, status: pending.status });
 
       const cancelled = await storage.cancelPendingEnter(pending.id);
       if (!cancelled) return res.status(404).json({ message: "Pending enter not found" });
