@@ -1,0 +1,73 @@
+THREE small server-side tasks. All scope-locked. No mobile changes. 
+No schema changes.
+
+TASK 1 — DIAGNOSE + FIX: "Edited" badge incorrectly showing on 
+untouched auto entries
+
+BUG: Web timesheets dashboard shows "Edited" badge on auto time 
+entries that have NOT been manually edited. Example: this morning's 
+entry at Starbucks (clock_in 7:06 AM, clock_out 7:16 AM, source 
+auto_geofence) shows "Edited" badge despite zero manual edits.
+
+DIAGNOSE FIRST. No code. Output:
+- The exact condition in the React component that renders the 
+  "Edited" badge (likely in client/src/pages/timesheets.tsx or a 
+  table component)
+- What fields on time_entries that condition checks (editedAt? 
+  editedByUserId? updatedAt vs createdAt?)
+- Whether executeAutoClockIn or executeAutoClockOut in 
+  server/lib/timesheets.ts is incorrectly setting any of those 
+  fields during normal auto flow
+- The proposed fix
+
+My hypothesis: when we added optional clockOutAt to 
+executeAutoClockOut last night for the max-shift cron, the update 
+path may have stamped editedAt or similar. Or the badge condition 
+itself is wrong (checking updatedAt > createdAt instead of 
+editedAt != null).
+
+Report findings, then I'll approve the fix before you write code.
+
+TASK 2 — SIMPLE CONSTANT CHANGE: Exit debounce 5min → 3min
+
+In server/lib/timesheets.ts, change:
+  GEOFENCE_EXIT_DEBOUNCE_MS = 5 * 60 * 1000  →  3 * 60 * 1000
+
+Rationale: heartbeat path (HEARTBEAT_DWELL_MS = 60s) usually beats 
+region monitoring for exits, but when region monitoring fires first, 
+3 min is more aligned with painter use case. CompanyCam uses similar 
+"few minute" debounce.
+
+No other changes needed. Update the inline comment if it mentions 
+"5 minutes."
+
+TASK 3 — COSMETIC: enter-cancelled 404 cleanup (optional, only if 
+trivial)
+
+Mobile sometimes posts /api/geofence/enter-cancelled for pending 
+rows that no longer exist (already fired/cancelled). Server returns 
+404 with {message:"Pending enter not found"}.
+
+The 404 is technically correct (resource not found), but it's noisy 
+in logs and Sentry. Two options:
+
+(a) Server-side: change the 404 to 200 with status:"not_found" or 
+similar, so mobile retries don't generate error noise. Idempotent 
+behavior.
+
+(b) Mobile-side fix in Build 13 (not this task — flag for me to 
+include in mobile prompt)
+
+If (a) is trivial (< 5 lines), do it. If it requires reasoning about 
+race conditions or auth implications, just flag and we defer to (b).
+
+ORDER OF OPERATIONS:
+
+1. Run Task 1 diagnose (no code)
+2. Wait for my approval on the fix
+3. Once approved, implement Task 1 fix + Task 2 constant change + 
+   Task 3 (if trivial) as ONE diff
+4. Architect review
+5. Show diff, I push from Git pane, Vercel promote
+
+Tight scope. Three small things in one diff. No scope creep.
