@@ -1,0 +1,39 @@
+Approved decisions on the email-sender audit. Apply the following changes in a single pass. Stage but don't push, show me the diff.
+
+DESIRED END STATE
+- All Resend transactional emails FROM: support@field-view.com (and Reply-To: support@field-view.com)
+- The welcome email is being deleted entirely (migrating to Customer.io)
+- This means: all REMAINING Resend templates already use the correct support@ sender — no FROM/Reply-To value changes needed. Just delete the welcome email and clean up the constants.
+
+CHANGES TO APPLY
+
+1. DELETE WELCOME EMAIL COMPLETELY. Welcome is migrating to Customer.io. We've accepted the gap (~0 signup risk pre-launch). Remove:
+   - sendWelcomeEmail function entirely from server/services/email.ts
+   - The fire-and-forget call site at replitAuth.ts:931 (where it's called after first verified login)
+   - server/emails/welcome.tsx (the React Email template file)
+   - The React Email library import if it becomes orphaned after the welcome template is deleted
+   - Grep "sendWelcomeEmail" and "welcome.tsx" to confirm zero remaining matches before staging
+
+2. CONSTANTS CLEANUP. After welcome.tsx is deleted, remove WELCOME_FROM and WELCOME_REPLY_TO constants entirely from server/services/email.ts:5-9. Leave FROM and REPLY_TO unchanged (they already point at support@ which is what we want).
+
+   End state: just FROM and REPLY_TO constants. No WELCOME_* constants. Optionally rename FROM/REPLY_TO → TRANSACTIONAL_FROM/TRANSACTIONAL_REPLY_TO for clarity now that there's no second pair — your call on whether the rename is worth the churn.
+
+3. VERIFY-EMAIL GREETING FIX. In server/services/email.ts:85, replace the space after ${greeting} with <br><br> in the HTML version. Text version at line 104 already has \n\n — leave it alone. End state: HTML and text both render the greeting on its own line, body on the next.
+
+4. BUTTON COLOR STANDARDIZATION. Change #f97316 → #F09000 in password-reset (line 38) and account-deletion (line 261). While you're touching color values, sweep all remaining templates and flag any other color drift before applying — I want one consistent brand orange across every template.
+
+OUT OF SCOPE FOR THIS PASS — do NOT touch
+- Footer URL field-view.com → www.field-view.com (deferred to a separate pass)
+- sendWelcomeEmail fire-and-forget pattern: just deleted, no behavior change needed
+- sendInvitationEmail returning {success, error} vs throwing: leave inconsistent, log to TECH_DEBT.md if not already noted
+- Vercel env var changes
+- DNS / Resend dashboard work
+
+VERIFICATION BEFORE STAGING
+- TypeScript typecheck clean (no orphaned imports)
+- grep "sendWelcomeEmail" returns no matches anywhere in the codebase
+- grep "welcome.tsx" returns no matches anywhere
+- All 5 remaining transactional email senders (password reset, verification, invitation, account-deletion, account-restored) still use support@field-view.com — no FROM/Reply-To changes
+- Verification email greeting reads correctly in both variants ("Hi {firstName}," and "Welcome to Field View!")
+
+After applying, show me the diff. I'll review and push from Replit.

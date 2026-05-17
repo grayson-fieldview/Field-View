@@ -35,3 +35,17 @@ project-assignment scoping already applied to `/api/reports` and
 joins media → projects → project_assignments and rejects with 404 (to match
 the "don't leak cross-context ids" convention) when the project isn't in
 the caller's visible set.
+
+## Inconsistent error contract across Resend email senders
+
+`server/services/email.ts` mixes two error styles for Resend send failures:
+- `sendInvitationEmail` returns `{ success: boolean, error?: string }` and
+  swallows exceptions inside its own try/catch.
+- All other senders (`sendPasswordResetEmail`, `sendEmailVerificationEmail`,
+  `sendAccountDeletionEmail`, `sendAccountRestoredEmail`) throw on Resend
+  failure.
+
+Callers therefore branch on `.success` for invitations and on try/catch for
+the rest. Pick one — recommend throw-on-failure for all, and have the
+invitation route's caller wrap in try/catch if it wants soft-fail behavior.
+Low priority, no security or correctness risk.

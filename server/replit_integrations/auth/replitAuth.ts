@@ -13,7 +13,7 @@ import { db, pool } from "../../db";
 import { eq, and, isNull, isNotNull } from "drizzle-orm";
 import { passwordResetTokens, users, accounts, invitations, type User } from "@shared/models/auth";
 import { projectAssignments } from "@shared/schema";
-import { sendPasswordResetEmail, sendEmailVerificationEmail, sendWelcomeEmail, sendAccountRestoredEmail } from "../../services/email";
+import { sendPasswordResetEmail, sendEmailVerificationEmail, sendAccountRestoredEmail } from "../../services/email";
 import { getAccountBilling, overlayAccountBillingOnUser, computeAccessLevel } from "../../lib/billing";
 import { sanitizeUserForViewer } from "../../lib/userVisibility";
 import { verifyRecaptchaToken } from "../../services/recaptcha";
@@ -928,9 +928,7 @@ export async function setupAuth(app: Express) {
 
       console.info("[verify-email-code] verified", { userId: user.id, email: user.email });
 
-      sendWelcomeEmail(user.email!, user.firstName).catch((err) => {
-        console.error("[verify-email-code] welcome email send failed:", err);
-      });
+      // Welcome email migrated out of Resend to Customer.io (pre-launch, gap accepted).
 
       const [verifiedUser] = await db.select().from(users).where(eq(users.id, user.id));
       if (!verifiedUser) {
