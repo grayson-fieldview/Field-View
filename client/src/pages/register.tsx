@@ -290,7 +290,7 @@ export default function RegisterPage() {
                 <span>
                   I agree to the{" "}
                   <a
-                    href="https://field-view.com/terms"
+                    href="https://www.field-view.com/legal/terms-and-conditions"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-[#F09000] underline hover:no-underline"
@@ -300,7 +300,7 @@ export default function RegisterPage() {
                   </a>{" "}
                   and{" "}
                   <a
-                    href="https://field-view.com/privacy"
+                    href="https://www.field-view.com/legal/privacy-policy"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-[#F09000] underline hover:no-underline"
@@ -486,7 +486,7 @@ export default function RegisterPage() {
                 <span>
                   I agree to the{" "}
                   <a
-                    href="https://field-view.com/terms"
+                    href="https://www.field-view.com/legal/terms-and-conditions"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-[#F09000] underline hover:no-underline"
@@ -496,7 +496,7 @@ export default function RegisterPage() {
                   </a>{" "}
                   and{" "}
                   <a
-                    href="https://field-view.com/privacy"
+                    href="https://www.field-view.com/legal/privacy-policy"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-[#F09000] underline hover:no-underline"
