@@ -1,0 +1,31 @@
+Customer.io integration is partially working in production but has two bugs to diagnose. Production user we're debugging: id = 41a43284-0f64-40a4-aef2-45404db1f33d
+
+BUG #1 — signed_up event is NOT firing
+Activity Logs show: email_verified, project_created, photo_uploaded, task_created all firing correctly. But signed_up never appears for a fresh test signup.
+
+BUG #2 — identify() is firing but attributes are missing
+Person was created in CIO with the correct user UUID, but every attribute we should be setting (email, first_name, last_name, plan, subscription_status, trial_ends_at, etc.) is BLANK. The CIO Person Detail shows only id + auto-generated cio_id, and the user lands in CIO's "Invalid Email Address" default segment.
+
+DIAGNOSE FIRST — read-only, no code changes:
+
+1. Show me the EXACT code in server/replit_integrations/auth/replitAuth.ts at ~line 482 (POST /api/register handler) — specifically the section after req.login() succeeds where the CIO calls should be. Look for:
+   - Is identifyUser() actually called there?
+   - Is trackEvent(CIO_EVENTS.SIGNED_UP) called?
+   - Order of operations
+   - Any try/catch that might be swallowing errors
+
+2. Compare with the email_verified location (~line 932) — show me how identifyUser + trackEvent are wired there.
+
+3. Show me the FULL buildAttrs() function in server/services/customerio.ts. We need to see:
+   - The exact SELECT query (joining users + accounts)
+   - Field name mapping (camelCase JS vs snake_case DB — Drizzle mapping)
+   - How nulls are handled
+   - What it returns if the user/account isn't found
+
+4. Check Vercel runtime logs for the test signup at ~6:11 PM EDT today (user UUID 41a43284-0f64-40a4-aef2-45404db1f33d). Look for any [customerio] error logs or stack traces. Report what you find.
+
+5. Add a TEMPORARY debug log (don't push yet — we'll remove later): inside buildAttrs() right before the identify call, console.log("[customerio] sending attrs:", JSON.stringify(payload)). We need to see the exact payload being sent.
+
+6. Theory to verify: was identifyUser only wired into the email_verified handler, NOT the signup handler? That would explain both bugs simultaneously — Person gets created (and event tracked) at email_verified time, but the attribute payload at that moment might not include the full user/account context.
+
+Report findings on all 6 points. After audit, I'll decide on the fix.

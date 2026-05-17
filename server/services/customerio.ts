@@ -161,8 +161,14 @@ export async function identifyUser(userId: string, attrs?: CioAttrs): Promise<vo
   if (!cio) return noopWarnOnce();
   try {
     const payload = attrs ?? (await buildAttrs(userId));
-    if (!payload) return;
+    if (!payload) {
+      console.warn("[customerio] identify SKIPPED — buildAttrs returned null", { userId });
+      return;
+    }
+    // TEMP DEBUG (S45 prod incident) — REMOVE after attrs-payload bug is fixed.
+    console.log("[customerio] sending attrs:", { userId, payload: JSON.stringify(payload) });
     await cio.identify(userId, payload);
+    console.log("[customerio] identify resolved", { userId });
   } catch (err) {
     console.error("[customerio] identify failed:", { userId, err });
   }
