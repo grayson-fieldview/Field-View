@@ -1,0 +1,111 @@
+NEW PROJECT: Customer.io integration for lifecycle messaging.
+
+CONTEXT
+We're integrating Customer.io to handle lifecycle/marketing email (welcome series, activation drips, trial conversion, win-back). Transactional emails stay in Resend. Customer.io receives events from our server to trigger campaigns.
+
+The email-sender audit PR currently in progress (separate task) is removing the welcome email from Resend. Customer.io will eventually take over welcome via a campaign triggered on the signed_up event we wire up here. Don't touch the Resend welcome — it's being handled in that other PR.
+
+ARCHITECTURE DECISIONS (locked, don't re-litigate)
+- Use Customer.io's official Node.js SDK: customerio-node
+- Server-side only, no JS snippet on frontend
+- Track API for identify + events; App API not needed this phase
+- Region: US (CUSTOMERIO_REGION env var defaults to "us")
+- Fire-and-forget with .catch() error logging — same pattern as the existing sendWelcomeEmail. Customer.io being slow or down NEVER blocks a user-facing response.
+- All CIO calls live in a new server/services/customerio.ts module — mirrors server/services/email.ts structure
+- When env vars are missing (dev environment), customerio service logs a warning once and becomes a no-op. Every call returns instantly without throwing.
+
+ENV VARS (add to .env.example; I'll add real values in Vercel separately)
+- CUSTOMERIO_SITE_ID
+- CUSTOMERIO_TRACK_API_KEY
+- CUSTOMERIO_APP_API_KEY (optional, prep for future phases)
+- CUSTOMERIO_REGION (optional, defaults to "us")
+
+DIAGNOSE FIRST — DO NOT WRITE CODE UNTIL YOU'VE COMPLETED THIS AUDIT
+
+1. Confirm customerio-node is the current official SDK. Check npm version + last publish date. Flag if it looks abandoned or has a major rewrite pending.
+
+2. Map each event below to its trigger location. Show me file + line for every event:
+
+   LIFECYCLE:
+   - signed_up → after successful user creation in signup endpoint
+   - email_verified → after verification code is successfully validated
+   - subscription_started → Stripe webhook (checkout.session.completed or customer.subscription.created — flag which is the right one for our flow)
+   - subscription_canceled → Stripe webhook (customer.subscription.deleted)
+   - subscription_lapsed → Stripe webhook (customer.subscription.updated where status becomes past_due)
+   - subscription_reactivated → Stripe webhook (recovery from past_due back to active)
+   - trial_ending_soon → does a daily cron job exist? If yes where. If no, propose where to add one and how it's triggered.
+   - account_deleted → in the account deletion endpoint, BEFORE the actual delete so we can still identify the user
+
+   ACTIVATION:
+   - project_created → projects POST endpoint
+   - photo_uploaded → media POST endpoint (after successful upload — fire ONCE per upload regardless of multi-photo batches)
+   - checklist_created → checklists POST endpoint
+   - checklist_completed → when ALL items in a checklist are marked complete (likely needs detection in PATCH endpoint)
+   - report_created → reports POST endpoint
+   - report_shared → when share_token is generated
+   - task_created → tasks POST endpoint
+   - task_completed → when task status changes to 'done' (likely in PATCH endpoint)
+   - teammate_invited → invitation POST endpoint
+   - auto_clock_in_triggered → server-side endpoint that receives auto-clock-in from mobile
+
+3. For each event location, note complications:
+   - Endpoints that lack a clear "user did this" context (no req.user)
+   - Stripe webhooks needing careful event-type dispatching
+   - Any endpoint where the event might fire multiple times unintentionally
+   - Endpoints currently async/queued where ordering matters
+
+4. PERSON ATTRIBUTES — map each to source + when it changes:
+   - email, first_name, last_name — users table
+   - account_id, account_name, role — joins users + accounts
+   - plan, billing_cycle, subscription_status — accounts table
+   - trial_ends_at, seat_count — accounts table
+   - mrr — computed from plan + billing_cycle + seat_count (need helper function — propose where it lives)
+   - created_at, last_active_at — users table (last_active_at needs request-middleware update — see #6 below)
+   - total_photos, total_projects, total_reports — computed via SELECT COUNT (need rollup helpers, will be batched in a later phase)
+   - crew_size — NEW: propose schema migration (accounts.crew_size INTEGER nullable?)
+   - industry — NEW: propose schema migration. Enum-like values: painting, roofing, hvac, plumbing, electrical, landscaping, remodel_gc, other. Decide pgEnum vs varchar with constraint — flag tradeoffs.
+   - signup_referrer, signup_utm_source, signup_utm_medium, signup_utm_campaign — NEW: propose schema (users table columns vs separate signup_attribution table) and where to capture from query params at signup
+
+5. Propose the structure for server/services/customerio.ts:
+   - Singleton client init with the env var no-op pattern from architecture decisions above
+   - identifyUser(userId, attrs?) — re-identifies with fresh attrs from DB if attrs omitted
+   - trackEvent(userId, eventName, data?) — fires an event with optional payload
+   - syncAttributes(userId) — re-identifies with fresh attrs from DB (useful after multi-field changes)
+   - Type-safe event name enum or const map so we can't typo event names
+   - Where should the helper for computing MRR live? In customerio.ts or shared elsewhere?
+
+6. last_active_at strategy — propose how this updates:
+   - Every authenticated Field View request via middleware (more accurate, more writes)
+   - Or batched (less DB load, less accurate)
+   - Either way, show the implementation plan
+
+7. The 3 NEW attribute categories require schema work — propose migrations following the project's standard pattern (see script/migrations/migrate_session22_timesheets.ts as template):
+   - Migration 1: accounts.crew_size + accounts.industry
+   - Migration 2: users.signup_referrer + users.signup_utm_source + users.signup_utm_medium + users.signup_utm_campaign
+   - For signup attribution capture: where in the frontend signup flow do we read query params and persist them? Propose front-end and back-end changes.
+   - For crew_size + industry: propose where in the UI we capture these. Could be:
+     a) Inline on signup form (more friction)
+     b) Onboarding wizard after first login (better UX, but adds new screens to build)
+     c) Settings page only (low friction but most users won't fill it out)
+     Recommend an approach.
+
+DELIVERABLE FOR THIS AUDIT
+Report back the audit with:
+- SDK confirmation (#1)
+- Event trigger map with file+line for each event (#2)
+- Complications list (#3)
+- Attribute source map (#4)
+- Module structure proposal (#5)
+- last_active_at strategy proposal (#6)
+- Schema migration + UI capture proposals for the 3 new attribute categories (#7)
+
+DO NOT WRITE ANY CODE. After I review the audit, I'll approve specific work and you'll implement in phases.
+
+ANTICIPATED PHASING (after audit approval):
+- Phase 1: customerio.ts service module + identify on signup + basic events that don't need schema changes (signed_up, email_verified, project_created, photo_uploaded, checklist/report/task events, teammate_invited)
+- Phase 2: Stripe webhook integration (subscription_started/canceled/lapsed/reactivated) + trial_ending_soon cron + account_deleted
+- Phase 3: Schema migrations for crew_size + industry + signup_attribution, plus UI capture
+- Phase 4: Rollup attributes (total_photos, total_projects, total_reports) — batched/cached
+- Phase 5: auto_clock_in_triggered (need to coordinate with mobile geofencing flow)
+
+Confirm scope of audit before starting if anything looks off, or just report back the audit when complete.
