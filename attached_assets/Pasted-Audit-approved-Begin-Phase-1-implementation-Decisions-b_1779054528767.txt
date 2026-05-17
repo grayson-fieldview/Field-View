@@ -1,0 +1,79 @@
+Audit approved. Begin Phase 1 implementation. Decisions baked in below.
+
+PHASE 1 SCOPE
+- SDK install: customerio-node. If it's ESM-only on latest major, pin to last CJS-compatible version. Log to TECH_DEBT.md alongside archiver and p-limit.
+
+- Create server/services/customerio.ts per your proposed structure in §5 of the audit. All baked-in decisions stand (singleton TrackClient, no-op mode warns once, fire-and-forget pattern, type-safe event registry).
+
+- Create server/lib/billing.ts helper computeMrrCents(seatCount, billingCycle) if it doesn't exist. Add MONTHLY_SEAT_PRICE_CENTS + ANNUAL_SEAT_PRICE_CENTS constants there (sourced from your knowledge of the Stripe prices — $79/mo monthly, $588/yr annual base; $29/mo per additional seat). Don't hit Stripe API at CIO sync time.
+
+- Create middleware server/middleware/touch-last-active.ts per your §6 proposal. 60-second per-user throttle via in-memory Map. Fire-and-forget UPDATE. Mount after passport.session() in setupAuth.
+
+- DB MIGRATION (single migration, all 7 columns):
+  Migration: script/migrations/migrate_session45_customerio_integration.ts
+  - users.signup_referrer (varchar, nullable)
+  - users.signup_utm_source (varchar, nullable)
+  - users.signup_utm_medium (varchar, nullable)
+  - users.signup_utm_campaign (varchar, nullable)
+  - users.last_active_at (timestamp, nullable)
+  - checklists.completed_at (timestamp, nullable)
+  - tasks.completed_at (timestamp, nullable)
+  
+  Follow the migration pattern from migrate_session22_timesheets.ts: db.transaction wrapper, env guard requiring rds.amazonaws.com or neon.tech in DATABASE_URL, ALLOW_PROD_MIGRATION=yes for RDS, IF NOT EXISTS on every ALTER, entry-point guard against dynamic-import auto-execution.
+
+- WIRE UP EVENTS (Phase 1 set only — Phase 2 events deferred):
+  - signed_up — replitAuth.ts:482 after req.login() succeeds. Also identify() the new user.
+  - email_verified — replitAuth.ts:876, ~line 932 where the placeholder comment is
+  - project_created — routes.ts:469
+  - photo_uploaded — routes.ts:569, fire once per HTTP call with data: { count, project_id }
+  - checklist_created — routes.ts:1326
+  - checklist_completed — routes.ts:1484. After PATCH commits, query for remaining unanswered items. If zero AND checklists.completed_at IS NULL, set completed_at = now() and fire event. Idempotent — never re-fires on re-edit.
+  - report_created — routes.ts:1841
+  - report_shared — routes.ts:2065 (fire on each POST creating share_token)
+  - task_created — routes.ts:1247
+  - task_completed — routes.ts:1272. Select current row before update, compare old.status !== 'done' && new.status === 'done', then UPDATE tasks SET completed_at = now() and fire event. Idempotent — never re-fires.
+  - teammate_invited — routes.ts:2846 after invitation row created. Fire event on the INVITER (req.user.id), with data: { invitee_email, role }
+
+- PHASE 1 IDENTIFY ATTRIBUTES (subset — full set in later phases):
+  buildAttrs() in customerio.ts should populate:
+  - email, first_name, last_name (users)
+  - account_id, account_name, role (joined)
+  - plan, billing_cycle, subscription_status (accounts)
+  - trial_ends_at, seat_count (accounts)
+  - mrr (via computeMrrCents helper)
+  - created_at, last_active_at (users)
+  - industry, company_size (accounts — existing columns, will be NULL for everyone until Phase 3 onboarding ships)
+  - signup_referrer, signup_utm_source, signup_utm_medium, signup_utm_campaign (users — also NULL until Phase 3 capture)
+  
+  Defer to later phases: total_photos, total_projects, total_reports (Phase 4 rollups)
+
+- ENV VARS: add to .env.example as documented in the original prompt. I've already added real values to Vercel.
+
+DO NOT TOUCH IN PHASE 1
+- Stripe webhook integration (Phase 2)
+- trial_ending_soon cron (Phase 2)
+- account_deleted event (Phase 2)
+- auto_clock_in_triggered (Phase 2.5)
+- crew_size / industry UI capture (Phase 3)
+- signup_attribution frontend capture (Phase 3)
+- Rollup attributes (Phase 4)
+
+CRITICAL — MIGRATION ORDER
+The migration ALTERS the users table, which is SELECTed in deserializeUser on every request. Per the project's hard rule: migration MUST be applied to prod RDS BEFORE the Vercel code deploy lands. Sequence after you stage your changes:
+1. I'll snapshot RDS
+2. Whitelist Replit IP on RDS SG
+3. Run migration with ALLOW_PROD_MIGRATION=yes against prod DATABASE_URL
+4. Verify schema in TablePlus
+5. THEN promote Vercel deploy
+6. Remove Replit IP from SG
+
+Don't push to GitHub until I've confirmed the migration ran cleanly on a snapshot first.
+
+VERIFICATION BEFORE STAGING
+- TypeScript typecheck clean
+- All event wire-up points compile
+- buildAttrs query returns correct shape (test against dev DB)
+- touch-last-active middleware doesn't break existing auth flows (test by hitting an authenticated endpoint and confirming users.last_active_at updates after a request, then doesn't update again within 60s)
+- customerio.ts no-op mode works when env vars are absent (run locally without CIO env vars, hit signup endpoint, confirm warning logs once and no errors thrown)
+
+Stage but don't push. Show me the diff. After review, we'll coordinate the RDS migration + Vercel promote per the order above.

@@ -19,6 +19,7 @@ import { z } from "zod";
 import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, deleteFromS3, getObjectStream } from "./s3";
 import archiver from "archiver";
 import { sendInvitationEmail, sendAccountDeletionEmail } from "./services/email";
+import { trackEvent, CIO_EVENTS } from "./services/customerio";
 import { toCsv } from "./lib/csv";
 import bcrypt from "bcryptjs";
 import { Sentry } from "./lib/sentry";
@@ -480,6 +481,11 @@ export async function registerRoutes(
       }
       console.log("[API] POST /api/projects parsed", { latitude: parsed.data.latitude, longitude: parsed.data.longitude });
       const project = await storage.createProject(parsed.data);
+      // S45 CIO — fire-and-forget. Includes id+name for campaign targeting.
+      trackEvent(req.user.id, CIO_EVENTS.PROJECT_CREATED, {
+        project_id: project.id,
+        project_name: project.name,
+      }).catch((err) => console.error("[customerio] track project_created failed:", err));
       res.status(201).json(project);
     } catch (error) {
       res.status(500).json({ message: "Failed to create project" });
@@ -612,6 +618,12 @@ export async function registerRoutes(
         })
       );
 
+      // S45 CIO — fire ONCE per HTTP call (batch-aware) per audit decision.
+      // count = number of media rows actually created in this request.
+      trackEvent(req.user.id, CIO_EVENTS.PHOTO_UPLOADED, {
+        project_id: projectId,
+        count: created.length,
+      }).catch((err) => console.error("[customerio] track photo_uploaded failed:", err));
       res.status(201).json(await presignMediaUrls(created));
     } catch (error: any) {
       console.error("Create media error:", error?.message || error);
@@ -1263,6 +1275,11 @@ export async function registerRoutes(
         return res.status(400).json({ message: parsed.error.message });
       }
       const task = await storage.createTask(parsed.data);
+      // S45 CIO — fire on every task create. Per-task granularity.
+      trackEvent(req.user.id, CIO_EVENTS.TASK_CREATED, {
+        task_id: task.id,
+        project_id: projectId,
+      }).catch((err) => console.error("[customerio] track task_created failed:", err));
       res.status(201).json(task);
     } catch (error) {
       res.status(500).json({ message: "Failed to create task" });
@@ -1278,8 +1295,38 @@ export async function registerRoutes(
       for (const key of allowed) {
         if (key in req.body) filtered[key] = req.body[key];
       }
+      // S45 CIO task_completed — idempotent atomic transition detection.
+      // Strip completedAt from the caller-controlled patch first, then do
+      // the regular update, then race-safely stamp completed_at via a
+      // single conditional UPDATE that only succeeds when the prior row
+      // was NOT already done AND completed_at IS NULL. rowCount > 0 is
+      // the unique winner under concurrent PATCHes; the event fires
+      // exactly once per task even if N requests transition together.
+      // Reverse moves (done→todo) intentionally do NOT clear completed_at
+      // — completion is a permanent lifecycle marker.
+      delete (filtered as any).completedAt;
       const updated = await storage.updateTask(id, filtered);
       if (!updated) return res.status(404).json({ message: "Task not found" });
+      if (filtered.status === "done") {
+        try {
+          const stamp = await db.execute(sql`
+            UPDATE tasks
+               SET completed_at = NOW()
+             WHERE id = ${id}
+               AND status = 'done'
+               AND completed_at IS NULL
+            RETURNING id
+          `);
+          if (stamp.rowCount && stamp.rowCount > 0) {
+            trackEvent(req.user.id, CIO_EVENTS.TASK_COMPLETED, {
+              task_id: id,
+              project_id: updated.projectId,
+            }).catch((err) => console.error("[customerio] track task_completed failed:", err));
+          }
+        } catch (cioErr) {
+          console.error("[task-completed-detect] failed:", cioErr);
+        }
+      }
       res.json(updated);
     } catch (error) {
       res.status(500).json({ message: "Failed to update task" });
@@ -1346,6 +1393,12 @@ export async function registerRoutes(
             templateId, projectId, name.trim(), req.user.id, req.user.accountId,
           );
           const created = await storage.getChecklist(newId);
+          // S45 CIO — fire for template-instantiated checklists too.
+          trackEvent(req.user.id, CIO_EVENTS.CHECKLIST_CREATED, {
+            checklist_id: newId,
+            project_id: projectId,
+            from_template: true,
+          }).catch((err) => console.error("[customerio] track checklist_created (template) failed:", err));
           return res.status(201).json(created);
         } catch (e: any) {
           const msg = String(e?.message ?? "");
@@ -1391,6 +1444,12 @@ export async function registerRoutes(
         }
       }
 
+      // S45 CIO — fire for ad-hoc (non-template) checklist creates.
+      trackEvent(req.user.id, CIO_EVENTS.CHECKLIST_CREATED, {
+        checklist_id: checklist.id,
+        project_id: projectId,
+        from_template: false,
+      }).catch((err) => console.error("[customerio] track checklist_created failed:", err));
       res.status(201).json(checklist);
     } catch (error) {
       res.status(500).json({ message: "Failed to create checklist" });
@@ -1530,6 +1589,45 @@ export async function registerRoutes(
       }
       const updated = await storage.updateChecklistItem(id, filtered);
       if (!updated) return res.status(404).json({ message: "Item not found" });
+
+      // S45 CIO checklist_completed — idempotent detection.
+      // After the PATCH commits, count items in this checklist that still
+      // have no answer (value_bool/value_rating/value_text/selected_option_id
+      // all NULL). If zero AND checklists.completed_at is still NULL,
+      // atomically transition NULL→now() and fire the event. The conditional
+      // UPDATE guard means concurrent PATCHes only fire the event once.
+      try {
+        const checklistId = item[0].checklistId;
+        const remaining = await db.execute(sql`
+          SELECT COUNT(*)::int AS n
+            FROM checklist_items
+           WHERE checklist_id = ${checklistId}
+             AND value_bool IS NULL
+             AND value_rating IS NULL
+             AND value_text IS NULL
+             AND selected_option_id IS NULL
+        `);
+        const remainingCount = Number((remaining.rows[0] as any)?.n ?? 0);
+        if (remainingCount === 0) {
+          const flip = await db.execute(sql`
+            UPDATE checklists
+               SET completed_at = NOW()
+             WHERE id = ${checklistId}
+               AND completed_at IS NULL
+            RETURNING id
+          `);
+          if (flip.rowCount && flip.rowCount > 0) {
+            trackEvent(req.user.id, CIO_EVENTS.CHECKLIST_COMPLETED, {
+              checklist_id: checklistId,
+            }).catch((err) =>
+              console.error("[customerio] track checklist_completed failed:", err),
+            );
+          }
+        }
+      } catch (cioErr) {
+        console.error("[checklist-completed-detect] failed:", cioErr);
+      }
+
       res.json(updated);
     } catch (error) {
       res.status(500).json({ message: "Failed to update checklist item" });
@@ -1894,6 +1992,11 @@ export async function registerRoutes(
         return created;
       });
 
+      // S45 CIO — fire after the report transaction commits.
+      trackEvent(req.user.id, CIO_EVENTS.REPORT_CREATED, {
+        report_id: report.id,
+        project_id: projectId,
+      }).catch((err) => console.error("[customerio] track report_created failed:", err));
       res.status(201).json(report);
     } catch (error) {
       console.error("[reports] create error:", error);
@@ -2063,6 +2166,9 @@ export async function registerRoutes(
 
   // Generate or regenerate a public share token for a report.
   app.post("/api/reports/:id/share", requireWriteAccess, async (req: any, res) => {
+    // S45 — note: revoke (DELETE /api/reports/:id/share) does NOT fire
+    // report_shared. Only the initial share-link creation does, since the
+    // CIO campaign targets "user shipped first report externally".
     try {
       const id = parseInt(req.params.id as string);
       if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid id" });
@@ -2070,6 +2176,14 @@ export async function registerRoutes(
       const token = crypto.randomBytes(16).toString("base64url");
       const updated = await storage.setReportShareToken(id, token);
       if (!updated) return res.status(404).json({ message: "Report not found" });
+      // Fire only after the token write confirmed (no false positives on
+      // not-found / failed writes). Note: re-sharing an already-shared
+      // report (regenerating the token) will re-fire this event. That is
+      // intentional — share-token regeneration represents the user
+      // re-engaging with the share flow and the campaign accepts it.
+      trackEvent(req.user.id, CIO_EVENTS.REPORT_SHARED, {
+        report_id: id,
+      }).catch((err) => console.error("[customerio] track report_shared failed:", err));
       res.json({ shareToken: token });
     } catch (error) {
       console.error("[reports/share] create error:", error);
@@ -2993,6 +3107,14 @@ export async function registerRoutes(
         });
       }
       const invitation = result.invitation;
+
+      // S45 CIO — teammate_invited fires on the INVITER (req.user), not the
+      // invitee (who doesn't have a CIO id yet — they'll get signed_up on
+      // accept). Captures invitee_email + role for targeting.
+      trackEvent(req.user.id, CIO_EVENTS.TEAMMATE_INVITED, {
+        invitee_email: invitation.email,
+        role: invitation.role,
+      }).catch((err) => console.error("[customerio] track teammate_invited failed:", err));
 
       const baseUrl = `${req.protocol}://${req.get("host")}`;
       const inviteLink = `${baseUrl}/register?token=${token}`;

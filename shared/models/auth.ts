@@ -76,6 +76,15 @@ export const users = pgTable("users", {
   // "Friends of Field View".
   rewardfulAffiliateId: varchar("rewardful_affiliate_id", { length: 64 }),
   rewardfulReferralUrl: varchar("rewardful_referral_url", { length: 255 }),
+  // S45 Customer.io signup attribution — captured from query params /
+  // document.referrer at /api/register (frontend capture lands in Phase 3).
+  signupReferrer: varchar("signup_referrer"),
+  signupUtmSource: varchar("signup_utm_source"),
+  signupUtmMedium: varchar("signup_utm_medium"),
+  signupUtmCampaign: varchar("signup_utm_campaign"),
+  // S45 last_active_at — touched by touch-last-active middleware on every
+  // authenticated request, throttled to 1 write/user/60s.
+  lastActiveAt: timestamp("last_active_at"),
   deletedAt: timestamp("deleted_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),

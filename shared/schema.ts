@@ -96,6 +96,9 @@ export const tasks = pgTable("tasks", {
   assignedToId: varchar("assigned_to_id").references(() => users.id),
   createdById: varchar("created_by_id").references(() => users.id),
   dueDate: timestamp("due_date"),
+  // S45 — set ONCE on status NULL→done transition for idempotent CIO
+  // task_completed event firing. Never re-set on re-edits.
+  completedAt: timestamp("completed_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
@@ -111,6 +114,9 @@ export const checklists = pgTable("checklists", {
   assignedToId: varchar("assigned_to_id").references(() => users.id),
   createdById: varchar("created_by_id").references(() => users.id),
   dueDate: timestamp("due_date"),
+  // S45 — set ONCE when the last unanswered item transitions to answered.
+  // Drives idempotent CIO checklist_completed event firing.
+  completedAt: timestamp("completed_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [

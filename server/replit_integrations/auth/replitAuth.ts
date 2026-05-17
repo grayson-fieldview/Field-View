@@ -30,6 +30,8 @@ import {
 import { Sentry } from "../../lib/sentry";
 import { sendSlackNotification, isCompAccount } from "../../lib/slack";
 import { csrfGuard } from "../../middleware/csrf";
+import { touchLastActive } from "../../middleware/touch-last-active";
+import { identifyUser, trackEvent, CIO_EVENTS } from "../../services/customerio";
 
 function getBaseUrl(req?: Request) {
   if (process.env.OAUTH_BASE_URL) return process.env.OAUTH_BASE_URL;
@@ -306,6 +308,11 @@ export async function setupAuth(app: Express) {
   app.use(getSession());
   app.use(passport.initialize());
   app.use(passport.session());
+  // S45 — touch users.last_active_at on every authenticated request,
+  // throttled to 1 write/user/60s. Fire-and-forget. Must run AFTER
+  // passport.session() (needs req.user) and BEFORE csrfGuard so it
+  // observes even blocked-by-CSRF requests for activity tracking.
+  app.use(touchLastActive);
   // CSRF defense — runs after session/passport so /api/* routes are guarded.
   // See server/middleware/csrf.ts for strategy and CSRF_MODE env var.
   app.use(csrfGuard);
@@ -637,6 +644,16 @@ export async function setupAuth(app: Express) {
       // flow — they were already emailed a verification link above and must
       // click it before signing in cleanly.
       if (inviteToken) {
+        // S45 — fire CIO signed_up for invitee path even though there's no
+        // auto-login here. The user row exists; the welcome/activation
+        // campaign should start now and the email_verified event will
+        // follow when they click the verification link.
+        identifyUser(user.id).catch((err) =>
+          console.error("[customerio] identify on signup (invitee) failed:", err),
+        );
+        trackEvent(user.id, CIO_EVENTS.SIGNED_UP, { via: "invite" }).catch((err) =>
+          console.error("[customerio] track signed_up (invitee) failed:", err),
+        );
         return res.status(201).json({
           message: "Please check your email to verify your account.",
           email: user.email,
@@ -659,6 +676,14 @@ export async function setupAuth(app: Express) {
           }
           const { password: _pw, ...safeUser } = user as any;
           const safeUserWithBilling = await overlayAccountBillingOnUser(safeUser, req);
+          // S45 — fire CIO identify + signed_up after req.login + session.save
+          // succeed. Fire-and-forget so a slow CIO never blocks the 201.
+          identifyUser(user.id).catch((err) =>
+            console.error("[customerio] identify on signup (trial) failed:", err),
+          );
+          trackEvent(user.id, CIO_EVENTS.SIGNED_UP, { via: "trial" }).catch((err) =>
+            console.error("[customerio] track signed_up (trial) failed:", err),
+          );
           return res.status(201).json(safeUserWithBilling);
         });
       });
@@ -929,6 +954,10 @@ export async function setupAuth(app: Express) {
       console.info("[verify-email-code] verified", { userId: user.id, email: user.email });
 
       // Welcome email migrated out of Resend to Customer.io (pre-launch, gap accepted).
+      // The CIO welcome campaign keys off this event.
+      trackEvent(user.id, CIO_EVENTS.EMAIL_VERIFIED).catch((err) =>
+        console.error("[customerio] track email_verified failed:", err),
+      );
 
       const [verifiedUser] = await db.select().from(users).where(eq(users.id, user.id));
       if (!verifiedUser) {
