@@ -21,10 +21,25 @@
 //   account_deleted, auto_clock_in_triggered.
 
 import { TrackClient, RegionUS, RegionEU } from "customerio-node";
+import { waitUntil } from "@vercel/functions";
 import { db } from "../db";
 import { eq } from "drizzle-orm";
 import { users, accounts } from "@shared/models/auth";
 import { computeMrrCents } from "../lib/billing";
+
+// S45 prod fix — on Vercel, the lambda freezes the moment res.send/json commits,
+// killing any in-flight fire-and-forget Promise (e.g. our CIO HTTP calls). Wrap
+// every CIO call with @vercel/functions waitUntil so Vercel keeps the function
+// warm until the Promise resolves. In non-Vercel contexts (local dev, scripts,
+// cron runners) waitUntil throws — we silently fall back to plain
+// fire-and-forget, preserving existing dev behavior.
+function deferToVercel(promise: Promise<unknown>): void {
+  try {
+    waitUntil(promise);
+  } catch {
+    promise.catch(() => {});
+  }
+}
 
 const SITE_ID = process.env.CUSTOMERIO_SITE_ID;
 const TRACK_KEY = process.env.CUSTOMERIO_TRACK_API_KEY;
@@ -159,19 +174,22 @@ function toUnixSeconds(d: Date | string | null | undefined): number | null {
 // change when you don't already have the post-change row in hand.
 export async function identifyUser(userId: string, attrs?: CioAttrs): Promise<void> {
   if (!cio) return noopWarnOnce();
-  try {
-    const payload = attrs ?? (await buildAttrs(userId));
-    if (!payload) {
-      console.warn("[customerio] identify SKIPPED — buildAttrs returned null", { userId });
-      return;
+  const promise = (async () => {
+    try {
+      const payload = attrs ?? (await buildAttrs(userId));
+      if (!payload) {
+        console.warn("[customerio] identify SKIPPED — buildAttrs returned null", { userId });
+        return;
+      }
+      // TEMP DEBUG (S45 prod incident) — REMOVE after attrs-payload bug is fixed.
+      console.log("[customerio] sending attrs:", { userId, payload: JSON.stringify(payload) });
+      await cio!.identify(userId, payload);
+      console.log("[customerio] identify resolved", { userId });
+    } catch (err) {
+      console.error("[customerio] identify failed:", { userId, err });
     }
-    // TEMP DEBUG (S45 prod incident) — REMOVE after attrs-payload bug is fixed.
-    console.log("[customerio] sending attrs:", { userId, payload: JSON.stringify(payload) });
-    await cio.identify(userId, payload);
-    console.log("[customerio] identify resolved", { userId });
-  } catch (err) {
-    console.error("[customerio] identify failed:", { userId, err });
-  }
+  })();
+  deferToVercel(promise);
 }
 
 // Fire a tracked event for `userId`. Optional `data` is the event payload
@@ -182,11 +200,14 @@ export async function trackEvent(
   data?: Record<string, unknown>,
 ): Promise<void> {
   if (!cio) return noopWarnOnce();
-  try {
-    await cio.track(userId, { name, data });
-  } catch (err) {
-    console.error("[customerio] track failed:", { userId, name, err });
-  }
+  const promise = (async () => {
+    try {
+      await cio!.track(userId, { name, data });
+    } catch (err) {
+      console.error("[customerio] track failed:", { userId, name, err });
+    }
+  })();
+  deferToVercel(promise);
 }
 
 // Re-identify a user with fresh attrs pulled from the DB. Convenience

@@ -955,6 +955,12 @@ export async function setupAuth(app: Express) {
 
       // Welcome email migrated out of Resend to Customer.io (pre-launch, gap accepted).
       // The CIO welcome campaign keys off this event.
+      // S45 prod fix — defensive identify here ensures the Person has full
+      // attributes even if the signup-time identify lost the Vercel-suspension
+      // race. waitUntil inside customerio.ts keeps both calls alive past res.json().
+      identifyUser(user.id).catch((err) =>
+        console.error("[customerio] identify on email_verified failed:", err),
+      );
       trackEvent(user.id, CIO_EVENTS.EMAIL_VERIFIED).catch((err) =>
         console.error("[customerio] track email_verified failed:", err),
       );

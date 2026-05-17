@@ -1,0 +1,93 @@
+Diagnosis confirmed. Apply the following fix, then verify in production.
+
+ROOT CAUSE
+Vercel serverless lambda freezes after res.json() commits. Fire-and-forget Promises in flight at that moment get killed. signed_up and identify on the signup handler reliably lose this race. Other events slip through by happenstance (faster HTTP timing) but it's fragile.
+
+FIX — use @vercel/functions waitUntil to protect all CIO calls
+
+1. Install @vercel/functions:
+   pnpm add @vercel/functions
+
+2. Modify server/services/customerio.ts to wrap CIO calls with waitUntil. The key design: do this INSIDE the service module so every existing call site automatically benefits without changes.
+
+Suggested pattern:
+
+import { waitUntil } from "@vercel/functions";
+
+// Safe wrapper — falls back to fire-and-forget in non-Vercel contexts (local dev, scripts)
+function deferToVercel(promise: Promise<unknown>): void {
+  try {
+    waitUntil(promise);
+  } catch {
+    // Not running in a Vercel function context (local dev) — let it fire-and-forget
+    promise.catch(() => {});
+  }
+}
+
+export async function identifyUser(userId: string, attrs?: Record<string, unknown>): Promise<void> {
+  if (!cio) return noopWarn();
+  const promise = (async () => {
+    try {
+      const payload = attrs ?? (await buildAttrs(userId));
+      if (!payload) {
+        console.warn("[customerio] identify SKIPPED — buildAttrs returned null", { userId });
+        return;
+      }
+      console.log("[customerio] sending attrs:", { userId, payload: JSON.stringify(payload) });
+      await cio.identify(userId, payload);
+      console.log("[customerio] identify resolved", { userId });
+    } catch (err) {
+      console.error("[customerio] identify failed:", err);
+    }
+  })();
+  deferToVercel(promise);
+}
+
+export async function trackEvent(userId: string, name: CioEventName, data?: Record<string, unknown>): Promise<void> {
+  if (!cio) return noopWarn();
+  const promise = (async () => {
+    try {
+      await cio.track(userId, { name, data });
+    } catch (err) {
+      console.error("[customerio] track failed:", { name, err });
+    }
+  })();
+  deferToVercel(promise);
+}
+
+This pattern means:
+- In Vercel runtime: waitUntil extends the lambda until the CIO HTTP call completes
+- In local dev / scripts / non-Vercel contexts: graceful fallback to plain fire-and-forget
+- Existing .catch() patterns at call sites still work but become redundant — they can be cleaned up later
+- No changes needed at any call site
+
+3. ALSO add defensive identify in email_verified handler — call identifyUser BEFORE trackEvent at the email_verified location in replitAuth.ts ~line 956. Reason: even with waitUntil, having a backup identify path means we're never relying on a single race condition. Pattern:
+
+identifyUser(user.id);  // defensive — ensures Person attributes exist
+trackEvent(user.id, CIO_EVENTS.EMAIL_VERIFIED);
+
+4. KEEP the temporary debug logs you added (sending attrs, identify resolved, SKIPPED) for now. We'll use them to verify the fix in prod. Remove in a follow-up PR after we've confirmed.
+
+5. Verify changes don't break local dev — when env vars are missing AND we're not on Vercel, customerio.ts still no-ops gracefully without throwing.
+
+VERIFICATION CHECKLIST BEFORE STAGING
+- @vercel/functions added to package.json
+- TypeScript typecheck clean
+- waitUntil is wrapped in try/catch with fire-and-forget fallback
+- No code changes needed in any caller (routes.ts, replitAuth.ts) other than the additional identifyUser in email_verified
+- All existing CIO calls unchanged at call sites
+
+DEPLOY PLAN AFTER STAGING
+1. No DB migration needed for this fix
+2. Push to GitHub from Replit
+3. Vercel auto-builds, lands as Staged
+4. Promote
+5. Smoke test: fresh signup in incognito window with a real email
+6. Check Customer.io Activity Logs — expect to see:
+   - Person Created with full attributes (email, first_name, plan, subscription_status, etc.)
+   - signed_up event with data: { via: "trial" }
+   - email_verified event after email code entry
+   - All subsequent events as before
+7. Click into the new Person in CIO People — confirm email is populated, all attributes set
+
+Stage but don't push. Show me the diff.

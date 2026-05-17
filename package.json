@@ -55,6 +55,7 @@
     "@types/memoizee": "^0.4.12",
     "@types/multer": "^2.0.0",
     "@types/passport-google-oauth20": "^2.0.17",
+    "@vercel/functions": "^3.6.0",
     "archiver": "^7.0.1",
     "bcryptjs": "^3.0.3",
     "class-variance-authority": "^0.7.1",
