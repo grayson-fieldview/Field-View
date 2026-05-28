@@ -1,0 +1,33 @@
+Meta Pixel + Conversions API — diagnose first, no code yet.
+Context
+We're launching Facebook ads on Monday and need the Meta Pixel firing on the web app plus server-side Conversions API events for accurate iOS attribution. The marketing site (Framer) already has the base pixel with PageView firing — that part is done. This work is about the app (app.field-view.com) and the server-side event pipeline.
+Pixel ID: 1036268198242192 (in META_PIXEL_ID env var)
+CAPI access token: in META_CAPI_ACCESS_TOKEN env var
+Test mode flag: META_CAPI_TEST_MODE (when true, include test_event_code from META_CAPI_TEST_EVENT_CODE in CAPI payload so events route to Events Manager → Test Events tab instead of going live)
+Diagnose phase — report back, do not write code
+
+Existing event emitter. Locate the server-side code that currently fires the 11 Customer.io events. List the file path, the function/module name, and every call site (signup controller, Stripe webhook handler, etc.). I want to see the full list of events and where each is dispatched from.
+Session establishment. Find where the user session is created post-signup, and where the Stripe customer/subscription is linked to the user record.
+Trial structure. Confirm: is there a free trial between account creation and Stripe subscription, or does payment happen at signup? Where in code does each transition fire?
+Attribution capture. Check whether we currently capture fbclid, utm_*, _fbp, or _fbc anywhere on landing or at signup. If yes, where are they persisted? If no, identify the right landing handler / middleware to add capture.
+App root for pixel injection. Identify the app shell entry point (e.g. _app.tsx, root layout.tsx, or whichever is canonical for our setup) where the Meta Pixel base script should be injected so it fires on every route. Confirm whether route changes already trigger any analytics/instrumentation we can hook into for SPA PageView firing.
+
+Implementation plan to propose (after diagnose, before code)
+Once the diagnose report is back, propose a plan covering:
+
+Browser pixel on app root with Pixel ID from env. Auto-fire PageView on every route change. Fire CompleteRegistration on successful signup (browser-side, same handler that triggers post-signup redirect). Generate a event_id (UUID) per event and pass it to both the browser fire and the server fire for dedup.
+Attribution capture middleware. On every request, read fbclid from query params if present, write _fbc cookie per Meta's spec (fb.1.<unix_ms>.<fbclid>). Capture utm_source, utm_medium, utm_campaign, utm_content, utm_term from query params, persist on session, and copy to user record on signup. _fbp is browser-set by the pixel — read it from cookies on requests for CAPI inclusion.
+sendMetaCAPIEvent helper. Fan out from the existing event emitter alongside the Customer.io call. Events: CompleteRegistration, Subscribe, Purchase, and StartTrial if the diagnose phase confirms a distinct trial step. Include: em (SHA-256 hashed lowercased email), external_id (SHA-256 hashed userId), client_ip_address, client_user_agent, fbp, fbc, event_id matching the browser fire. Endpoint: https://graph.facebook.com/v18.0/{PIXEL_ID}/events.
+Test mode gate. When META_CAPI_TEST_MODE=true, include test_event_code from env in the CAPI payload. When false, omit it and events go live.
+Logging. Log every CAPI call (event name, event_id, status code, response body summary) at info level so we can debug in Sentry/Vercel logs without exposing PII.
+Error handling. CAPI failures must NOT break the request or block the Customer.io fire. Catch and log, never throw to caller.
+
+Standards
+
+Diagnose-first, no code until I approve the implementation plan.
+Architect review required on the PR before merge.
+Migration not expected for this work — confirm in diagnose.
+Do not modify the existing Customer.io event emitter behavior. CAPI is additive only.
+Smoke tests must cover: signup flow end-to-end with META_CAPI_TEST_MODE=true, verifying both browser pixel fire (Events Manager → Test Events) AND CAPI server fire arrive with matching event_id.
+
+Reply with the diagnose report only. Wait for my plan approval before writing implementation code.
