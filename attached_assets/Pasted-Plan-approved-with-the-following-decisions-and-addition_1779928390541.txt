@@ -1,0 +1,29 @@
+Plan approved with the following decisions and additions. Proceed with implementation in phased PRs — one phase per PR for review-ability.
+Decisions:
+
+Fire both CompleteRegistration AND StartTrial at signup with separate event_ids. Both via browser pixel AND CAPI.
+Fire both Subscribe AND Purchase on paid conversion. Server-side from Stripe webhook is the source of truth. ALSO fire browser-side on /subscribe?checkout=success — generate both event_ids server-side at webhook, pass via redirect URL params (?subscribe_event_id=...&purchase_event_id=...), browser uses matching IDs for dedup.
+VITE_META_PIXEL_ID for browser exposure — matches existing pattern.
+Migration approved — 5 new nullable varchar columns on users: signup_utm_content, signup_utm_term, signup_fbclid, signup_fbp, signup_fbc. RDS-gated, transaction-wrapped, env guards per the S45 / S22 standard.
+Invitee branch: CompleteRegistration + StartTrial fire at signup (not verification) for both invitee and trial paths.
+Wire subscription_started Customer.io event in this PR alongside the Meta Subscribe/Purchase webhook fires. Do NOT wire other declared CIO placeholders — out of scope.
+META_CAPI_TEST_MODE=true in prod initially; do not flip to false in code or env until I confirm.
+
+Phased PR structure:
+
+PR 1 — Migration. Add the 5 new columns. RDS-gated. Standalone migration script following S22 template. Smoke verification: query schema in TablePlus, confirm columns exist nullable.
+PR 2 — Attribution capture middleware. server/middleware/attribution.ts mounted before setupAuth(). Reads fbclid from query, writes _fbc cookie per Meta spec, stashes utm_* on req.session.attribution. Modify POST /api/register to read req.session.attribution and write to user row on signup. Smoke: hit landing with ?fbclid=test123&utm_source=facebook query string, sign up, confirm columns populated on the user row in DB.
+PR 3 — Meta Pixel base + SPA PageView. Base pixel bootstrap in client/index.html using VITE_META_PIXEL_ID. SPA route-change firing in client/src/App.tsx via wouter's useLocation effect. Smoke: navigate between 3+ routes, confirm PageView events appear in Events Manager → Test Events.
+PR 4 — CompleteRegistration + StartTrial. Client generates UUIDs for both events before POST /api/register, passes both in request body. Server uses same UUIDs for CAPI fires. Both events fire browser-side immediately on registration response, server-side immediately after req.session.save (trial branch) or immediately after the 201 response is queued (invitee branch). Smoke: full signup, confirm both events appear with matching event_ids for browser+server.
+PR 5 — Subscribe + Purchase via Stripe webhook. New sendMetaCAPIEvent helper in server/services/metaCapi.ts. Webhook handler at server/lib/stripeWebhook.ts:85-136 generates subscribe_event_id + purchase_event_id UUIDs, fires both CAPI events with value from data.amount_total / 100 and currency from data.currency, also fires CIO subscription_started. Webhook passes both UUIDs to the success redirect URL. Frontend /subscribe?checkout=success reads them, fires browser Subscribe + Purchase with matching IDs. Smoke: full Stripe Checkout test mode flow, confirm 4 events arrive in Test Events with paired dedup.
+
+Standards reminders:
+
+Architect (Grayson via Claude) review required before merging each PR.
+client_ip_address from req.headers['x-forwarded-for'], take first IP only.
+SHA-256 hashing: lowercased+trimmed email, lowercased userId, hex output.
+CAPI failures must NEVER throw to caller — catch, log, continue. Customer.io fires must NOT be affected by Meta failures.
+Do not modify any other Customer.io behavior. CAPI is purely additive.
+Migration order on deploy: RDS migration applied FIRST, code deploy SECOND. Do not promote Vercel until migration is verified in TablePlus.
+
+Start with PR 1 (migration). Send the migration script for review before running.
