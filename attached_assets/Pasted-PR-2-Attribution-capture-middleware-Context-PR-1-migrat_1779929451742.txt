@@ -1,0 +1,57 @@
+PR 2 — Attribution capture middleware.
+Context: PR 1 migration is live in prod. The 5 new columns (signup_utm_content, signup_utm_term, signup_fbclid, signup_fbp, signup_fbc) exist on users alongside the S45 columns (signup_referrer, signup_utm_source, signup_utm_medium, signup_utm_campaign) which currently exist but are 100% NULL because frontend capture was never wired.
+Quick pre-flight diagnose (short, no plan-blocking):
+
+Confirm express-session is mounted and req.session is writable for unauthenticated requests (landing-page hits, pre-login). Cite the file/line where session middleware is configured.
+Confirm cookie-parser (or equivalent) is mounted so req.cookies is readable.
+Locate the Drizzle schema declaration for the users table — likely shared/models/auth.ts per the original diagnose. Confirm the file path.
+Confirm POST /api/register in replitAuth.ts has access to req.session and req.cookies at the user-creation point (~line 594).
+
+Once those four are confirmed, propose the implementation plan covering:
+Implementation scope:
+
+Update Drizzle schema (shared/models/auth.ts or whichever file holds the users table declaration) — add the 5 new columns from PR 1 as nullable varchar Drizzle column definitions. Schema must match prod (drift would break type inference and select queries).
+New middleware: server/middleware/attribution.ts. Mount BEFORE setupAuth() in server/index.ts so it runs on every request including unauthenticated landing-page hits. Logic:
+
+If req.query.fbclid is present: write _fbc cookie with value fb.1.${Date.now()}.${fbclid}, domain .field-view.com, max-age 90 days, Secure, SameSite=Lax, NOT HttpOnly (the pixel needs to read it client-side).
+On every request, capture into req.session.attribution (create the object if absent): any of fbclid, utm_source, utm_medium, utm_campaign, utm_content, utm_term present in req.query, plus req.headers.referer as referrer if req.session.attribution.referrer is not already set. First-touch wins — once a field is populated in the session, don't overwrite it on subsequent requests in the same session.
+No-op gracefully if req.session is unavailable (mobile API hits, webhook callbacks, etc.) — never throw.
+
+
+Modify POST /api/register (server/replit_integrations/auth/replitAuth.ts, the user-creation point around line 594, BOTH the trial branch and the invitee branch). After the authStorage.upsertUser call succeeds, read req.session.attribution + req.cookies._fbp + req.cookies._fbc and UPDATE the user row with:
+
+signup_referrer ← req.session.attribution.referrer ?? null
+signup_utm_source ← req.session.attribution.utm_source ?? null
+signup_utm_medium ← req.session.attribution.utm_medium ?? null
+signup_utm_campaign ← req.session.attribution.utm_campaign ?? null
+signup_utm_content ← req.session.attribution.utm_content ?? null
+signup_utm_term ← req.session.attribution.utm_term ?? null
+signup_fbclid ← req.session.attribution.fbclid ?? null
+signup_fbp ← req.cookies?._fbp ?? null
+signup_fbc ← req.cookies?._fbc ?? null
+Wrap the UPDATE in a try/catch — attribution write failures must NEVER block signup or throw to caller. Log to Sentry at warn level, continue.
+
+
+Smoke test plan:
+
+Local: visit / with ?fbclid=testFB123&utm_source=facebook&utm_medium=cpc&utm_campaign=launch&utm_content=hero&utm_term=trades then sign up. Query the new user row in DB, confirm all 9 attribution columns populated.
+Local: sign up WITHOUT any query params or referrer. Confirm signup succeeds, all 9 columns NULL, no errors logged.
+Local: visit / first with ?utm_source=facebook, navigate to /some-other-page (no params), then sign up. Confirm utm_source = 'facebook' persisted from first-touch.
+
+
+
+Out of scope for PR 2 — do NOT touch:
+
+Meta Pixel injection (PR 3)
+sendMetaCAPIEvent helper (PR 4)
+Stripe webhook handler (PR 5)
+Any existing Customer.io event firing — additive only
+Any other CIO placeholder events
+
+Standards:
+
+No new migration needed (PR 1 already shipped the columns).
+Architect review (Grayson via Claude) required on PR before merge.
+Vercel deploy strategy: after merge, this is safe to deploy because the columns exist in prod RDS. No order-of-operations risk.
+
+Wait for my plan approval before writing implementation code.
