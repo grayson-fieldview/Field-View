@@ -82,6 +82,14 @@ export const users = pgTable("users", {
   signupUtmSource: varchar("signup_utm_source"),
   signupUtmMedium: varchar("signup_utm_medium"),
   signupUtmCampaign: varchar("signup_utm_campaign"),
+  // S46 Meta Pixel + Conversions API attribution — captured by
+  // server/middleware/attribution.ts (first-touch UTM/fbclid via
+  // req.session.attribution; fbp/fbc from cookies) and persisted at /api/register.
+  signupUtmContent: varchar("signup_utm_content"),
+  signupUtmTerm: varchar("signup_utm_term"),
+  signupFbclid: varchar("signup_fbclid"),
+  signupFbp: varchar("signup_fbp"),
+  signupFbc: varchar("signup_fbc"),
   // S45 last_active_at — touched by touch-last-active middleware on every
   // authenticated request, throttled to 1 write/user/60s.
   lastActiveAt: timestamp("last_active_at"),

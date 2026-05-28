@@ -4,6 +4,7 @@ import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 // @ts-ignore - no types published for passport-microsoft
 import { Strategy as MicrosoftStrategy } from "passport-microsoft";
 import session from "express-session";
+import cookieParser from "cookie-parser";
 import type { Express, RequestHandler, Request } from "express";
 import connectPg from "connect-pg-simple";
 import bcrypt from "bcryptjs";
@@ -31,6 +32,7 @@ import { Sentry } from "../../lib/sentry";
 import { sendSlackNotification, isCompAccount } from "../../lib/slack";
 import { csrfGuard } from "../../middleware/csrf";
 import { touchLastActive } from "../../middleware/touch-last-active";
+import { attributionCapture } from "../../middleware/attribution";
 import { identifyUser, trackEvent, CIO_EVENTS } from "../../services/customerio";
 
 function getBaseUrl(req?: Request) {
@@ -305,7 +307,17 @@ export function getSession() {
 
 export async function setupAuth(app: Express) {
   app.set("trust proxy", 1);
+  // S46 — cookie-parser mounts first so req.cookies (incl. _fbp/_fbc) is
+  // populated for every downstream handler. Does not interfere with the
+  // session cookie, which express-session parses internally.
+  app.use(cookieParser());
   app.use(getSession());
+  // S46 — first-touch marketing attribution. Mounts immediately after
+  // getSession() so req.session exists, but BEFORE passport/auth/csrf so
+  // landing-page hits from logged-out browsers (including hits that would
+  // otherwise be CSRF-blocked or 401'd) still stamp UTM/fbclid into the
+  // session for the eventual signup write. Never throws.
+  app.use(attributionCapture);
   app.use(passport.initialize());
   app.use(passport.session());
   // S45 — touch users.last_active_at on every authenticated request,
@@ -609,6 +621,37 @@ export async function setupAuth(app: Express) {
         // by the admin who invited them); trial signups must complete it.
         profileCompletedAt: inviteToken ? new Date() : null,
       });
+
+      // S46 — persist marketing attribution onto the freshly-created user
+      // row. Reads first-touch UTM/fbclid/referrer from req.session.attribution
+      // (populated by attributionCapture middleware on any prior landing-page
+      // hit) and _fbp/_fbc from cookies (Pixel sets _fbp; middleware sets _fbc
+      // from fbclid). All 9 columns are written in one UPDATE; missing fields
+      // land as NULL. Wrapped in try/catch — an attribution write failure
+      // must never block signup. PR 4/5 will read these on
+      // CompleteRegistration / Subscribe CAPI events.
+      try {
+        const attr = ((req.session as any)?.attribution ?? {}) as Record<string, string | undefined>;
+        const fbp = (req as any).cookies?._fbp ?? null;
+        const fbc = (req as any).cookies?._fbc ?? null;
+        await db.update(users).set({
+          signupReferrer: attr.referrer ?? null,
+          signupUtmSource: attr.utm_source ?? null,
+          signupUtmMedium: attr.utm_medium ?? null,
+          signupUtmCampaign: attr.utm_campaign ?? null,
+          signupUtmContent: attr.utm_content ?? null,
+          signupUtmTerm: attr.utm_term ?? null,
+          signupFbclid: attr.fbclid ?? null,
+          signupFbp: fbp,
+          signupFbc: fbc,
+        }).where(eq(users.id, user.id));
+      } catch (attrErr) {
+        console.warn("[attribution] signup write failed (non-fatal):", attrErr);
+        Sentry.captureException(attrErr, {
+          tags: { stage: "signup_attribution" },
+          level: "warning",
+        });
+      }
 
       // S41: invite acceptance writer — atomic invitation status flip + project_assignments seed.
       if (invitationForAssignment) {
