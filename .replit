@@ -47,3 +47,4 @@ integrations = ["javascript_log_in_with_replit:2.0.0", "javascript_database:1.0.
 [userenv.shared]
 AWS_S3_BUCKET = "fieldview-storage"
 AWS_REGION = "us-east-2"
+VITE_META_PIXEL_ID = "1036268198242192"

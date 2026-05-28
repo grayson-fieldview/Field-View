@@ -90,6 +90,13 @@ export default function RegisterPage() {
       return res.json();
     },
     onSuccess: (data) => {
+      // PR 3: Meta Pixel CompleteRegistration. Fires for BOTH branches
+      // (trial signup + invitee accepting an invite) — any successful 201
+      // from /api/register counts as a completed registration. Guarded so
+      // SSR/test contexts and pixel-blocked browsers don't throw.
+      if (typeof window !== "undefined" && window.fbq) {
+        window.fbq("track", "CompleteRegistration");
+      }
       // [DIAG] Session 3 BUG 2 instrumentation
       console.log("[register] success", {
         inviteToken: !!inviteToken,

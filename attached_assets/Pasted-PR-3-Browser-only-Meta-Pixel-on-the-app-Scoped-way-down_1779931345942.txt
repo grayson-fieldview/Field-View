@@ -1,0 +1,34 @@
+PR 3 — Browser-only Meta Pixel on the app. Scoped way down from the previous plan. No CAPI, no event_id machinery, no Stripe webhook fan-out, no migrations. Just the browser pixel firing on PageView, signup, and subscription. Total scope: ~50-80 lines across 3-4 files.
+Env vars (Grayson will set in Vercel + Replit Secrets):
+
+VITE_META_PIXEL_ID=1036268198242192
+
+Quick diagnose (no plan-blocking):
+
+Locate the signup form component(s) — wherever the client calls POST /api/register. List the file path and the handler that processes the 201 response.
+Confirm client/src/pages/subscribe.tsx:28-49 is where ?checkout=success is detected (per earlier diagnose).
+Confirm client/src/App.tsx uses wouter's useLocation at the root level.
+
+Implementation:
+
+Base pixel — add the standard Meta Pixel bootstrap snippet to client/index.html using import.meta.env.VITE_META_PIXEL_ID. The snippet should call fbq('init', PIXEL_ID) and fbq('track', 'PageView') on initial load. Include the <noscript> fallback. Skip if env var is undefined (logs a console warning).
+SPA PageView on route change — in client/src/App.tsx, add an effect inside the router-level component that fires window.fbq?.('track', 'PageView') whenever the wouter location changes. Guard with typeof window !== 'undefined' and window.fbq existence checks.
+CompleteRegistration on signup — in the signup form component, after the POST /api/register 201 response is received successfully, fire window.fbq?.('track', 'CompleteRegistration'). Both signup branches (trial and invitee) — fire on any successful 201.
+Subscribe on checkout success — in client/src/pages/subscribe.tsx (the ?checkout=success branch around lines 28-49), fire window.fbq?.('track', 'Subscribe', { value: <stripe_amount>, currency: 'USD' }) after the /api/confirm-checkout call succeeds and before the Rewardful ping. If the Stripe amount isn't available client-side, fire without value/currency (just the event name).
+
+Out of scope (do NOT touch):
+
+Any server-side code (no CAPI, no event emitter changes)
+Any Drizzle schema or migration
+The S46 attribution middleware (it's already shipped, leave it alone — fbp/fbc capture will benefit later if we ever wire CAPI)
+Any Customer.io event firing
+Any dev DB drift work
+
+Smoke tests:
+
+Set VITE_META_PIXEL_ID=1036268198242192 in your Replit env and restart the workflow. Visit / in a browser. Open Events Manager → Test Events → enter the local dev URL. Confirm a PageView event arrives.
+Navigate to another route. Confirm a second PageView arrives.
+Sign up. Confirm CompleteRegistration arrives.
+(Optional, skip if Stripe test mode is annoying to spin up) Complete a test Stripe checkout. Confirm Subscribe arrives.
+
+Paste the diff (every file changed) + smoke output back for architect review.

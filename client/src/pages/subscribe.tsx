@@ -33,9 +33,26 @@ export default function SubscribePage() {
         headers: { "Content-Type": "application/json" },
         credentials: "include",
       })
-        .then((res) => res.json())
+        .then((res) => {
+          // PR 3: gate everything below on a 2xx — without this, a 4xx/5xx
+          // JSON error body still resolves the .json() promise and fires
+          // Subscribe + Rewardful conversion as a false positive. Throwing
+          // here routes failure into the trailing .catch().
+          if (!res.ok) {
+            throw new Error(`confirm-checkout failed: ${res.status}`);
+          }
+          return res.json();
+        })
         .then(() => {
           qc.invalidateQueries({ queryKey: ["/api/auth/user"] });
+          // PR 3: Meta Pixel Subscribe event. Stripe amount isn't surfaced
+          // in the confirm-checkout response yet, so we fire without
+          // value/currency — the event itself still attributes the
+          // conversion in Ads Manager. Guarded so pixel-blocked browsers
+          // never break the success flow.
+          if (typeof window !== "undefined" && window.fbq) {
+            window.fbq("track", "Subscribe");
+          }
           // Rewardful client-side conversion ping — defense in depth
           // alongside Stripe's client_reference_id attribution.
           try {

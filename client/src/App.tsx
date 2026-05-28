@@ -19,8 +19,9 @@ import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle, Clock, CreditCard } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { registerTrialExpiredHandler } from "@/lib/queryClient";
+import "@/lib/meta-pixel";
 import NotFound from "@/pages/not-found";
 import LoginPage from "@/pages/login";
 import RegisterPage from "@/pages/register";
@@ -286,6 +287,27 @@ function TrialExpiredToastBridge() {
   return null;
 }
 
+// PR 3: Meta Pixel SPA PageView tracker. The base pixel + initial PageView
+// fire from initMetaPixel() in main.tsx. This effect fires an additional
+// PageView every time the wouter location changes — skipping the first
+// render so we don't double-count the initial load. Mounted inside the
+// inner JSX of App() so it has access to wouter context and covers every
+// route (public gallery/report/p included).
+function MetaPixelRouteTracker() {
+  const [location] = useLocation();
+  const isFirst = useRef(true);
+  useEffect(() => {
+    if (isFirst.current) {
+      isFirst.current = false;
+      return;
+    }
+    if (typeof window !== "undefined" && window.fbq) {
+      window.fbq("track", "PageView");
+    }
+  }, [location]);
+  return null;
+}
+
 function CatchAllRedirect() {
   const search = useSearch();
   const [loc] = useLocation();
@@ -381,6 +403,7 @@ function App() {
         <TooltipProvider>
           <Toaster />
           <TrialExpiredToastBridge />
+          <MetaPixelRouteTracker />
           <ErrorBoundary>
             <Switch>
               <Route path="/gallery/:token">
