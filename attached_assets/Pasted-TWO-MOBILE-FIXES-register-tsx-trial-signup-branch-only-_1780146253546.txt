@@ -1,0 +1,23 @@
+TWO MOBILE FIXES — register.tsx, trial-signup branch only. Responsive/CSS only.
+
+On mobile the simplified signup now has two problems:
+1. The logo + "Field View" wordmark is left-aligned. It should be horizontally CENTERED on mobile.
+2. There's a large empty white gap between the logo at the top and the "Welcome! Create an account for your company." headline. Content should start near the top and flow down naturally: logo → headline → form.
+
+DIAGNOSE FIRST (report before editing):
+- Paste the relevant layout classes for: (a) the grid container, (b) the left/logo panel, (c) the right/form panel. Specifically any min-h-screen / min-h / h-*, justify-center / items-center, and my-auto.
+- Identify exactly what creates the vertical gap on mobile. My expectation: the form panel (or container) has a full-height min-height + vertical centering (justify-center / items-center / my-auto) that is correct for desktop (centers the form in the right column) but on mobile centers the form within a tall area below the logo, producing the gap. Confirm or correct this.
+- Identify the alignment classes on the logo/wordmark row.
+
+THEN IMPLEMENT:
+- Logo/wordmark: center it horizontally on mobile (base-level items-center / justify-center as appropriate to the markup), and KEEP the current desktop alignment via md:- (e.g. md:items-start) so desktop is unchanged.
+- Vertical gap: scope whatever min-height + vertical-centering creates it to md:- only, so on mobile the content flows from the top with no dead space, while DESKTOP keeps its current vertical centering of the form.
+
+CONSTRAINTS:
+- No form logic, validation, or routing changes.
+- DESKTOP MUST BE UNCHANGED: peach hero on the left, form vertically centered in the right column. Verify this still holds at 1280px.
+- Reuse the branch's existing md: breakpoint. No new convention.
+
+VERIFY:
+- Paste the final base-level classes for the logo row and the form/container.
+- Confirm desktop at 1280px: logo top-left in peach panel, form centered — unchanged.

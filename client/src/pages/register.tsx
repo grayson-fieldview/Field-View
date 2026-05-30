@@ -349,7 +349,7 @@ export default function RegisterPage() {
   // Trial-signup branch — CompanyCam-style two-panel layout
   return (
     <div className="min-h-screen bg-white dark:bg-gray-950 p-3 sm:p-4">
-      <div className="grid grid-cols-1 md:grid-cols-[40%_1fr] gap-3 sm:gap-4 min-h-[calc(100vh-1.5rem)] sm:min-h-[calc(100vh-2rem)]">
+      <div className="grid grid-cols-1 md:grid-cols-[40%_1fr] gap-3 sm:gap-4 md:min-h-[calc(100vh-2rem)]">
         {/* Left peach panel — full hero on desktop; on mobile the peach
             box treatment, headline, and testimonial are dropped so the page
             goes straight to the form with just the logo at top. */}
@@ -358,7 +358,7 @@ export default function RegisterPage() {
           data-testid="panel-brand"
         >
           {/* Logo */}
-          <div className="flex items-center gap-2" data-testid="brand-logo-row">
+          <div className="flex items-center justify-center md:justify-start gap-2" data-testid="brand-logo-row">
             <img
               src={faviconImg}
               alt="Field View"
@@ -406,7 +406,7 @@ export default function RegisterPage() {
         </div>
 
         {/* Right form panel */}
-        <div className="flex items-center justify-center px-4 py-8 sm:px-6 lg:px-12">
+        <div className="flex md:items-center justify-center px-4 py-8 sm:px-6 lg:px-12">
           <div className="w-full max-w-md">
             <h2
               className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white text-center mb-6"
