@@ -350,9 +350,11 @@ export default function RegisterPage() {
   return (
     <div className="min-h-screen bg-white dark:bg-gray-950 p-3 sm:p-4">
       <div className="grid grid-cols-1 md:grid-cols-[40%_1fr] gap-3 sm:gap-4 min-h-[calc(100vh-1.5rem)] sm:min-h-[calc(100vh-2rem)]">
-        {/* Left peach panel */}
+        {/* Left peach panel — full hero on desktop; on mobile the peach
+            box treatment, headline, and testimonial are dropped so the page
+            goes straight to the form with just the logo at top. */}
         <div
-          className="bg-[#fceed8] rounded-3xl p-8 sm:p-10 lg:p-14 flex flex-col justify-between min-h-[400px] md:min-h-0"
+          className="px-2 pt-2 pb-0 flex flex-col md:bg-[#fceed8] md:rounded-3xl md:p-10 lg:p-14 md:justify-between md:min-h-0"
           data-testid="panel-brand"
         >
           {/* Logo */}
@@ -368,17 +370,17 @@ export default function RegisterPage() {
             </span>
           </div>
 
-          {/* Headline */}
+          {/* Headline — desktop only */}
           <h1
-            className="text-5xl sm:text-6xl lg:text-7xl font-extrabold leading-[0.95] tracking-tight text-slate-900 my-12"
+            className="hidden md:block text-5xl sm:text-6xl lg:text-7xl font-extrabold leading-[0.95] tracking-tight text-slate-900 my-12"
             data-testid="text-brand-tagline"
           >
             Join hundreds of contractors who rely on FieldView
           </h1>
 
-          {/* Testimonial card */}
+          {/* Testimonial card — desktop only */}
           <figure
-            className="bg-white rounded-2xl shadow-md p-5 max-w-sm"
+            className="hidden md:block bg-white rounded-2xl shadow-md p-5 max-w-sm"
             data-testid="card-testimonial"
           >
             <div className="flex items-center gap-0.5 mb-3" data-testid="testimonial-stars">

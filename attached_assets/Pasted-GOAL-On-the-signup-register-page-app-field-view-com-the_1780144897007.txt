@@ -1,0 +1,21 @@
+GOAL
+On the signup/register page (app.field-view.com), the mobile layout currently shows a large promotional hero — the tan/cream box containing the "Join hundreds of contractors who rely on FieldView" headline and the Luke Ousdigian testimonial card — stacked above the actual signup form. On mobile this is too heavy. I want the mobile view simplified to go straight to the form, similar to a clean SaaS signup: logo/wordmark at top, the "Create an account for your company" headline, then the form fields.
+
+DIAGNOSE FIRST (report before changing anything)
+1. Locate the signup/register page component (likely under client/src for the auth/register route via wouter). Tell me the file path.
+2. Identify the markup that renders (a) the Field View logo + wordmark, (b) the promotional hero box with the big headline and testimonial card, and (c) the form section with "Welcome! Create an account for your company." and the Company Name / Work email fields.
+3. Report the CURRENT responsive behavior: is this a split layout (hero as a side panel on desktop, stacked on mobile)? What Tailwind breakpoints / classes currently control how the hero shows up on small screens? Confirm the existing breakpoint convention used elsewhere in the app (e.g. md: vs lg:).
+
+THEN IMPLEMENT
+- On mobile only (below the existing breakpoint — use whatever the app already uses for this split, likely lg: or md:), HIDE the entire promotional hero box: the big "Join hundreds..." headline AND the testimonial card. Use a responsive utility (e.g. `hidden lg:flex` / `hidden lg:block`) — do not delete the markup.
+- KEEP the Field View logo + wordmark visible at the top on mobile.
+- KEEP the form section unchanged, with "Welcome! Create an account for your company." as the headline above the fields on mobile.
+- DESKTOP MUST BE UNCHANGED. The hero box and testimonial should render exactly as they do now at desktop widths. Verify the desktop split layout is not affected.
+
+CONSTRAINTS
+- This is a responsive/CSS-only change. Do NOT modify any form logic, validation, submit handlers, or routing.
+- Do not introduce a new breakpoint convention; reuse what the page already uses.
+- Do not touch the desktop layout.
+
+VERIFY
+- Show me a screenshot or describe the rendered output at a mobile width (~390px) and at a desktop width (~1280px) to confirm: mobile = logo + headline + form only; desktop = unchanged.
