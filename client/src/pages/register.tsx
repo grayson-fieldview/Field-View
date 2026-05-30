@@ -362,10 +362,10 @@ export default function RegisterPage() {
             <img
               src={faviconImg}
               alt="Field View"
-              className="h-10 w-10 rounded-md"
+              className="h-12 w-12 md:h-10 md:w-10 rounded-md"
               data-testid="img-brand-logo"
             />
-            <span className="text-2xl font-bold tracking-tight text-slate-900">
+            <span className="text-3xl md:text-2xl font-bold tracking-tight text-slate-900">
               Field View
             </span>
           </div>
