@@ -920,37 +920,51 @@ export default function PhotoViewer({
     setAnnotations([]);
   };
 
+  const isVideo = (media.mimeType ?? "").startsWith("video/");
+
   const renderPhotoArea = (fullscreen: boolean) => (
     <div
       ref={containerRef}
       className={`relative flex items-center justify-center ${fullscreen ? "w-full h-full" : "flex-1 min-h-0"} bg-black/95 select-none`}
       data-testid="photo-viewer-image-area"
     >
-      <img
-        ref={imageRef}
-        src={media.url}
-        alt={media.caption || media.originalName}
-        className="absolute inset-0 w-full h-full object-contain"
-        onLoad={recomputeImageRect}
-        draggable={false}
-        data-testid="photo-viewer-image"
-      />
-      {showOverlay && allDisplayedStrokes.length > 0 && (
+      {isVideo ? (
+        <video
+          src={media.url}
+          controls
+          playsInline
+          className="absolute inset-0 w-full h-full object-contain"
+          data-testid="photo-viewer-video"
+        />
+      ) : (
+        <img
+          ref={imageRef}
+          src={media.url}
+          alt={media.caption || media.originalName}
+          className="absolute inset-0 w-full h-full object-contain"
+          onLoad={recomputeImageRect}
+          draggable={false}
+          data-testid="photo-viewer-image"
+        />
+      )}
+      {!isVideo && showOverlay && allDisplayedStrokes.length > 0 && (
         <AnnotationOverlay strokes={allDisplayedStrokes} style={imageRectStyle} />
       )}
-      <canvas
-        ref={canvasRef}
-        style={imageRectStyle}
-        className={isAnnotating ? "cursor-crosshair" : "cursor-default"}
-        onMouseDown={handlePointerDown}
-        onMouseMove={handlePointerMove}
-        onMouseUp={handlePointerUp}
-        onMouseLeave={handlePointerUp}
-        onTouchStart={handlePointerDown}
-        onTouchMove={handlePointerMove}
-        onTouchEnd={handlePointerUp}
-        data-testid="photo-viewer-canvas"
-      />
+      {!isVideo && (
+        <canvas
+          ref={canvasRef}
+          style={imageRectStyle}
+          className={isAnnotating ? "cursor-crosshair" : "cursor-default"}
+          onMouseDown={handlePointerDown}
+          onMouseMove={handlePointerMove}
+          onMouseUp={handlePointerUp}
+          onMouseLeave={handlePointerUp}
+          onTouchStart={handlePointerDown}
+          onTouchMove={handlePointerMove}
+          onTouchEnd={handlePointerUp}
+          data-testid="photo-viewer-canvas"
+        />
+      )}
 
       {/* Text annotations layer (HTML divs — SVG <text> would stretch with viewBox preserveAspectRatio="none") */}
       <div

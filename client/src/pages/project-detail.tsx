@@ -84,6 +84,7 @@ import {
   Camera,
   Pencil,
   Download,
+  Play,
 } from "lucide-react";
 import {
   Tooltip,
@@ -1418,11 +1419,29 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                               data-testid={`card-media-${item.id}`}
                             >
                               <div className={`aspect-[4/3] rounded-md overflow-hidden bg-muted relative ${isSelected ? "ring-2 ring-primary ring-offset-2" : ""} ${compareMode && (comparePhotos[0] === item.id || comparePhotos[1] === item.id) ? "ring-2 ring-blue-500 ring-offset-2" : ""}`}>
-                                <img
-                                  src={item.url}
-                                  alt={item.caption || item.originalName}
-                                  className="w-full h-full object-cover md:transition-transform md:duration-300 md:group-hover:scale-105"
-                                />
+                                {(item.mimeType ?? "").startsWith("video/") ? (
+                                  <>
+                                    <video
+                                      src={item.url}
+                                      preload="metadata"
+                                      muted
+                                      playsInline
+                                      className="w-full h-full object-cover md:transition-transform md:duration-300 md:group-hover:scale-105"
+                                      data-testid={`video-media-${item.id}`}
+                                    />
+                                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                                      <div className="h-10 w-10 rounded-full bg-black/50 flex items-center justify-center">
+                                        <Play className="h-5 w-5 text-white fill-white" />
+                                      </div>
+                                    </div>
+                                  </>
+                                ) : (
+                                  <img
+                                    src={item.url}
+                                    alt={item.caption || item.originalName}
+                                    className="w-full h-full object-cover md:transition-transform md:duration-300 md:group-hover:scale-105"
+                                  />
+                                )}
                                 {(annotationsByMedia.get(item.id)?.length ?? 0) > 0 && (
                                   <AnnotationOverlay strokes={annotationsByMedia.get(item.id) || []} />
                                 )}
