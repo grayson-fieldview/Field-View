@@ -1,0 +1,43 @@
+DIAGNOSE ONLY — no schema changes, no migrations, no db:push, no edits. Read-only scoping pass
+on the shared Tasks data model and web feature set. Report findings, then stop. If anything needs
+a schema change, that's a SEPARATE migration handled under our prod protocol — do not run it here.
+
+Goal: establish exactly what the backend + web already support for Tasks, so we can scope four
+capabilities and later bring mobile to parity:
+  1. Filter by status: To Do / In Progress / Done
+  2. Filter by project
+  3. Filter by due date (today / this week / past due / all)
+  4. Assign tasks to other users
+
+Use rg. Verify against the actual Drizzle schema and route code, not assumptions.
+
+A. SCHEMA (the task table — likely shared/models or shared/schema)
+- Full field list of the task table, with exact types for:
+  - Status: boolean (done/completed) or an enum/text with defined values? List the exact values.
+    The mobile UI shows "0 OPEN," which hints at a boolean today — confirm.
+  - Due date: does a due_date/dueDate column exist? Type?
+  - Assignee: is there an assigned-to/assignee FK to users, or is a task only tied to its creator?
+  - Project association: how is a task linked to a project?
+- For each of the 4 features, state explicitly whether it requires a SCHEMA MIGRATION (new column /
+  enum change) or the schema already supports it. For status: if it's boolean today, note that
+  3-state needs an enum migration AND a backfill decision for existing rows.
+
+B. API
+- List the task endpoints (create, update, list/fetch, delete, any assign endpoint).
+- Does list/fetch accept filter params for status / project / due date, or is filtering client-side?
+- Is there any endpoint/field today to set an assignee?
+
+C. WEB UI (what the web app already lets a user do with tasks)
+- Is there an "In Progress" state anywhere, or only open/done?
+- Can web set a due date on a task?
+- Can web assign a task to another user? If so, where does the assignable-user list come from
+  (org members? project members?) and are there permission rules on who can assign?
+- Can web filter by status / project / due date?
+
+D. VERDICT PER FEATURE — classify each of the 4 as:
+- Fully supported in DB + API + web → mobile just needs UI
+- Partially → name the exact gap and which layer (schema / API / web UI)
+- Not supported → full stack (schema migration + API + web UI)
+And state for each whether a schema migration is involved, so we can plan the protocol.
+
+Output per-feature verdicts with file:line evidence. Make NO changes — this is scope-finding only.
