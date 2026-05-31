@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link, useLocation, useSearch } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -46,6 +46,25 @@ export default function RegisterPage() {
       setEmail(inviteInfo.email);
     }
   }, [inviteInfo]);
+
+  // Meta Pixel: fire a custom event once when a user reaches the signup form,
+  // so Facebook ads can optimize toward "reached signup". Mirrors the existing
+  // fbq pattern (CompleteRegistration on success). The ref guard ensures a
+  // single fire per mount even under React StrictMode's dev double-invoke, and
+  // the window/fbq guard keeps SSR/test/pixel-blocked browsers from throwing.
+  const startFreeSignupFiredRef = useRef(false);
+  useEffect(() => {
+    // Skip invitee flows (/register?token=...) — those arrive from invitation
+    // emails, not Facebook ads, and accept an existing account rather than
+    // starting a free trial. Keeping them out keeps the ad-optimization signal
+    // clean.
+    if (inviteToken) return;
+    if (startFreeSignupFiredRef.current) return;
+    startFreeSignupFiredRef.current = true;
+    if (typeof window !== "undefined" && window.fbq) {
+      window.fbq("trackCustom", "StartFreeSignup");
+    }
+  }, [inviteToken]);
 
   const registerMutation = useMutation({
     mutationFn: async () => {
