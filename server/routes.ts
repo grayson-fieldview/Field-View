@@ -525,12 +525,21 @@ export async function registerRoutes(
       const project = await storage.getProject(id);
       if (!project) return res.status(404).json({ message: "Project not found" });
       if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
+      // Restricted users may NEVER delete a project, even ones they own or are
+      // assigned to. Only standard/manager/admin (already past requireWriteAccess)
+      // may proceed.
       if (req.user.role === "restricted") {
-        const [assignment] = await db.select().from(projectAssignments)
-          .where(and(eq(projectAssignments.projectId, id), eq(projectAssignments.userId, req.user.id)));
-        if (!assignment && project.createdById !== req.user.id) {
-          return res.status(403).json({ message: "Access denied" });
-        }
+        return res.status(403).json({ message: "Access denied" });
+      }
+      // Explicit pre-check: time_entries FK is onDelete:"restrict", so a project
+      // with logged time would otherwise fail with a caught Postgres error (500).
+      // Surface a clear 409 instead of relying on the FK violation.
+      const [{ value: timeEntryCount }] = await db
+        .select({ value: count() })
+        .from(timeEntries)
+        .where(eq(timeEntries.projectId, id));
+      if (timeEntryCount > 0) {
+        return res.status(409).json({ message: "This project has logged time entries and can't be deleted" });
       }
       await storage.deleteProject(id);
       res.json({ message: "Deleted" });
