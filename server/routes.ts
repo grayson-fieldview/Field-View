@@ -11,6 +11,7 @@ import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertCheck
 import { executeAutoClockOut, executeAutoClockIn, AUTO_CLOCK_IN_DWELL_MS } from "./lib/timesheets";
 import { haversineMeters, formatLocalTime, DEFAULT_GEOFENCE_RADIUS_M, HEARTBEAT_OUTSIDE_BUFFER_M, HEARTBEAT_DWELL_MS } from "./lib/geo";
 import { users, invitations, accounts, assignedProjectIdsSchema } from "@shared/models/auth";
+import { MAX_UPLOAD_BATCH } from "@shared/constants";
 import { computeSeatUsage } from "./lib/seats";
 import { db } from "./db";
 import { eq, sql, and, or, inArray, count, isNull, desc } from "drizzle-orm";
@@ -544,8 +545,8 @@ export async function registerRoutes(
       if (!Array.isArray(files) || files.length === 0) {
         return res.status(400).json({ message: "Provide a non-empty 'files' array" });
       }
-      if (files.length > 20) {
-        return res.status(400).json({ message: "Cannot sign more than 20 files at once" });
+      if (files.length > MAX_UPLOAD_BATCH) {
+        return res.status(400).json({ message: `Cannot sign more than ${MAX_UPLOAD_BATCH} files at once` });
       }
       const signed = await Promise.all(
         files.map(async (f: any) => {
@@ -598,25 +599,27 @@ export async function registerRoutes(
             ? req.body.tags.split(",").map((t: string) => t.trim()).filter(Boolean)
             : []);
 
-      const created = await Promise.all(
-        items.map(async (it: any) => {
-          if (!it?.key || !it?.publicUrl || !it?.originalName || !it?.mimeType) {
-            throw new Error("Each file must include key, publicUrl, originalName, and mimeType");
-          }
-          return storage.createMedia({
-            projectId,
-            uploadedById: req.user.id,
-            filename: it.key,
-            originalName: it.originalName,
-            mimeType: it.mimeType,
-            url: it.publicUrl,
-            caption,
-            tags,
-            latitude: it.latitude ?? (req.body.latitude ? parseFloat(req.body.latitude) : null),
-            longitude: it.longitude ?? (req.body.longitude ? parseFloat(req.body.longitude) : null),
-          });
-        })
-      );
+      const mediaRows = items.map((it: any) => {
+        if (!it?.key || !it?.publicUrl || !it?.originalName || !it?.mimeType) {
+          throw new Error("Each file must include key, publicUrl, originalName, and mimeType");
+        }
+        return {
+          projectId,
+          uploadedById: req.user.id,
+          filename: it.key,
+          originalName: it.originalName,
+          mimeType: it.mimeType,
+          url: it.publicUrl,
+          caption,
+          tags,
+          latitude: it.latitude ?? (req.body.latitude ? parseFloat(req.body.latitude) : null),
+          longitude: it.longitude ?? (req.body.longitude ? parseFloat(req.body.longitude) : null),
+        };
+      });
+
+      // Single bulk insert (one round-trip) instead of N individual inserts,
+      // so a 100-file batch doesn't open N connections against the RDS pool.
+      const created = await storage.createMediaBatch(mediaRows);
 
       // S45 CIO — fire ONCE per HTTP call (batch-aware) per audit decision.
       // count = number of media rows actually created in this request.

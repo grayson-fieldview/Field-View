@@ -7,8 +7,10 @@ import { queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/auth-utils";
 import { cn } from "@/lib/utils";
+import { MAX_UPLOAD_BATCH } from "@shared/constants";
 
-const MAX_BATCH = 20;
+const MAX_BATCH = MAX_UPLOAD_BATCH;
+const UPLOAD_CONCURRENCY = 6;
 const MAX_IMAGE_BYTES = 50 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 500 * 1024 * 1024;
 
@@ -180,8 +182,15 @@ export function UploadPhotosDialog({
       }
       const signed: Array<{ key: string; uploadUrl: string; publicUrl: string }> = await signRes.json();
 
-      const results = await Promise.all(
-        toUpload.map(async (s, i) => {
+      type UploadResult =
+        | { ok: true; staged: StagedFile; signed: { key: string; uploadUrl: string; publicUrl: string } }
+        | { ok: false; staged: StagedFile };
+      const results: UploadResult[] = new Array(toUpload.length);
+      let cursor = 0;
+      const worker = async () => {
+        while (cursor < toUpload.length) {
+          const i = cursor++;
+          const s = toUpload[i];
           try {
             const put = await fetch(signed[i].uploadUrl, {
               method: "PUT",
@@ -189,12 +198,15 @@ export function UploadPhotosDialog({
               body: s.file,
             });
             if (!put.ok) throw new Error(`Upload failed (${put.status})`);
-            return { ok: true as const, staged: s, signed: signed[i] };
+            results[i] = { ok: true, staged: s, signed: signed[i] };
           } catch (err: any) {
             updateStatus(s.id, "failed", err?.message || "Upload failed");
-            return { ok: false as const, staged: s };
+            results[i] = { ok: false, staged: s };
           }
-        }),
+        }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(UPLOAD_CONCURRENCY, toUpload.length) }, worker),
       );
 
       const succeeded = results.filter(

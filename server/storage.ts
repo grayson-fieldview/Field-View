@@ -145,6 +145,7 @@ export interface IStorage {
   getAllMedia(accountId: string): Promise<(Media & { project?: { name: string; color: string | null }; uploadedBy?: { firstName: string | null; lastName: string | null } })[]>;
   getMedia(id: number): Promise<Media | undefined>;
   createMedia(item: InsertMedia): Promise<Media>;
+  createMediaBatch(items: InsertMedia[]): Promise<Media[]>;
   updateMedia(id: number, data: { caption?: string; tags?: string[] }): Promise<Media | undefined>;
   deleteMedia(id: number): Promise<void>;
 
@@ -464,6 +465,11 @@ export class DatabaseStorage implements IStorage {
   async createMedia(item: InsertMedia): Promise<Media> {
     const [created] = await db.insert(media).values(item).returning();
     return created;
+  }
+
+  async createMediaBatch(items: InsertMedia[]): Promise<Media[]> {
+    if (items.length === 0) return [];
+    return db.insert(media).values(items).returning();
   }
 
   async updateMedia(id: number, data: { caption?: string; tags?: string[] }): Promise<Media | undefined> {

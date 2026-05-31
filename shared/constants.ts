@@ -1,5 +1,7 @@
 export const CURRENT_TERMS_VERSION = "2026-04-23";
 
+export const MAX_UPLOAD_BATCH = 100;
+
 export const INDUSTRIES = [
   { value: "general_contractor", label: "General Contractor" },
   { value: "painting", label: "Painting" },
