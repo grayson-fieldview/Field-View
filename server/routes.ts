@@ -591,6 +591,9 @@ export async function registerRoutes(
       if (!Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ message: "Provide a non-empty 'files' array of uploaded objects" });
       }
+      if (items.length > MAX_UPLOAD_BATCH) {
+        return res.status(400).json({ message: `Cannot save more than ${MAX_UPLOAD_BATCH} media items at once` });
+      }
 
       const caption = req.body.caption || null;
       const tags = Array.isArray(req.body.tags)
