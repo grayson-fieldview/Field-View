@@ -1,0 +1,45 @@
+DIAGNOSE-ONLY: video upload pipeline (backend + web). Read-only, NO CODE CHANGES.
+
+Context: the web upload UI advertises MP4 video (up to 500MB), but an upload just failed
+with "All uploads failed" and a per-file error: "Load failed
+(fieldview-storage.s3.us-east-2.amazonaws.com)". Existing image uploads work. I need
+(1) whether video is supported end-to-end on the backend, and (2) the cause of this
+S3-layer failure.
+
+Report findings only:
+
+1. FRONTEND ACCEPTANCE
+   - The upload component: what MIME types/extensions does client validation allow
+     (dropzone lists JPG/PNG/HEIC/WebP/MP4)? Confirm video/mp4 isn't silently dropped.
+   - When requesting a presigned URL, what Content-Type does the client send for a video,
+     and does it set the SAME Content-Type on the S3 PUT? A signed-vs-sent content-type
+     mismatch = S3 403 = "Load failed".
+
+2. PRESIGN ENDPOINT (server)
+   - The sign-upload handler: does it accept video MIME, or is there an image-only
+     allowlist that rejects video/mp4? What Content-Type/conditions does it bake into the
+     presigned PUT URL? Is the per-type size cap (50MB image / 500MB video) enforced
+     server-side, and does the video branch exist?
+
+3. THE "LOAD FAILED" (most likely culprit)
+   - Trace the exact PUT: signed content-type vs sent content-type, plus any x-amz-*
+     headers the sign step requires the client to echo.
+   - CORS: the bucket CORS config is AWS-side, not in the repo — flag whether the PUT
+     depends on a CORS rule allowing this origin/method/content-type for video, and note
+     exactly what to check in the AWS console. If images upload but video doesn't, a
+     content-type-conditioned signature or a CORS allowed-headers gap is the prime suspect.
+
+4. CREATE-MEDIA HANDLER (server)
+   - After the PUT, the row is registered. Does this handler accept a video mimeType or
+     validate against images only?
+
+5. MEDIA GET
+   - Does the project/media GET return video rows or filter to images? Show the query.
+
+6. POSTER + SERVING
+   - On video upload, does the server generate + store a poster/thumbnail frame, or only
+     the raw file? How is video served (raw S3/CDN object, signed URL, HLS)?
+
+OUTPUT: 2-line verdict — is video supported end-to-end (presign→store→serve→poster:
+yes/no) — and the most likely cause of the "Load failed" S3 error. Then per-section
+detail. Then STOP.
