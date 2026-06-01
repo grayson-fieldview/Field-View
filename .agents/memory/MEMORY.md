@@ -1,0 +1,1 @@
+- [Team page seat-cap gating](seat-cap-gating.md) — trial cap is enforced in 3 client gates (preflight, disabled button, inline warning), not just the API; change all in lockstep or the UI blocks before the server signal fires.

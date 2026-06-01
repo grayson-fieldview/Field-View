@@ -58,6 +58,8 @@ type SeatStatus = {
   ownerName: string | null;
   ownerId: string | null;
   trialMaxSeats: number | null;
+  trialCanUnlockSeats: boolean;
+  trialEndsAt: string | null;
 };
 
 // apiRequest throws Error("<status>: <body>"). Try to recover the JSON payload.
@@ -232,6 +234,12 @@ export default function TeamPage() {
     },
     onError: (error: Error) => {
       const body = parseApiErrorBody(error);
+      if (body?.error === "trial_needs_card") {
+        queryClient.invalidateQueries({ queryKey: ["/api/account/seats"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/invitations"] });
+        showTrialUnlockToast();
+        return;
+      }
       if (body?.error === "no_seats_available" || body?.error === "trial_cap_reached") {
         toast({
           title: "At capacity",
@@ -271,6 +279,12 @@ export default function TeamPage() {
     },
     onError: (error: Error) => {
       const body = parseApiErrorBody(error);
+      if (body?.code === "trial_needs_card") {
+        queryClient.invalidateQueries({ queryKey: ["/api/account/seats"] });
+        setSeatConfirmOpen(false);
+        showTrialUnlockToast();
+        return;
+      }
       if (body?.code === "billing_not_set_up") {
         queryClient.invalidateQueries({ queryKey: ["/api/account/seats"] });
         setSeatConfirmOpen(false);
@@ -311,9 +325,16 @@ export default function TeamPage() {
       seatStatus.trialMaxSeats != null &&
       seatStatus.used >= seatStatus.trialMaxSeats
     ) {
+      // No-card trial at its 3-seat ceiling: route to the unlock-card flow
+      // instead of the generic "upgrade" message (mirrors the backend's
+      // trial_needs_card vs trial_cap_reached split).
+      if (seatStatus.trialCanUnlockSeats) {
+        showTrialUnlockToast();
+        return;
+      }
       toast({
         title: "Trial seat limit reached",
-        description: "Trial accounts are limited to 10 seats. Upgrade to add more.",
+        description: `Trial accounts are limited to ${seatStatus.trialMaxSeats} seats. Upgrade to add more.`,
         variant: "destructive",
       });
       return;
@@ -357,6 +378,36 @@ export default function TeamPage() {
         description: ownerName
           ? `Ask ${ownerName} to set up billing for this account.`
           : "Ask the account owner to set up billing for this account.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Trialing account with no card on file: adding a card unlocks up to 10 seats.
+  // Admins get a CTA to /settings billing (which surfaces the add-card / checkout
+  // flow for trialing accounts); others are pointed at the account owner.
+  const showTrialUnlockToast = () => {
+    if (isAdmin) {
+      toast({
+        title: "Unlock more seats",
+        description: "Add a card to invite your whole crew — up to 10 seats.",
+        action: (
+          <ToastAction
+            altText="Add a card"
+            onClick={() => setLocation("/settings")}
+            data-testid="toast-action-unlock-seats"
+          >
+            Add a card
+          </ToastAction>
+        ),
+      });
+    } else {
+      const ownerName = seatStatus?.ownerName;
+      toast({
+        title: "Unlock more seats",
+        description: ownerName
+          ? `Ask ${ownerName} to add a card to invite up to 10 seats.`
+          : "Ask the account owner to add a card to invite up to 10 seats.",
         variant: "destructive",
       });
     }
@@ -568,7 +619,18 @@ export default function TeamPage() {
                   ))}
                 </div>
               </div>
-              {seatStatus?.trialMaxSeats != null &&
+              {seatStatus?.trialCanUnlockSeats &&
+                seatStatus.trialMaxSeats != null &&
+                seatStatus.used >= seatStatus.trialMaxSeats && (
+                  <p
+                    className="text-xs text-muted-foreground"
+                    data-testid="text-trial-unlock-hint"
+                  >
+                    Add a card to invite your whole crew — up to 10 seats.
+                  </p>
+                )}
+              {!seatStatus?.trialCanUnlockSeats &&
+                seatStatus?.trialMaxSeats != null &&
                 seatStatus.used >= seatStatus.trialMaxSeats && (
                   <p
                     className="text-xs text-destructive"
@@ -589,7 +651,8 @@ export default function TeamPage() {
                     addSeat.isPending ||
                     seatStatusLoading ||
                     !seatStatus ||
-                    (seatStatus?.trialMaxSeats != null &&
+                    (!seatStatus?.trialCanUnlockSeats &&
+                      seatStatus?.trialMaxSeats != null &&
                       seatStatus.used >= seatStatus.trialMaxSeats)
                   }
                   className="bg-[#F09000] hover:bg-[#d98000] text-white"
