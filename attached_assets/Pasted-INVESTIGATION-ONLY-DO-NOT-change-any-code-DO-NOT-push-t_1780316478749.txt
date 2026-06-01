@@ -1,0 +1,57 @@
+INVESTIGATION ONLY — DO NOT change any code, DO NOT push to git, DO NOT
+run migrations. Produce a written report with file:line references. Use
+`rg` for discovery, not grep.
+
+# Context
+Field View trials capture NO card at signup and do NOT auto-convert
+(trial-to-paid is an active user action). Base plan = 3 seats; additional
+seats are +$29/mo. A trial user just reported they can't add more than 3
+seats. I need to know exactly how seat caps and the card/trial lifecycle
+work TODAY before I design a change.
+
+The intended end-state (NOT yet built — do not implement, just compare
+against it in your findings):
+  (1) Seat cap should lift from 3 → 10 once a card is added during trial.
+  (2) At trial end WITH a card on file → auto-charge / convert to paid.
+  (3) Adding a card mid-trial should NOT convert immediately — the trial
+      keeps running until its original end date.
+
+# Report these, each with file:line and a quote of the relevant logic
+
+## A. Seat cap during trial
+- Find the invite/seat-add path (likely POST /api/account/seats and the
+  invite endpoint) and GET /api/account/seats.
+- What is the seat cap for a TRIALING account? Is it hard-coded to 3, to
+  10, or computed? Where does the number come from?
+- Is the cap gated on card/subscription status (e.g. stripeCustomerId or
+  stripeSubscriptionId present), or is it independent of whether a card
+  is on file?
+- Is `trialMaxSeats` (or equivalent) returned by GET /api/account/seats?
+  What value does it resolve to for a trialing account today?
+- Is the cap enforced in the BACKEND, the FRONTEND (team.tsx invite/seat
+  modal), or both? Quote each.
+
+## B. Is there a path to add a card mid-trial AT ALL?
+- Does an endpoint / UI flow exist for a trialing user to attach a payment
+  method WITHOUT fully converting? (Stripe SetupIntent, Customer Portal,
+  checkout in setup mode, etc.) If yes, where. If NO such path exists,
+  say so explicitly — that's a key finding.
+
+## C. Trial-end behavior
+- Find where trial status transitions to paid/active (webhook handlers —
+  customer.subscription.updated / invoice.paid / trial_will_end — and/or
+  any cron/scheduled job).
+- With a card on file at trial end, does the code AUTO-charge / convert,
+  or does it require an explicit user action? Quote the logic.
+- Where is the trial end date stored (accounts.trial_ends_at or similar)
+  and what reads it?
+
+## D. Does adding a card change the trial clock?
+- If the add-card path in (B) exists, does it mutate subscription_status,
+  trial_ends_at, or the Stripe subscription's trial_end? I.e. would adding
+  a card today convert the user immediately or shorten/clear the trial?
+
+# Output format
+For A–D: state CURRENT behavior, then a one-line "vs intended: matches /
+diverges — how." End with a short bulleted gap list of what would need to
+change to hit the intended end-state. No code changes — report only.
