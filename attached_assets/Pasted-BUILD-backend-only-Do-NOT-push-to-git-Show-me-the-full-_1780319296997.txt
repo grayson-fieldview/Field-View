@@ -1,0 +1,72 @@
+BUILD — backend only. Do NOT push to git. Show me the full diff and wait
+for approval. Use `rg` for discovery. NO schema changes / NO migrations /
+NO db:push — every field used here already exists. If you think a schema
+change is required, STOP and tell me instead of running anything.
+
+# Goal
+Make the trial seat cap CARD-AWARE so it returns 3 seats for a no-card
+trial and 10 seats once a card (a usable Stripe subscription) is on file.
+Today trialMaxSeats is hard-coded to 10 for any trialing account but is
+unreachable because seatCount can't be raised without a Stripe sub, so
+no-card trials are silently stuck at 3 with misleading errors.
+
+# Definition to reuse everywhere (single source of truth)
+"Card on file" / usable subscription = the SAME condition already used in
+POST /api/account/seats at routes.ts:2619-2623:
+  stripeCustomerId present AND stripeSubscriptionId present AND
+  subscriptionStatus NOT in ["canceled","incomplete_expired","unpaid"].
+Extract this into a small helper (e.g. hasUsableSubscription(acct)) and
+use it in all THREE sites below so they can't drift. If a helper is
+awkward, replicate the exact condition — but it must be identical.
+
+isTrial = subscriptionStatus === "trialing" || subscriptionStatus === "trial"
+
+# Change 1 — GET /api/account/seats  (routes.ts:2524-2578)
+Replace the hard-coded trialMaxSeats (currently line ~2557:
+  const trialMaxSeats = isTrial ? 10 : null;)
+with card-aware logic:
+  - not a trial            -> trialMaxSeats = null
+  - trial + card on file   -> trialMaxSeats = 10
+  - trial + NO card        -> trialMaxSeats = 3
+Add two fields to the JSON response (2559-2572):
+  - trialCanUnlockSeats: boolean   // isTrial && !hasCard
+  - trialEndsAt: string | null     // accounts.trialEndsAt as ISO, or null
+Leave used/total/available/overCapacity unchanged.
+
+# Change 2 — Invite path  (routes.ts:3049-3123)
+Recompute trialMaxSeats here with the SAME card-aware logic (it currently
+hard-codes 10 at ~3063). Keep both guards but make the trial guard
+card-aware and split the error kind:
+  - if isTrial && !hasCard && usage.used >= 3
+        -> 409 kind: "trial_needs_card"   (NEW — frontend will prompt card add)
+  - else if trialMaxSeats != null && usage.used >= trialMaxSeats
+        -> 409 kind: "trial_cap"          (hard 10 cap, card already on file)
+  - else if usage.used >= total
+        -> 409 kind: "no_seats"           (unchanged)
+Order matters: the trial_needs_card check must come first for no-card trials.
+
+# Change 3 — POST /api/account/seats  (routes.ts:2580-2707)
+At the billing_not_set_up branch (2624-2631): when the account isTrial and
+has no usable subscription, return code "trial_needs_card" instead of the
+generic "billing_not_set_up" (keep "billing_not_set_up" for the non-trial
+no-subscription case, e.g. a lapsed account). Same HTTP status, just a
+distinct code so the frontend can route a trialing user to the card-add
+flow. Do NOT change the trialing && desiredCount > 10 guard (2641-2649) or
+the addon math (2657).
+
+# Constraints
+- Backend only. Do not touch client/ in this prompt.
+- No new dependencies. Keep changes surgical.
+- After the diff, report the TS error count before vs after; if it moved,
+  list and categorize every new error (our code vs dep types) — don't
+  hand me "baseline."
+
+# Verification to include in your report (describe expected JSON, don't
+# need a live DB):
+For GET /api/account/seats, state the expected trialMaxSeats /
+trialCanUnlockSeats values for each case:
+  (a) trialing, stripeSubscriptionId null  -> trialMaxSeats 3,  canUnlock true
+  (b) trialing, usable sub present          -> trialMaxSeats 10, canUnlock false
+  (c) active (paid)                         -> trialMaxSeats null, canUnlock false
+And confirm the invite path returns trial_needs_card for case (a) at used=3,
+trial_cap for case (b) at used=10, no_seats for case (b) at used=3 seatCount=3.

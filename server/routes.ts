@@ -93,6 +93,23 @@ async function streamReportPdfById(id: number, res: any): Promise<void> {
   stream.pipe(res);
 }
 
+// Single source of truth for "card on file" / usable Stripe subscription.
+// Mirrors the original inline condition from POST /api/account/seats so the
+// three seat-cap sites (GET seats, POST seats, invite) can't drift.
+const BLOCKED_SUBSCRIPTION_STATUSES = ["canceled", "incomplete_expired", "unpaid"];
+function hasUsableSubscription(acct: {
+  stripeCustomerId?: string | null;
+  stripeSubscriptionId?: string | null;
+  subscriptionStatus?: string | null;
+}): boolean {
+  return (
+    !!acct.stripeCustomerId &&
+    !!acct.stripeSubscriptionId &&
+    !(acct.subscriptionStatus &&
+      BLOCKED_SUBSCRIPTION_STATUSES.includes(acct.subscriptionStatus))
+  );
+}
+
 async function verifyProjectAccess(projectId: number, accountId: string): Promise<boolean> {
   const project = await storage.getProject(projectId);
   return !!project && project.accountId === accountId;
@@ -2531,6 +2548,7 @@ export async function registerRoutes(
           subscriptionStatus: accounts.subscriptionStatus,
           stripeCustomerId: accounts.stripeCustomerId,
           stripeSubscriptionId: accounts.stripeSubscriptionId,
+          trialEndsAt: accounts.trialEndsAt,
           ownerId: accounts.ownerId,
           ownerFirstName: users.firstName,
           ownerLastName: users.lastName,
@@ -2554,7 +2572,10 @@ export async function registerRoutes(
         .join(" ") || null;
       const isTrial =
         row.subscriptionStatus === "trialing" || row.subscriptionStatus === "trial";
-      const trialMaxSeats = isTrial ? 10 : null;
+      const hasCard = hasUsableSubscription(row);
+      // Card-aware trial cap: no card -> 3, card on file -> 10, non-trial -> null.
+      const trialMaxSeats = isTrial ? (hasCard ? 10 : 3) : null;
+      const trialCanUnlockSeats = isTrial && !hasCard;
 
       return res.json({
         used,
@@ -2570,6 +2591,8 @@ export async function registerRoutes(
         ownerName,
         ownerId: row.ownerId ?? null,
         trialMaxSeats,
+        trialCanUnlockSeats,
+        trialEndsAt: row.trialEndsAt ? row.trialEndsAt.toISOString() : null,
       });
     } catch (error) {
       console.error("Error fetching seat usage:", error);
@@ -2615,13 +2638,21 @@ export async function registerRoutes(
       // new seat line-item to. Trialing / active / past_due all support
       // subscription.update — Stripe just modifies the sub and (for trialing)
       // bills the new line at trial end alongside the base subscription.
-      const blockedSubscriptionStatuses = ["canceled", "incomplete_expired", "unpaid"];
-      const hasWorkingSubscription =
-        !!acc.stripeCustomerId &&
-        !!acc.stripeSubscriptionId &&
-        !(acc.subscriptionStatus &&
-          blockedSubscriptionStatuses.includes(acc.subscriptionStatus));
+      const hasWorkingSubscription = hasUsableSubscription(acc);
       if (!hasWorkingSubscription || !acc.stripeCustomerId || !acc.stripeSubscriptionId) {
+        const isTrialAcct =
+          acc.subscriptionStatus === "trialing" || acc.subscriptionStatus === "trial";
+        // A trialing account with no usable subscription needs a card to unlock
+        // seats — route it to the card-add flow with a distinct code. Lapsed /
+        // non-trial accounts keep the generic billing_not_set_up code.
+        if (isTrialAcct) {
+          return res.status(400).json({
+            code: "trial_needs_card",
+            action: "setup_billing",
+            message:
+              "Add a payment method to unlock up to 10 seats during your trial.",
+          });
+        }
         return res.status(400).json({
           code: "billing_not_set_up",
           action: "setup_billing",
@@ -3037,6 +3068,7 @@ export async function registerRoutes(
       type TxResult =
         | { kind: "ok"; invitation: typeof invitations.$inferSelect }
         | { kind: "dup_invite" }
+        | { kind: "trial_needs_card"; used: number }
         | { kind: "trial_cap"; trialMaxSeats: number; used: number }
         | {
             kind: "no_seats";
@@ -3051,6 +3083,8 @@ export async function registerRoutes(
           .select({
             seatCount: accounts.seatCount,
             subscriptionStatus: accounts.subscriptionStatus,
+            stripeCustomerId: accounts.stripeCustomerId,
+            stripeSubscriptionId: accounts.stripeSubscriptionId,
           })
           .from(accounts)
           .where(eq(accounts.id, currentUser.accountId))
@@ -3060,10 +3094,18 @@ export async function registerRoutes(
         const isTrial =
           acct?.subscriptionStatus === "trialing" ||
           acct?.subscriptionStatus === "trial";
-        const trialMaxSeats = isTrial ? 10 : null;
+        const hasCard = acct ? hasUsableSubscription(acct) : false;
+        // Card-aware trial cap: no card -> 3, card on file -> 10.
+        const trialMaxSeats = isTrial ? (hasCard ? 10 : 3) : null;
 
         const usage = await computeSeatUsage(tx, currentUser.accountId);
 
+        // No-card trial at its 3-seat ceiling: prompt to add a card (must be
+        // checked before the generic trial_cap so the frontend can route to
+        // the card-add flow instead of an "upgrade" message).
+        if (isTrial && !hasCard && usage.used >= 3) {
+          return { kind: "trial_needs_card", used: usage.used };
+        }
         if (trialMaxSeats != null && usage.used >= trialMaxSeats) {
           return { kind: "trial_cap", trialMaxSeats, used: usage.used };
         }
@@ -3102,6 +3144,14 @@ export async function registerRoutes(
 
       if (result.kind === "dup_invite") {
         return res.status(409).json({ message: "An invitation has already been sent to this email" });
+      }
+      if (result.kind === "trial_needs_card") {
+        return res.status(409).json({
+          error: "trial_needs_card",
+          message: "Add a payment method to unlock up to 10 seats during your trial.",
+          seatsAvailable: 0,
+          suggestion: "Add a card to invite more team members",
+        });
       }
       if (result.kind === "trial_cap") {
         return res.status(409).json({
