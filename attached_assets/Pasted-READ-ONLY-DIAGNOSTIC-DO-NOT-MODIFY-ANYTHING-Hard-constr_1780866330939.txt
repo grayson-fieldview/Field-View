@@ -1,0 +1,52 @@
+READ-ONLY DIAGNOSTIC — DO NOT MODIFY ANYTHING.
+
+Hard constraints for this entire task:
+- Do NOT write, edit, or create any files.
+- Do NOT run any database migrations or queries against the production database.
+- Do NOT write anything to HubSpot.
+- Do NOT change schema.
+- This is read-only reconnaissance. Inspect code/schema files and report findings only.
+- Use `rg` for all code search (not grep).
+
+Produce a single findings report covering these six items:
+
+1. HUBSPOT KEY + PIPELINE VALIDATION
+   - Confirm HUBSPOT_SERVICE_KEY exists in env.
+   - Make ONE read-only call: GET https://api.hubapi.com/crm/v3/pipelines/deals
+     with header "Authorization: Bearer $HUBSPOT_SERVICE_KEY".
+   - Report: the deal pipeline's id and label, and for every stage its id,
+     label, and displayOrder. If the call fails, report the exact status code
+     and error (this tells us if scopes are wrong).
+
+2. ACCOUNT / OWNERSHIP MODEL
+   - From the schema (shared/schema.ts or wherever it lives), report the
+     accounts/companies table and the users table.
+   - Specifically: how is an account's OWNER / first user identified?
+     (owner_id? created_by? a role column on users? account_id FK + a flag?)
+     Quote the exact relevant column definitions.
+
+3. SIGNUP vs INVITE CODE PATHS
+   - Find the route/handler that creates a NEW account (self-serve signup) and
+     the one that handles INVITE acceptance (a user joining an existing account).
+   - Report file paths + function names for each, and confirm they are distinct
+     code paths.
+   - List the fields captured at signup (company name, email, phone, SMS-consent
+     flag, anything else).
+
+4. ACTIVATION DATA AVAILABILITY
+   - For each of these, report the table and the column/FK that ties a row to an
+     account: projects, photos, users (active seats), reports, tasks, checklists.
+   - State clearly whether "tasks" and "checklists" are SEPARATE entities or the
+     same thing.
+
+5. TRIAL WINDOW
+   - How is the 14-day trial period represented? (trial_start/trial_end columns,
+     or computed from created_at + 14 days?) Report the exact columns.
+
+6. EXISTING INTEGRATION CODE
+   - rg for any existing HubSpot references in the codebase.
+   - rg for any lingering Customer.io references (we dropped Customer.io — flag
+     anything still calling it).
+
+End the report with a list of anything ambiguous, missing, or that you couldn't
+determine. Do not propose or write any code.
