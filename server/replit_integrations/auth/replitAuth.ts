@@ -34,6 +34,7 @@ import { csrfGuard } from "../../middleware/csrf";
 import { touchLastActive } from "../../middleware/touch-last-active";
 import { attributionCapture } from "../../middleware/attribution";
 import { identifyUser, trackEvent, CIO_EVENTS } from "../../services/customerio";
+import { syncNewAccountToHubSpot } from "../../services/hubspot";
 
 function getBaseUrl(req?: Request) {
   if (process.env.OAUTH_BASE_URL) return process.env.OAUTH_BASE_URL;
@@ -727,6 +728,17 @@ export async function setupAuth(app: Express) {
           trackEvent(user.id, CIO_EVENTS.SIGNED_UP, { via: "trial" }).catch((err) =>
             console.error("[customerio] track signed_up (trial) failed:", err),
           );
+          // HubSpot signup sync — NEW-ACCOUNT path only (this req.login block is
+          // the no-inviteToken/trial branch). Fire-and-forget ALONGSIDE the CIO
+          // calls above; the helper is non-fatal and never throws into the 201.
+          if (!inviteToken && user.email) {
+            syncNewAccountToHubSpot({
+              email: user.email,
+              accountId,
+              accountName: companyName.trim().slice(0, 200),
+              trialEndsAt: initialTrialEndsAt,
+            });
+          }
           return res.status(201).json(safeUserWithBilling);
         });
       });

@@ -9,6 +9,7 @@ import { accounts, users } from "@shared/models/auth";
 import { eq } from "drizzle-orm";
 import { INDUSTRY_VALUES, COMPANY_SIZE_VALUES } from "@shared/constants";
 import { sendEmailVerificationEmail } from "../../services/email";
+import { syncProfileToHubSpot } from "../../services/hubspot";
 
 export function registerAuthRoutes(app: Express): void {
   app.get("/api/auth/user", isAuthenticated, async (req: any, res) => {
@@ -144,6 +145,22 @@ export function registerAuthRoutes(app: Express): void {
         } catch (emailErr) {
           console.error("[auth/me] verification email send failed:", emailErr);
         }
+      }
+
+      // HubSpot profile sync (signup step 2). Fire-and-forget + non-fatal —
+      // refreshes Contact name/phone and Company type/size. Associations already
+      // exist from the new-account HubSpot hook. `industry` is the app's
+      // company-type field; companySize maps to numberofemployees.
+      if (updated.email) {
+        syncProfileToHubSpot({
+          email: updated.email,
+          accountId: updated.accountId,
+          firstName: updated.firstName,
+          lastName: updated.lastName,
+          phone: updated.phone,
+          companyType: accountUpdate.industry ?? undefined,
+          companySize: accountUpdate.companySize ?? undefined,
+        });
       }
 
       const { password: _, ...safeUser } = updated;

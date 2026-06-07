@@ -1,0 +1,48 @@
+BUILD — HubSpot signup sync (Phase 1). Implement, then show me the full diff. Do NOT push or promote.
+
+CONTEXT
+- HUBSPOT_SERVICE_KEY is in Replit Secrets + Vercel.
+- Mirror the structure/patterns of server/services/customerio.ts (singleton client,
+  deferToVercel/waitUntil wrapper). HubSpot runs ALONGSIDE Customer.io — do NOT remove
+  or modify any Customer.io code.
+- Deal pipeline = "default"; Trial Started stage ID = "appointmentscheduled".
+- Use `rg` for code discovery.
+
+HARD GUARDRAILS (non-negotiable)
+1. The sync must be FULLY fire-and-forget and NON-FATAL: wrap every call in the existing
+   deferToVercel/waitUntil helper, catch all errors, log via Sentry, and NEVER throw into
+   the signup/auth request path. A HubSpot outage must never block a signup.
+2. Fire ONLY on NEW-ACCOUNT creation — the no-inviteToken branch of POST /api/register in
+   server/replit_integrations/auth/replitAuth.ts. Do NOT fire on the inviteToken branch,
+   applyInvitationAcceptance(), createInvitedUser(), or any invite path.
+3. No schema migration. Existing columns + HubSpot custom properties only.
+4. Idempotent: never create duplicate Contacts, Companies, or Deals.
+
+CREATE server/services/hubspot.ts
+- Singleton client authenticating with Bearer HUBSPOT_SERVICE_KEY.
+- Helpers (all wrapped, all non-fatal):
+  - upsertContactByEmail(email, props)        // search by email, create or update
+  - upsertCompanyByAccountId(accountId, props)// search Companies by fieldview_account_id
+  - upsertDealByAccountId(accountId, props)    // search Deals by fieldview_account_id;
+                                               // create at "default"/"appointmentscheduled"
+                                               // if none, else no-op
+  - associate(contactId, companyId, dealId)    // Contact↔Company, Deal↔Contact, Deal↔Company
+
+HOOK 1 — new-account creation (no-inviteToken branch)
+After the account + admin user are created, fire-and-forget, ALONGSIDE the existing
+Customer.io signed_up calls (do not replace them):
+  - upsertContactByEmail(user.email, { email, trial_end_date: account.trialEndsAt })
+  - upsertCompanyByAccountId(account.id, { name: account.name, fieldview_account_id: account.id })
+  - upsertDealByAccountId(account.id, { dealname: account.name + " — Trial",
+      fieldview_account_id: account.id, pipeline: "default", dealstage: "appointmentscheduled" })
+  - associate the three.
+
+HOOK 2 — profile completion (signup step 2)
+Find the handler that saves first name, last name, phone, company type, company size and
+sets profile_completed_at. There, fire-and-forget:
+  - upsertContactByEmail(user.email, { firstname, lastname, phone })
+  - upsertCompanyByAccountId(account.id, { fieldview_company_type: <type>, numberofemployees: <size> })
+
+OUTPUT
+- Implement, then print the new file, every modified file's diff, and the exact insertion
+  points (file:line). List any HubSpot custom properties required. Do NOT git push.
