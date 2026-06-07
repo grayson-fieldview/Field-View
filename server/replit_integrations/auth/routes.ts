@@ -151,16 +151,32 @@ export function registerAuthRoutes(app: Express): void {
       // refreshes Contact name/phone and Company type/size. Associations already
       // exist from the new-account HubSpot hook. `industry` is the app's
       // company-type field; companySize maps to numberofemployees.
-      if (updated.email) {
-        syncProfileToHubSpot({
-          email: updated.email,
-          accountId: updated.accountId,
-          firstName: updated.firstName,
-          lastName: updated.lastName,
-          phone: updated.phone,
-          companyType: accountUpdate.industry ?? undefined,
-          companySize: accountUpdate.companySize ?? undefined,
-        });
+      //
+      // OWNER-ONLY GATE: only the account owner (the self-serve admin who created
+      // the account) is synced. Invited/standard users — and any account whose
+      // owner_id is null — never reach HubSpot, so invitees are never created as
+      // Contacts. The owner lookup is wrapped so a DB hiccup can't break the PATCH.
+      try {
+        if (updated.email && updated.accountId) {
+          const [acct] = await db
+            .select({ ownerId: accounts.ownerId })
+            .from(accounts)
+            .where(eq(accounts.id, updated.accountId))
+            .limit(1);
+          if (acct?.ownerId === updated.id) {
+            syncProfileToHubSpot({
+              email: updated.email,
+              accountId: updated.accountId,
+              firstName: updated.firstName,
+              lastName: updated.lastName,
+              phone: updated.phone,
+              companyType: accountUpdate.industry ?? undefined,
+              companySize: accountUpdate.companySize ?? undefined,
+            });
+          }
+        }
+      } catch (hubspotGateErr) {
+        console.error("[auth/me] HubSpot owner-gate lookup failed:", hubspotGateErr);
       }
 
       const { password: _, ...safeUser } = updated;

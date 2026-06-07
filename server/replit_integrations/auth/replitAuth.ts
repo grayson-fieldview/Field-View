@@ -623,6 +623,14 @@ export async function setupAuth(app: Express) {
         profileCompletedAt: inviteToken ? new Date() : null,
       });
 
+      // New self-serve account: stamp its owner as the creating admin. Done here
+      // (not at the accounts insert above) because the user id only exists after
+      // upsertUser. Owner identity gates the HubSpot profile sync in
+      // PATCH /api/auth/me so invited users never become HubSpot contacts.
+      if (!inviteToken) {
+        await db.update(accounts).set({ ownerId: user.id }).where(eq(accounts.id, accountId));
+      }
+
       // S46 — persist marketing attribution onto the freshly-created user
       // row. Reads first-touch UTM/fbclid/referrer from req.session.attribution
       // (populated by attributionCapture middleware on any prior landing-page
