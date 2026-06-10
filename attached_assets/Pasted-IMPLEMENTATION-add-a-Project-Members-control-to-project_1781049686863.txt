@@ -1,0 +1,25 @@
+IMPLEMENTATION — add a Project Members control to project detail. Surgical scope. Show me the diff before pushing. Do NOT push.
+
+Goal: wire a UI to the existing, fully-working project-assignments API so an admin/manager can grant/revoke a user's access to a project. This is what lets a Restricted user reach a project they didn't create. Backend is complete — do NOT touch server endpoints or schema.
+
+DO NOT touch: the Users/Groups photo-filter buttons, the existing header avatar stack rendering, project description, tasks, or any layout/rail restructure.
+
+Endpoints (already exist, server/routes.ts):
+- GET    /api/projects/:id/assignments → [{id, userId, firstName, lastName, email, profileImageUrl}]
+- POST   /api/projects/:id/assignments  body { userId } → 201; 400 missing; 404 not-in-account; 409 already-assigned
+- DELETE /api/projects/:id/assignments/:userId → { message }
+Writes are gated requireAdminOrManager.
+
+Build (client/src/pages/project-detail.tsx):
+1. Near the header avatar cluster (~lines 1092-1111), add a small "＋ Manage" affordance (or make the cluster a trigger). Render the trigger ONLY for admin/manager — find how the current user's role is read elsewhere in this file and mirror the server gate.
+2. On open, a Members panel using the project's existing Dialog/Popover primitive (match established patterns):
+   - Lists current assignees via useQuery(["/api/projects", id, "assignments"]).
+   - "Add member" picker populated from the EXISTING account-users query that team.tsx uses — reuse it, do not invent a new endpoint. Exclude already-assigned users.
+   - Add → apiRequest("POST", `/api/projects/${id}/assignments`, { userId }); handle 409 silently (already a member, no error toast).
+   - Each assignee gets a remove → apiRequest("DELETE", `/api/projects/${id}/assignments/${userId}`).
+   - On any success, invalidate ["/api/projects", id, "assignments"] and ["/api/projects", id].
+3. Empty state: existing projects have ZERO assignments (assignment was never possible before), so the panel starts empty — show a clear "No members assigned yet" state.
+
+Do NOT change the header avatar stack's data source (it's derived from photo uploaders — leave it as-is). The Members panel is the membership source of truth for now.
+
+After building: show me the full diff. Don't push. I'll review, then test by assigning a Restricted user and confirming they can load the project.

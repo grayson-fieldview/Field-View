@@ -65,6 +65,8 @@ import {
   SplitSquareHorizontal,
   MoreHorizontal,
   Users,
+  UserPlus,
+  Loader2,
   Info,
   ClipboardCheck,
   FileBarChart,
@@ -97,8 +99,18 @@ import { LayoutTemplate } from "lucide-react";
 import ReportFormDialog from "@/components/report-form-dialog";
 import { AddressAutocomplete } from "@/components/address-autocomplete";
 import type { Project, Media, Comment, Task, Checklist, ChecklistItem, Report, ChecklistTemplate, ChecklistTemplateItem, MediaAnnotation, AnnotationStroke } from "@shared/schema";
+import type { User } from "@shared/models/auth";
 import { AnnotationOverlay } from "@/lib/annotation-svg";
 import { UploadPhotosDialog } from "@/components/upload-photos-dialog";
+
+type ProjectMember = {
+  id: number;
+  userId: string;
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
+  profileImageUrl: string | null;
+};
 
 type ChecklistWithDetails = Checklist & {
   assignedTo?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null };
@@ -359,6 +371,57 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const isMobile = useIsMobile();
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
   const [pendingCameraFiles, setPendingCameraFiles] = useState<File[] | null>(null);
+  const [membersOpen, setMembersOpen] = useState(false);
+  const [addUserId, setAddUserId] = useState<string>("");
+
+  const canManageMembers = user?.role === "admin" || user?.role === "manager";
+
+  const { data: members = [], isLoading: membersLoading } = useQuery<ProjectMember[]>({
+    queryKey: ["/api/projects", id, "assignments"],
+    enabled: membersOpen && canManageMembers,
+  });
+
+  const { data: accountUsers = [] } = useQuery<User[]>({
+    queryKey: ["/api/users"],
+    enabled: membersOpen && canManageMembers,
+  });
+
+  const addMember = useMutation({
+    mutationFn: async (userId: string) => {
+      await apiRequest("POST", `/api/projects/${id}/assignments`, { userId });
+    },
+    onSuccess: () => {
+      setAddUserId("");
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", id, "assignments"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
+    },
+    onError: (error: Error) => {
+      // 409 = already a member; treat as a no-op success (refresh, no toast).
+      if (error.message.startsWith("409")) {
+        setAddUserId("");
+        queryClient.invalidateQueries({ queryKey: ["/api/projects", id, "assignments"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
+        return;
+      }
+      toast({ title: "Failed to add member", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const removeMember = useMutation({
+    mutationFn: async (userId: string) => {
+      await apiRequest("DELETE", `/api/projects/${id}/assignments/${userId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", id, "assignments"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to remove member", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const assignedUserIds = new Set(members.map((m) => m.userId));
+  const addableUsers = accountUsers.filter((u) => !assignedUserIds.has(u.id));
 
   const { data: projectAnnotations = [] } = useQuery<MediaAnnotation[]>({
     queryKey: ["/api/projects", id, "annotations"],
@@ -1109,6 +1172,21 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                     </div>
                   </>
                 )}
+                {canManageMembers && (
+                  <>
+                    <div className="w-px h-8 bg-border hidden sm:block" />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-1.5"
+                      onClick={() => setMembersOpen(true)}
+                      data-testid="button-manage-members"
+                    >
+                      <UserPlus className="h-3.5 w-3.5" />
+                      <span className="hidden sm:inline">Manage</span>
+                    </Button>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -1138,6 +1216,96 @@ export default function ProjectDetailPage({ id }: { id: string }) {
           </div>
         </div>
       </div>
+
+      <Dialog open={membersOpen} onOpenChange={setMembersOpen}>
+        <DialogContent className="sm:max-w-md" data-testid="dialog-members">
+          <DialogHeader>
+            <DialogTitle>Project Members</DialogTitle>
+            <DialogDescription>
+              Grant or revoke a teammate's access to this project. Restricted users can only open projects they're assigned to.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex items-end gap-2">
+            <div className="flex-1 min-w-0">
+              <Select value={addUserId} onValueChange={setAddUserId}>
+                <SelectTrigger data-testid="select-add-member">
+                  <SelectValue placeholder="Add a member..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {addableUsers.length === 0 ? (
+                    <div className="px-2 py-1.5 text-sm text-muted-foreground" data-testid="text-no-addable-users">
+                      No users available
+                    </div>
+                  ) : (
+                    addableUsers.map((u) => (
+                      <SelectItem key={u.id} value={u.id} data-testid={`option-user-${u.id}`}>
+                        {u.firstName || u.lastName ? `${u.firstName ?? ""} ${u.lastName ?? ""}`.trim() : u.email}
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button
+              onClick={() => addUserId && addMember.mutate(addUserId)}
+              disabled={!addUserId || addMember.isPending}
+              data-testid="button-add-member"
+            >
+              {addMember.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Add"}
+            </Button>
+          </div>
+
+          <div className="mt-2 max-h-72 overflow-auto -mx-1 px-1">
+            {membersLoading ? (
+              <div className="flex items-center justify-center py-8 text-muted-foreground" data-testid="status-members-loading">
+                <Loader2 className="h-5 w-5 animate-spin" />
+              </div>
+            ) : members.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-8 text-center" data-testid="text-no-members">
+                <Users className="h-8 w-8 text-muted-foreground/40 mb-2" />
+                <p className="text-sm font-medium">No members assigned yet</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Add a teammate above to give them access.</p>
+              </div>
+            ) : (
+              <ul className="space-y-1">
+                {members.map((m) => (
+                  <li
+                    key={m.id}
+                    className="flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-muted/50"
+                    data-testid={`row-member-${m.userId}`}
+                  >
+                    <Avatar className="h-8 w-8">
+                      <AvatarImage src={m.profileImageUrl || undefined} />
+                      <AvatarFallback className="text-[10px] bg-[#F09000]/10 text-[#F09000]">
+                        {getInitials(m.firstName, m.lastName)}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium truncate" data-testid={`text-member-name-${m.userId}`}>
+                        {m.firstName || m.lastName ? `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() : m.email}
+                      </p>
+                      {(m.firstName || m.lastName) && m.email && (
+                        <p className="text-xs text-muted-foreground truncate">{m.email}</p>
+                      )}
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+                      onClick={() => removeMember.mutate(m.userId)}
+                      disabled={removeMember.isPending}
+                      data-testid={`button-remove-member-${m.userId}`}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <div className="flex-1 flex flex-col min-h-0">
         <div className="overflow-auto flex-1">
