@@ -449,6 +449,48 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     queryKey: ["/api/projects", id],
   });
 
+  // Prune selection when filters change: any selected photo that is no longer
+  // visible must drop out, so bulk Delete/Download/Share can never target a
+  // hidden photo. The visibility predicate below mirrors the `filteredMedia`
+  // filter in the render body — keep the two in sync if the filter changes.
+  useEffect(() => {
+    if (!data) return;
+    const startBound = filterStartDate
+      ? new Date(filterStartDate.getFullYear(), filterStartDate.getMonth(), filterStartDate.getDate(), 0, 0, 0, 0)
+      : undefined;
+    const endBound = filterEndDate
+      ? new Date(filterEndDate.getFullYear(), filterEndDate.getMonth(), filterEndDate.getDate(), 23, 59, 59, 999)
+      : undefined;
+    const visibleIds = new Set(
+      data.media
+        .filter((m) => {
+          if (startBound || endBound) {
+            const ts = new Date(m.createdAt);
+            if (startBound && ts < startBound) return false;
+            if (endBound && ts > endBound) return false;
+          }
+          if (filterUserIds.length > 0) {
+            if (!m.uploadedById || !filterUserIds.includes(m.uploadedById)) return false;
+          }
+          if (filterRoles.length > 0 && userRoleMap.size > 0) {
+            const role = userRoleMap.get(m.uploadedById ?? "");
+            if (!role || !filterRoles.includes(role)) return false;
+          }
+          return true;
+        })
+        .map((m) => m.id),
+    );
+    setSelectedIds((prev) => {
+      let changed = false;
+      const next = new Set<number>();
+      prev.forEach((sid) => {
+        if (visibleIds.has(sid)) next.add(sid);
+        else changed = true;
+      });
+      return changed ? next : prev;
+    });
+  }, [filterStartDate, filterEndDate, filterUserIds, filterRoles, userRoleMap, data]);
+
   const { data: checklistTemplates } = useQuery<(ChecklistTemplate & { itemCount: number })[]>({
     queryKey: ["/api/checklist-templates"],
   });
@@ -1394,8 +1436,8 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                     <span className="text-sm font-medium" data-testid="text-selected-count">
                       {selectedIds.size} Selected
                     </span>
-                    <Button variant="outline" size="sm" onClick={() => toggleSelectAll(projectMedia)} data-testid="button-select-all">
-                      {selectedIds.size === projectMedia.length ? "Deselect All" : "Select All"}
+                    <Button variant="outline" size="sm" onClick={() => toggleSelectAll(filteredMedia)} data-testid="button-select-all">
+                      {filteredMedia.length > 0 && selectedIds.size === filteredMedia.length ? "Deselect All" : "Select All"}
                     </Button>
                   </div>
                   <div className="flex items-center gap-2">
@@ -1675,10 +1717,10 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                       Compare
                     </Button>
                   )}
-                  {selectedIds.size === 0 && !compareMode && projectMedia.length > 0 && (
+                  {selectedIds.size === 0 && !compareMode && filteredMedia.length > 0 && (
                     <Button
                       variant="outline"
-                      onClick={() => setSelectedIds(new Set(projectMedia.map(m => m.id)))}
+                      onClick={() => setSelectedIds(new Set(filteredMedia.map(m => m.id)))}
                       data-testid="button-select-all-toolbar"
                     >
                       <Check className="h-4 w-4 mr-2" />
