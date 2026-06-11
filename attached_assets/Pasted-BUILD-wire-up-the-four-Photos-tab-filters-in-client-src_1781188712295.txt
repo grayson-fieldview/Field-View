@@ -1,0 +1,31 @@
+BUILD — wire up the four Photos-tab filters in client/src/pages/project-detail.tsx. Client-side only; no backend/schema changes. Show me the diff when done — do NOT commit or push.
+Behavior:
+
+Start Date / End Date — inclusive date-range filter on media.createdAt.
+Users — multi-select of users who actually uploaded photos in this project; show only their photos.
+Groups — multi-select of roles: admin, manager, standard, restricted (hardcode these four); show photos uploaded by users whose role is selected.
+Filters combine with AND. Empty selection on a dimension = no filtering for that dimension.
+
+Requirements:
+
+State. Add: filterStartDate: Date | undefined, filterEndDate: Date | undefined, filterUserIds: string[], filterRoles: string[].
+Role data. Ungate the existing /api/users query (currently enabled: membersOpen && canManageMembers at ~line 384) → set enabled: true. Build const userRoleMap = useMemo(() => new Map(accountUsers.map(u => [u.id, u.role])), [accountUsers]). If userRoleMap.size === 0 while filterRoles.length > 0, skip the role filter entirely — never hide all photos.
+Users options from photos, not the account list. Derive distinct uploadedById values present in projectMedia, with name from each photo's uploadedBy (firstName + lastName, fallback "Unknown").
+Apply BEFORE grouping. Compute filteredMedia from projectMedia, then pass filteredMedia to groupMediaByDate at ~line 871 (replace the projectMedia arg). Logic:
+
+Date: compare new Date(m.createdAt) against local-tz boundaries — start = local midnight of filterStartDate (new Date(y,mo,d,0,0,0,0)), end = local end-of-day of filterEndDate (new Date(y,mo,d,23,59,59,999)). Must align with the local-tz headers from groupMediaByDate (toLocaleDateString) — no off-by-one.
+Users: if filterUserIds.length, keep only m.uploadedById && filterUserIds.includes(m.uploadedById).
+Roles: if filterRoles.length && userRoleMap.size > 0, keep only where userRoleMap.get(m.uploadedById ?? "") is in filterRoles.
+
+
+UI — replace the four static <Button>s at ~lines 1415-1429, keeping the same data-testids and variant/size styling:
+
+Start/End Date: mirror whatever date-picker pattern the Daily Log's logDate already uses, for consistency. Button label shows the picked date when set, else "Start Date"/"End Date".
+Users / Groups: use the project's existing DropdownMenu component (same one the "⋯" menu uses) with checkbox items. Label shows count when active — e.g. "Users (2)", "Groups (1)".
+Each dropdown gets a "Clear" item, plus one "Clear filters" affordance that resets all four, shown only when any filter is active.
+
+
+Empty result. If filteredMedia is empty while filters are active, render "No photos match these filters" in the gallery area instead of a blank grid.
+
+Leave groupMediaByDate, the header 41 PHOTOS / Photos 41 counts, projectUsers, the avatar stack, and Compare/Select All/Add Photos untouched. Use rg to confirm the DropdownMenu / date-picker imports before writing.
+Show the full diff (git diff --stat + changed hunks). Do not commit or push.

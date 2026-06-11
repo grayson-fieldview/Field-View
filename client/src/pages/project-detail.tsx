@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
   DropdownMenuSeparator,
+  DropdownMenuCheckboxItem,
+  DropdownMenuLabel,
 } from "@/components/ui/dropdown-menu";
 import {
   AlertDialog,
@@ -374,6 +376,11 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const [membersOpen, setMembersOpen] = useState(false);
   const [addUserId, setAddUserId] = useState<string>("");
 
+  const [filterStartDate, setFilterStartDate] = useState<Date | undefined>(undefined);
+  const [filterEndDate, setFilterEndDate] = useState<Date | undefined>(undefined);
+  const [filterUserIds, setFilterUserIds] = useState<string[]>([]);
+  const [filterRoles, setFilterRoles] = useState<string[]>([]);
+
   const canManageMembers = user?.role === "admin" || user?.role === "manager";
 
   const { data: members = [], isLoading: membersLoading } = useQuery<ProjectMember[]>({
@@ -383,8 +390,13 @@ export default function ProjectDetailPage({ id }: { id: string }) {
 
   const { data: accountUsers = [] } = useQuery<User[]>({
     queryKey: ["/api/users"],
-    enabled: membersOpen && canManageMembers,
+    enabled: true,
   });
+
+  const userRoleMap = useMemo(
+    () => new Map(accountUsers.map((u) => [u.id, u.role])),
+    [accountUsers],
+  );
 
   const addMember = useMutation({
     mutationFn: async (userId: string) => {
@@ -868,7 +880,33 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   }
 
   const { project, media: projectMedia, tasks: projectTasks, checklists: projectChecklists, reports: projectReports } = data;
-  const groupedMedia = groupMediaByDate(projectMedia);
+
+  const filterStartBound = filterStartDate
+    ? new Date(filterStartDate.getFullYear(), filterStartDate.getMonth(), filterStartDate.getDate(), 0, 0, 0, 0)
+    : undefined;
+  const filterEndBound = filterEndDate
+    ? new Date(filterEndDate.getFullYear(), filterEndDate.getMonth(), filterEndDate.getDate(), 23, 59, 59, 999)
+    : undefined;
+  const filtersActive =
+    !!filterStartDate || !!filterEndDate || filterUserIds.length > 0 || filterRoles.length > 0;
+
+  const filteredMedia = projectMedia.filter((m) => {
+    if (filterStartBound || filterEndBound) {
+      const ts = new Date(m.createdAt);
+      if (filterStartBound && ts < filterStartBound) return false;
+      if (filterEndBound && ts > filterEndBound) return false;
+    }
+    if (filterUserIds.length > 0) {
+      if (!m.uploadedById || !filterUserIds.includes(m.uploadedById)) return false;
+    }
+    if (filterRoles.length > 0 && userRoleMap.size > 0) {
+      const role = userRoleMap.get(m.uploadedById ?? "");
+      if (!role || !filterRoles.includes(role)) return false;
+    }
+    return true;
+  });
+
+  const groupedMedia = groupMediaByDate(filteredMedia);
   const annotationsByMedia = projectAnnotationsMap;
 
   const uniqueUsers = new Map<string, { firstName: string | null; lastName: string | null; profileImageUrl: string | null }>();
@@ -878,6 +916,41 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     }
   });
   const projectUsers = Array.from(uniqueUsers.values());
+
+  const uploaderOptions = Array.from(uniqueUsers.entries()).map(([userId, u]) => ({
+    id: userId,
+    name: `${u.firstName ?? ""} ${u.lastName ?? ""}`.trim() || "Unknown",
+  }));
+  const ROLE_OPTIONS: { value: string; label: string }[] = [
+    { value: "admin", label: "Admin" },
+    { value: "manager", label: "Manager" },
+    { value: "standard", label: "Standard" },
+    { value: "restricted", label: "Restricted" },
+  ];
+
+  const toggleUserFilter = (userId: string) =>
+    setFilterUserIds((prev) =>
+      prev.includes(userId) ? prev.filter((u) => u !== userId) : [...prev, userId],
+    );
+  const toggleRoleFilter = (role: string) =>
+    setFilterRoles((prev) =>
+      prev.includes(role) ? prev.filter((r) => r !== role) : [...prev, role],
+    );
+  const clearAllFilters = () => {
+    setFilterStartDate(undefined);
+    setFilterEndDate(undefined);
+    setFilterUserIds([]);
+    setFilterRoles([]);
+  };
+  const toDateInputValue = (d: Date | undefined) =>
+    d ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}` : "";
+  const parseDateInput = (v: string): Date | undefined => {
+    if (!v) return undefined;
+    const [y, mo, d] = v.split("-").map(Number);
+    return new Date(y, mo - 1, d);
+  };
+  const formatFilterDate = (d: Date) =>
+    d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 
   const tabs: { key: DetailTab; label: string; count: number }[] = [
     { key: "photos", label: "Photos", count: projectMedia.length },
@@ -1414,18 +1487,149 @@ export default function ProjectDetailPage({ id }: { id: string }) {
 
               <div className="flex flex-wrap items-center justify-between gap-3 overflow-hidden">
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button variant="outline" size="sm" data-testid="button-filter-start-date">
-                    Start Date
-                  </Button>
-                  <Button variant="outline" size="sm" data-testid="button-filter-end-date">
-                    End Date
-                  </Button>
-                  <Button variant="outline" size="sm" className="hidden sm:inline-flex" data-testid="button-filter-users">
-                    Users
-                  </Button>
-                  <Button variant="outline" size="sm" className="hidden sm:inline-flex" data-testid="button-filter-groups">
-                    Groups
-                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" size="sm" data-testid="button-filter-start-date">
+                        <Calendar className="h-3.5 w-3.5 mr-2" />
+                        {filterStartDate ? formatFilterDate(filterStartDate) : "Start Date"}
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="p-2">
+                      <Input
+                        type="date"
+                        value={toDateInputValue(filterStartDate)}
+                        max={toDateInputValue(filterEndDate)}
+                        onChange={(e) => setFilterStartDate(parseDateInput(e.target.value))}
+                        className="w-[160px]"
+                        data-testid="input-filter-start-date"
+                      />
+                      {filterStartDate && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            onClick={() => setFilterStartDate(undefined)}
+                            data-testid="button-clear-start-date"
+                          >
+                            Clear
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" size="sm" data-testid="button-filter-end-date">
+                        <Calendar className="h-3.5 w-3.5 mr-2" />
+                        {filterEndDate ? formatFilterDate(filterEndDate) : "End Date"}
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="p-2">
+                      <Input
+                        type="date"
+                        value={toDateInputValue(filterEndDate)}
+                        min={toDateInputValue(filterStartDate)}
+                        onChange={(e) => setFilterEndDate(parseDateInput(e.target.value))}
+                        className="w-[160px]"
+                        data-testid="input-filter-end-date"
+                      />
+                      {filterEndDate && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            onClick={() => setFilterEndDate(undefined)}
+                            data-testid="button-clear-end-date"
+                          >
+                            Clear
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" size="sm" className="hidden sm:inline-flex" data-testid="button-filter-users">
+                        Users{filterUserIds.length > 0 ? ` (${filterUserIds.length})` : ""}
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-56">
+                      <DropdownMenuLabel>Filter by uploader</DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      {uploaderOptions.length === 0 ? (
+                        <DropdownMenuItem disabled>No uploaders</DropdownMenuItem>
+                      ) : (
+                        uploaderOptions.map((u) => (
+                          <DropdownMenuCheckboxItem
+                            key={u.id}
+                            checked={filterUserIds.includes(u.id)}
+                            onCheckedChange={() => toggleUserFilter(u.id)}
+                            onSelect={(e) => e.preventDefault()}
+                            data-testid={`checkbox-filter-user-${u.id}`}
+                          >
+                            {u.name}
+                          </DropdownMenuCheckboxItem>
+                        ))
+                      )}
+                      {filterUserIds.length > 0 && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            onClick={() => setFilterUserIds([])}
+                            data-testid="button-clear-users-filter"
+                          >
+                            Clear
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" size="sm" className="hidden sm:inline-flex" data-testid="button-filter-groups">
+                        Groups{filterRoles.length > 0 ? ` (${filterRoles.length})` : ""}
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-48">
+                      <DropdownMenuLabel>Filter by role</DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      {ROLE_OPTIONS.map((r) => (
+                        <DropdownMenuCheckboxItem
+                          key={r.value}
+                          checked={filterRoles.includes(r.value)}
+                          onCheckedChange={() => toggleRoleFilter(r.value)}
+                          onSelect={(e) => e.preventDefault()}
+                          data-testid={`checkbox-filter-role-${r.value}`}
+                        >
+                          {r.label}
+                        </DropdownMenuCheckboxItem>
+                      ))}
+                      {filterRoles.length > 0 && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            onClick={() => setFilterRoles([])}
+                            data-testid="button-clear-groups-filter"
+                          >
+                            Clear
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+
+                  {filtersActive && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={clearAllFilters}
+                      data-testid="button-clear-all-filters"
+                    >
+                      <X className="h-3.5 w-3.5 mr-1" />
+                      Clear filters
+                    </Button>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="flex items-center border rounded-md" data-testid="photo-size-toggle">
@@ -1539,6 +1743,20 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                     <p className="text-sm text-muted-foreground max-w-sm mx-auto">
                       Upload your first photos to start documenting this project.
                     </p>
+                  </div>
+                </Card>
+              ) : filteredMedia.length === 0 ? (
+                <Card className="p-12">
+                  <div className="text-center space-y-3">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-md bg-muted mx-auto">
+                      <ImageIcon className="h-6 w-6 text-muted-foreground" />
+                    </div>
+                    <h3 className="text-lg font-semibold" data-testid="text-no-filter-results">No photos match these filters</h3>
+                    {filtersActive && (
+                      <Button variant="outline" size="sm" onClick={clearAllFilters} data-testid="button-clear-filters-empty">
+                        Clear filters
+                      </Button>
+                    )}
                   </div>
                 </Card>
               ) : (
