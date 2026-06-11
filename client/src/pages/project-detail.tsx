@@ -449,37 +449,38 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     queryKey: ["/api/projects", id],
   });
 
-  // Prune selection when filters change: any selected photo that is no longer
-  // visible must drop out, so bulk Delete/Download/Share can never target a
-  // hidden photo. The visibility predicate below mirrors the `filteredMedia`
-  // filter in the render body — keep the two in sync if the filter changes.
-  useEffect(() => {
-    if (!data) return;
+  // Single source of truth for photo visibility. Computed as a stable hook
+  // before the early-return guards so it can also feed the prune effect below.
+  // Handles `data` not yet loaded by filtering an empty list.
+  const filteredMedia = useMemo(() => {
     const startBound = filterStartDate
       ? new Date(filterStartDate.getFullYear(), filterStartDate.getMonth(), filterStartDate.getDate(), 0, 0, 0, 0)
       : undefined;
     const endBound = filterEndDate
       ? new Date(filterEndDate.getFullYear(), filterEndDate.getMonth(), filterEndDate.getDate(), 23, 59, 59, 999)
       : undefined;
-    const visibleIds = new Set(
-      data.media
-        .filter((m) => {
-          if (startBound || endBound) {
-            const ts = new Date(m.createdAt);
-            if (startBound && ts < startBound) return false;
-            if (endBound && ts > endBound) return false;
-          }
-          if (filterUserIds.length > 0) {
-            if (!m.uploadedById || !filterUserIds.includes(m.uploadedById)) return false;
-          }
-          if (filterRoles.length > 0 && userRoleMap.size > 0) {
-            const role = userRoleMap.get(m.uploadedById ?? "");
-            if (!role || !filterRoles.includes(role)) return false;
-          }
-          return true;
-        })
-        .map((m) => m.id),
-    );
+    return (data?.media ?? []).filter((m) => {
+      if (startBound || endBound) {
+        const ts = new Date(m.createdAt);
+        if (startBound && ts < startBound) return false;
+        if (endBound && ts > endBound) return false;
+      }
+      if (filterUserIds.length > 0) {
+        if (!m.uploadedById || !filterUserIds.includes(m.uploadedById)) return false;
+      }
+      if (filterRoles.length > 0 && userRoleMap.size > 0) {
+        const role = userRoleMap.get(m.uploadedById ?? "");
+        if (!role || !filterRoles.includes(role)) return false;
+      }
+      return true;
+    });
+  }, [data, filterStartDate, filterEndDate, filterUserIds, filterRoles, userRoleMap]);
+
+  // Prune selection when filters change: any selected photo that is no longer
+  // visible must drop out, so bulk Delete/Download/Share can never target a
+  // hidden photo.
+  useEffect(() => {
+    const visibleIds = new Set(filteredMedia.map((m) => m.id));
     setSelectedIds((prev) => {
       let changed = false;
       const next = new Set<number>();
@@ -489,7 +490,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
       });
       return changed ? next : prev;
     });
-  }, [filterStartDate, filterEndDate, filterUserIds, filterRoles, userRoleMap, data]);
+  }, [filteredMedia]);
 
   const { data: checklistTemplates } = useQuery<(ChecklistTemplate & { itemCount: number })[]>({
     queryKey: ["/api/checklist-templates"],
@@ -923,30 +924,8 @@ export default function ProjectDetailPage({ id }: { id: string }) {
 
   const { project, media: projectMedia, tasks: projectTasks, checklists: projectChecklists, reports: projectReports } = data;
 
-  const filterStartBound = filterStartDate
-    ? new Date(filterStartDate.getFullYear(), filterStartDate.getMonth(), filterStartDate.getDate(), 0, 0, 0, 0)
-    : undefined;
-  const filterEndBound = filterEndDate
-    ? new Date(filterEndDate.getFullYear(), filterEndDate.getMonth(), filterEndDate.getDate(), 23, 59, 59, 999)
-    : undefined;
   const filtersActive =
     !!filterStartDate || !!filterEndDate || filterUserIds.length > 0 || filterRoles.length > 0;
-
-  const filteredMedia = projectMedia.filter((m) => {
-    if (filterStartBound || filterEndBound) {
-      const ts = new Date(m.createdAt);
-      if (filterStartBound && ts < filterStartBound) return false;
-      if (filterEndBound && ts > filterEndBound) return false;
-    }
-    if (filterUserIds.length > 0) {
-      if (!m.uploadedById || !filterUserIds.includes(m.uploadedById)) return false;
-    }
-    if (filterRoles.length > 0 && userRoleMap.size > 0) {
-      const role = userRoleMap.get(m.uploadedById ?? "");
-      if (!role || !filterRoles.includes(role)) return false;
-    }
-    return true;
-  });
 
   const groupedMedia = groupMediaByDate(filteredMedia);
   const annotationsByMedia = projectAnnotationsMap;
