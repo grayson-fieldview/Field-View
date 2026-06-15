@@ -13,6 +13,7 @@ import {
   reportSections,
   reportSectionPhotos,
   sharedGalleries,
+  comparisonShares,
   checklistTemplates,
   checklistTemplateItems,
   checklistTemplateSections,
@@ -48,6 +49,8 @@ import {
   type InsertReportSectionPhoto,
   type SharedGallery,
   type InsertSharedGallery,
+  type ComparisonShare,
+  type InsertComparisonShare,
   type ChecklistTemplate,
   type InsertChecklistTemplate,
   type ChecklistTemplateItem,
@@ -248,6 +251,16 @@ export interface IStorage {
 
   setProjectShareToken(projectId: number, accountId: string, token: string | null): Promise<boolean>;
   getProjectByShareToken(token: string): Promise<Project | undefined>;
+  createComparisonShare(data: InsertComparisonShare): Promise<ComparisonShare>;
+  getComparisonShareByToken(token: string): Promise<ComparisonShare | undefined>;
+  getComparisonPublicView(token: string): Promise<{
+    beforeUrl: string;
+    afterUrl: string;
+    beforeLabel: string | null;
+    afterLabel: string | null;
+    projectName: string;
+    account: { name: string; companyLogoUrl: string | null };
+  } | undefined>;
   getProjectPublicSummary(token: string): Promise<{
     project: { id: number; name: string; address: string | null; status: string; color: string | null; photoCount: number; taskCount: number; completionPercent: number };
     account: { name: string; companyLogoUrl: string | null };
@@ -1418,6 +1431,55 @@ export class DatabaseStorage implements IStorage {
     if (!token) return undefined;
     const [row] = await db.select().from(projects).where(eq(projects.shareToken, token)).limit(1);
     return row;
+  }
+
+  async createComparisonShare(data: InsertComparisonShare): Promise<ComparisonShare> {
+    const [row] = await db.insert(comparisonShares).values(data).returning();
+    return row;
+  }
+
+  async getComparisonShareByToken(token: string): Promise<ComparisonShare | undefined> {
+    if (!token) return undefined;
+    const [row] = await db.select().from(comparisonShares).where(eq(comparisonShares.token, token)).limit(1);
+    return row;
+  }
+
+  async getComparisonPublicView(token: string) {
+    if (!token) return undefined;
+    const [share] = await db.select().from(comparisonShares).where(eq(comparisonShares.token, token)).limit(1);
+    if (!share) return undefined;
+
+    const [project] = await db.select().from(projects).where(eq(projects.id, share.projectId)).limit(1);
+    if (!project || !project.accountId) return undefined;
+
+    // Defense-in-depth: both media rows must still belong to the share's
+    // project, in case a media row was moved/deleted after the share was made.
+    const [before] = await db
+      .select({ url: media.url })
+      .from(media)
+      .where(and(eq(media.id, share.beforeMediaId), eq(media.projectId, share.projectId)))
+      .limit(1);
+    const [after] = await db
+      .select({ url: media.url })
+      .from(media)
+      .where(and(eq(media.id, share.afterMediaId), eq(media.projectId, share.projectId)))
+      .limit(1);
+    if (!before || !after) return undefined;
+
+    const [account] = await db
+      .select({ name: accounts.name, companyLogoUrl: accounts.companyLogoUrl })
+      .from(accounts)
+      .where(eq(accounts.id, project.accountId));
+    if (!account) return undefined;
+
+    return {
+      beforeUrl: before.url,
+      afterUrl: after.url,
+      beforeLabel: share.beforeLabel,
+      afterLabel: share.afterLabel,
+      projectName: project.name,
+      account: { name: account.name, companyLogoUrl: account.companyLogoUrl },
+    };
   }
 
   async getProjectPublicSummary(token: string) {

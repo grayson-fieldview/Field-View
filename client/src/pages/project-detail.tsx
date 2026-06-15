@@ -43,6 +43,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { BeforeAfterSlider } from "@/components/before-after-slider";
 import { isUnauthorizedError } from "@/lib/auth-utils";
 import { useAuth } from "@/hooks/use-auth";
 import PhotoViewer from "@/components/photo-viewer";
@@ -165,90 +166,6 @@ const reportTypeLabels: Record<string, string> = {
 };
 
 type DetailTab = "photos" | "tasks" | "files" | "checklists" | "reports" | "daily-log";
-
-function BeforeAfterSlider({
-  beforeUrl,
-  afterUrl,
-  beforeLabel,
-  afterLabel,
-}: {
-  beforeUrl: string;
-  afterUrl: string;
-  beforeLabel: string;
-  afterLabel: string;
-}) {
-  const [sliderPos, setSliderPos] = useState(50);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const isDragging = useRef(false);
-
-  const handleMove = useCallback((clientX: number) => {
-    if (!containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
-    const x = Math.max(0, Math.min(clientX - rect.left, rect.width));
-    setSliderPos((x / rect.width) * 100);
-  }, []);
-
-  const handleMouseDown = useCallback(() => {
-    isDragging.current = true;
-  }, []);
-
-  const handleMouseUp = useCallback(() => {
-    isDragging.current = false;
-  }, []);
-
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (isDragging.current) handleMove(e.clientX);
-  }, [handleMove]);
-
-  const handleTouchMove = useCallback((e: React.TouchEvent) => {
-    handleMove(e.touches[0].clientX);
-  }, [handleMove]);
-
-  return (
-    <div
-      ref={containerRef}
-      className="relative w-full aspect-[4/3] rounded-md overflow-hidden cursor-col-resize select-none bg-muted"
-      onMouseDown={handleMouseDown}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
-      onMouseMove={handleMouseMove}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleMouseUp}
-      onClick={(e) => handleMove(e.clientX)}
-      data-testid="before-after-slider"
-    >
-      <img src={afterUrl} alt="After" className="absolute inset-0 w-full h-full object-cover" />
-      <div
-        className="absolute inset-0 overflow-hidden"
-        style={{ width: `${sliderPos}%` }}
-      >
-        <img
-          src={beforeUrl}
-          alt="Before"
-          className="absolute top-0 left-0 h-full object-cover"
-          style={{ width: `${100 / (sliderPos / 100)}%`, maxWidth: "none" }}
-        />
-      </div>
-      <div
-        className="absolute top-0 bottom-0 w-0.5 bg-white shadow-lg z-10"
-        style={{ left: `${sliderPos}%` }}
-      >
-        <div className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-8 h-8 rounded-full bg-white shadow-md flex items-center justify-center">
-          <div className="flex items-center gap-0.5 text-muted-foreground">
-            <ChevronLeft className="h-3 w-3" />
-            <ChevronLeft className="h-3 w-3 rotate-180" />
-          </div>
-        </div>
-      </div>
-      <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-black/50 text-white text-xs font-medium z-10">
-        {beforeLabel}
-      </div>
-      <div className="absolute top-2 right-2 px-2 py-0.5 rounded-md bg-black/50 text-white text-xs font-medium z-10">
-        {afterLabel}
-      </div>
-    </div>
-  );
-}
 
 function ProjectTagsInline({ project }: { project: Project }) {
   const { toast } = useToast();
@@ -416,6 +333,32 @@ export default function ProjectDetailPage({ id }: { id: string }) {
         return;
       }
       toast({ title: "Failed to add member", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const createComparisonShare = useMutation({
+    mutationFn: async (vars: {
+      beforeMediaId: number;
+      afterMediaId: number;
+      beforeLabel: string;
+      afterLabel: string;
+    }) => {
+      const res = await apiRequest("POST", "/api/comparisons", {
+        projectId: parseInt(id),
+        ...vars,
+      });
+      return (await res.json()) as { token: string; url: string };
+    },
+    onSuccess: async (data) => {
+      try {
+        await navigator.clipboard.writeText(data.url);
+        toast({ title: "Share link copied", description: "Anyone with this link can view the comparison." });
+      } catch {
+        toast({ title: "Share link created", description: data.url });
+      }
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to create share link", description: error.message, variant: "destructive" });
     },
   });
 
@@ -2436,13 +2379,15 @@ export default function ProjectDetailPage({ id }: { id: string }) {
             const beforePhoto = projectMedia.find((m) => m.id === comparePhotos[0]);
             const afterPhoto = projectMedia.find((m) => m.id === comparePhotos[1]);
             if (!beforePhoto || !afterPhoto) return null;
+            const beforeLabel = `Before - ${new Date(beforePhoto.createdAt).toLocaleDateString()}`;
+            const afterLabel = `After - ${new Date(afterPhoto.createdAt).toLocaleDateString()}`;
             return (
               <div className="space-y-4">
                 <BeforeAfterSlider
                   beforeUrl={beforePhoto.url}
                   afterUrl={afterPhoto.url}
-                  beforeLabel={`Before - ${new Date(beforePhoto.createdAt).toLocaleDateString()}`}
-                  afterLabel={`After - ${new Date(afterPhoto.createdAt).toLocaleDateString()}`}
+                  beforeLabel={beforeLabel}
+                  afterLabel={afterLabel}
                 />
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <div className="space-y-1">
@@ -2456,6 +2401,21 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                     <p className="text-xs text-muted-foreground">{new Date(afterPhoto.createdAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}</p>
                   </div>
                 </div>
+                <DialogFooter>
+                  <Button
+                    onClick={() => createComparisonShare.mutate({
+                      beforeMediaId: beforePhoto.id,
+                      afterMediaId: afterPhoto.id,
+                      beforeLabel,
+                      afterLabel,
+                    })}
+                    disabled={createComparisonShare.isPending}
+                    data-testid="button-share-comparison"
+                  >
+                    <Share2 className="h-4 w-4 mr-2" />
+                    {createComparisonShare.isPending ? "Creating link..." : "Share comparison"}
+                  </Button>
+                </DialogFooter>
               </div>
             );
           })()}

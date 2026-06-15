@@ -1,0 +1,93 @@
+IMPLEMENTATION. Build a public, no-account "Before/After Comparison" share link.
+Use `rg` for all searches. When done: show me the full diff and STOP. Do NOT push.
+Do NOT run any migration. Do NOT promote to Vercel. I review the diff first.
+
+Anchor to these existing patterns (confirmed in a prior investigation) and mirror
+them rather than inventing new approaches:
+- Public-share precedent: /api/public/projects/:token (server/routes.ts ~2350) and
+  its cover endpoint /api/public/projects/:token/cover.jpg (~2384). Clone the
+  token generation (crypto.randomBytes(16).toString("base64url")), whitelisted
+  payload, defense-in-depth ownership re-check, and Cache-Control headers.
+- Slider component: BeforeAfterSlider, currently a LOCAL component in
+  client/src/pages/project-detail.tsx (~lines 169–251). Props: beforeUrl,
+  afterUrl, beforeLabel, afterLabel (all strings).
+- presignMediaUrls helper: server/routes.ts ~312 (normalizes stored URLs to
+  CloudFront). Use it when returning image URLs publicly.
+- Client public routes registered in client/src/App.tsx (~lines 408–422) BEFORE
+  the AppContent catch-all (wouter). /p/:token → PublicProjectPage is the model.
+- Migration template: follow migrate_session42_project_share_tokens.ts EXACTLY
+  (same env guards: db.transaction, throw unless DATABASE_URL contains
+  rds.amazonaws.com or neon.tech, require ALLOW_PROD_MIGRATION=yes for RDS,
+  entry-point guard, IF NOT EXISTS on all DDL, log host without password).
+
+WORK ITEMS:
+
+1. SCHEMA + MIGRATION
+   - Add a `comparison_shares` table to shared/schema.ts:
+       token         varchar(32)  (unique, indexed)
+       projectId     fk -> projects.id  (match existing fk style)
+       beforeMediaId fk -> [the media/photos table]  (confirm table name + PK type via rg)
+       afterMediaId  fk -> same table
+       beforeLabel   text
+       afterLabel    text
+       createdById   fk -> users.id
+       createdAt     timestamp default now()
+   - Write scripts/migrations/migrate_session<NEXT>_comparison_shares.ts following
+     the session42 template. CREATE TABLE IF NOT EXISTS + the unique index on token.
+     Pick the next session number by checking the existing migrations dir.
+   - Do NOT run it.
+
+2. EXTRACT THE SLIDER
+   - Move BeforeAfterSlider into its own file (client/src/components/, match the
+     existing component-file convention you find). Keep the exact same props/behavior.
+   - Import it in project-detail.tsx in place of the local definition. No behavior
+     change to the existing modal.
+
+3. SERVER ROUTES
+   a. POST /api/comparisons (authenticated, requireWriteAccess — match the gate used
+      by other create routes). Body: { projectId, beforeMediaId, afterMediaId,
+      beforeLabel, afterLabel }. Verify the two media rows belong to that project
+      AND the user has access to that project (mirror existing ownership checks).
+      Generate token, insert row, return { token, url } where url is the absolute
+      /compare/:token link (derive base URL the same way existing share routes do).
+   b. GET /api/public/comparisons/:token (NO auth middleware). Look up the row,
+      404 if missing. Resolve beforeMediaId/afterMediaId to fresh CloudFront URLs via
+      presignMediaUrls. Return a WHITELISTED payload only: { beforeUrl, afterUrl,
+      beforeLabel, afterLabel, projectName (if safe to expose), branding fields the
+      public/projects route already exposes }. Do NOT leak createdById, internal
+      notes, user assignments, or any field /api/public/projects/:token excludes.
+      Set the same Cache-Control headers.
+   c. GET /api/public/comparisons/:token/cover.jpg — replicate exactly what
+      /api/public/projects/:token/cover.jpg does (re-verify the media belongs to the
+      token's row before streaming). Use the AFTER image as the cover.
+
+4. CLIENT PUBLIC PAGE
+   - New PublicComparisonPage. Register <Route path="/compare/:token"> in App.tsx in
+     the public block (~line 408), before the AppContent catch-all.
+   - Fetch /api/public/comparisons/:token. Render BeforeAfterSlider full-width with
+     the two URLs + labels. Field View logo/branding at top, a small "Made with
+     Field View" footer linking to field-view.com. Brand orange is #f09004.
+   - Handle loading + 404 states cleanly (simple "This comparison link is no longer
+     available" for 404).
+   - Replicate the SAME OG/social-preview mechanism that /p/:token uses so the link
+     shows a preview thumbnail when pasted into a text/email. Point OG image at the
+     cover.jpg endpoint above. In your diff summary, describe exactly how the
+     existing /p/:token OG preview is wired (server-rendered meta vs client) so I can
+     confirm it carries over.
+
+5. SHARE BUTTON IN THE MODAL
+   - In the existing comparison Dialog in project-detail.tsx, add a "Share" /
+     "Copy link" button. On click: POST /api/comparisons with the two currently
+     selected photo IDs (comparePhotos state) + the labels currently displayed,
+     then copy the returned url to clipboard and show a success toast (match the
+     existing toast pattern). Reuse the current selection state — don't add new
+     selection UI.
+
+CONSTRAINTS:
+- No changes to auth middleware, billing gates, or the upload-signing path.
+- This is synchronous request/response (user needs the token back) — do NOT wrap
+  the create in waitUntil/deferToVercel.
+- Match existing code style, imports, and error handling. Don't add new deps unless
+  strictly required (flag it if so).
+- When finished: print `git status` + the full diff, list every file touched, and
+  STOP. Do not commit, push, run the migration, or promote.

@@ -2413,6 +2413,125 @@ export async function registerRoutes(
     }
   });
 
+  // Create a public Before/After comparison share link. Requires write
+  // access; the token is the only access grant for the resulting public page.
+  app.post("/api/comparisons", requireWriteAccess, async (req: any, res) => {
+    try {
+      const schema = z.object({
+        projectId: z.number().int(),
+        beforeMediaId: z.number().int(),
+        afterMediaId: z.number().int(),
+        beforeLabel: z.string().max(200),
+        afterLabel: z.string().max(200),
+      });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid request" });
+      }
+      const { projectId, beforeMediaId, afterMediaId, beforeLabel, afterLabel } = parsed.data;
+
+      if (!(await userCanAccessProject(req, projectId))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      // Both media rows must belong to the project being shared.
+      const before = await storage.getMedia(beforeMediaId);
+      const after = await storage.getMedia(afterMediaId);
+      if (
+        !before || before.projectId !== projectId ||
+        !after || after.projectId !== projectId
+      ) {
+        return res.status(400).json({ message: "Photos do not belong to this project" });
+      }
+
+      const token = crypto.randomBytes(16).toString("base64url");
+      await storage.createComparisonShare({
+        token,
+        projectId,
+        beforeMediaId,
+        afterMediaId,
+        beforeLabel,
+        afterLabel,
+        createdById: req.user.id,
+      });
+
+      const baseUrl = `${req.protocol}://${req.get("host")}`;
+      res.json({ token, url: `${baseUrl}/compare/${token}` });
+    } catch (error) {
+      console.error("[comparisons] create error:", error);
+      res.status(500).json({ message: "Failed to create comparison link" });
+    }
+  });
+
+  // Public comparison view — no auth, token is the access grant. Returns a
+  // strictly whitelisted payload (presigned image URLs, labels, project name,
+  // account branding) and never leaks creator/internal fields.
+  app.get("/api/public/comparisons/:token", async (req, res) => {
+    try {
+      const token = String(req.params.token || "");
+      if (!token) return res.status(404).json({ message: "Comparison not found" });
+
+      const view = await storage.getComparisonPublicView(token);
+      if (!view) return res.status(404).json({ message: "Comparison not found" });
+
+      const [before, after] = await presignMediaUrls([
+        { url: view.beforeUrl },
+        { url: view.afterUrl },
+      ]);
+
+      const rawLogo = view.account.companyLogoUrl;
+      const logoKey = rawLogo && isS3Url(rawLogo) ? extractS3KeyFromUrl(rawLogo) : null;
+      const companyLogoUrl = logoKey ? await getPresignedUrl(logoKey) : rawLogo;
+
+      res.set("Cache-Control", "public, max-age=300, s-maxage=300");
+      res.json({
+        beforeUrl: before.url,
+        afterUrl: after.url,
+        beforeLabel: view.beforeLabel ?? "Before",
+        afterLabel: view.afterLabel ?? "After",
+        projectName: view.projectName,
+        account: { name: view.account.name, companyLogoUrl },
+      });
+    } catch (error) {
+      console.error("[public-comparisons] get error:", error);
+      res.status(500).json({ message: "Failed to load comparison" });
+    }
+  });
+
+  // Cover-image endpoint for the comparison — streams the AFTER image bytes
+  // for OG scrapers (stable URL). Falls back to /favicon.png on any miss.
+  app.get("/api/public/comparisons/:token/cover.jpg", async (req, res) => {
+    try {
+      const token = String(req.params.token || "");
+      if (!token) return res.redirect(302, "/favicon.png");
+      const share = await storage.getComparisonShareByToken(token);
+      if (!share) return res.redirect(302, "/favicon.png");
+
+      // Defense-in-depth: the after-media row must still belong to the share's
+      // project before streaming bytes through a public endpoint.
+      const after = await storage.getMedia(share.afterMediaId);
+      if (!after || after.projectId !== share.projectId || !isS3Url(after.url)) {
+        return res.redirect(302, "/favicon.png");
+      }
+
+      const key = extractS3KeyFromUrl(after.url);
+      if (!key) return res.redirect(302, "/favicon.png");
+
+      const stream = await getObjectStream(key);
+      res.set("Content-Type", after.mimeType || "image/jpeg");
+      res.set("Cache-Control", "public, max-age=86400");
+      stream.pipe(res);
+      stream.on("error", (err) => {
+        console.error("[public-comparisons/cover] stream error:", err);
+        if (!res.headersSent) res.redirect(302, "/favicon.png");
+        else res.destroy();
+      });
+    } catch (error) {
+      console.error("[public-comparisons/cover] error:", error);
+      if (!res.headersSent) res.redirect(302, "/favicon.png");
+    }
+  });
+
   // Public PDF — no auth, token is the access grant.
   app.get("/api/public/reports/:token/pdf", async (req, res) => {
     try {

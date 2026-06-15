@@ -46,6 +46,7 @@ import ChecklistTemplateEditPage from "@/pages/checklist-template-edit";
 import GalleryPage from "@/pages/gallery";
 import PublicReportPage from "@/pages/public-report";
 import PublicProjectPage from "@/pages/public-project";
+import PublicComparisonPage from "@/pages/public-comparison";
 import TasksPage from "@/pages/tasks";
 import AnalyticsPage from "@/pages/analytics";
 import CalendarPage from "@/pages/calendar";
@@ -414,6 +415,9 @@ function App() {
               </Route>
               <Route path="/p/:token">
                 {(params) => <PublicProjectPage token={params.token} />}
+              </Route>
+              <Route path="/compare/:token">
+                {(params) => <PublicComparisonPage token={params.token} />}
               </Route>
               <Route>
                 <AppContent />

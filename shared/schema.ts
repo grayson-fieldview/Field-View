@@ -354,6 +354,20 @@ export const sharedGalleries = pgTable("shared_galleries", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const comparisonShares = pgTable("comparison_shares", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  token: varchar("token", { length: 32 }).notNull(),
+  projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }).notNull(),
+  beforeMediaId: integer("before_media_id").references(() => media.id, { onDelete: "cascade" }).notNull(),
+  afterMediaId: integer("after_media_id").references(() => media.id, { onDelete: "cascade" }).notNull(),
+  beforeLabel: text("before_label"),
+  afterLabel: text("after_label"),
+  createdById: varchar("created_by_id").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("comparison_shares_token_idx").on(table.token),
+]);
+
 export const projectAssignments = pgTable("project_assignments", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }).notNull(),
@@ -372,6 +386,14 @@ export const insertSharedGallerySchema = createInsertSchema(sharedGalleries).omi
 export type InsertSharedGallery = z.infer<typeof insertSharedGallerySchema>;
 export type SharedGallery = typeof sharedGalleries.$inferSelect;
 export type ProjectAssignment = typeof projectAssignments.$inferSelect;
+
+export const insertComparisonShareSchema = createInsertSchema(comparisonShares).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertComparisonShare = z.infer<typeof insertComparisonShareSchema>;
+export type ComparisonShare = typeof comparisonShares.$inferSelect;
 
 export const accountTags = pgTable("account_tags", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
