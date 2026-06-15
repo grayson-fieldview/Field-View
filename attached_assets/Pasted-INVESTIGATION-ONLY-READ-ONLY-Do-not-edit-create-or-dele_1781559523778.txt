@@ -1,0 +1,44 @@
+INVESTIGATION ONLY — READ-ONLY. Do not edit, create, or delete any files.
+Do not write code. Produce a written report only. Use `rg` for all searches.
+
+CONTEXT: We have a working authenticated "Before / After Comparison" slider
+(modal that shows two project photos side-by-side with a draggable divider).
+I want to evaluate building a PUBLIC shareable link so a contractor can send a
+before/after comparison to a client who has no account, and the client can open
+it in a browser and drag the slider. Before I scope the build, report on the
+current state of the relevant systems.
+
+Report on the following, with file paths and line references:
+
+1. THE COMPARISON COMPONENT
+   - Find the component that renders the "Before / After Comparison" slider
+     (search: "Before / After", "Comparison", "slider", "drag").
+   - What props does it take? Does it receive two image URLs, two photo IDs,
+     or full photo objects?
+   - Is the before/after PAIRING persisted anywhere (a DB table/column), or is
+     it ephemeral — i.e., the user just picks two photos in the UI at view time?
+
+2. HOW PHOTO URLs ARE GENERATED (most important)
+   - Find where photo/media URLs are built for display (search S3, CloudFront,
+     getSignedUrl, signed, cloudfront, presign, the CloudFront domain).
+   - Are images served via PUBLIC CloudFront URLs (no auth, no expiry), or via
+     SIGNED / short-lived URLs? Quote the relevant code.
+   - If signed: what's the expiry, and is signing done per-request on the server?
+
+3. EXISTING PUBLIC / UNAUTHENTICATED ROUTES
+   - Does the app already have ANY public share pattern — e.g. shared reports,
+     public project links, token/slug-based pages reachable without login?
+     (search: "share", "public", "token", "slug", routes that skip auth
+     middleware.)
+   - List the server route registration and any auth/session middleware so I
+     can see how a route opts OUT of authentication.
+
+4. ROUTING STRUCTURE
+   - How are client-side routes defined (wouter? react-router?) and where is
+     the route table? I need to know how a new public page would be added.
+
+5. DB
+   - Is there an existing table that already stores share tokens or public
+     links? If not, just say so.
+
+Deliver as a written report. No code, no recommendations to implement yet.
