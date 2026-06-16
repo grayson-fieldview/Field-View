@@ -1,0 +1,48 @@
+INVESTIGATION ONLY — READ-ONLY. Do not edit, create, or delete any files. Do not
+write code. Produce a written report only. Use `rg` for all searches.
+
+CONTEXT: Two related goals. (1) There is an open Vercel config validation failure
+("functions pattern mismatch," possibly tied to a Vercel CLI 54.10.2 behavioral
+change) that is blocking promotion. (2) We want to add server-side Open Graph meta
+tags so /compare/:token and /p/:token links show a preview card when pasted into a
+text/email (crawlers don't run JS, so the current client-side OG injection produces
+no preview). Both touch the same Vercel routing config, so report on it before any
+edits.
+
+Report the following, with file paths and quoted config:
+
+1. VERCEL CONFIG
+   - Locate vercel.json (and any other vercel.* config). Print the FULL contents:
+     functions, rewrites, routes, headers, buildCommand, outputDirectory,
+     framework, installCommand, and any version/CLI pins.
+   - Focus on the `functions` block: what glob pattern(s) does it use, and do those
+     globs actually match the files on disk? List the real paths they're meant to
+     match (e.g. the server entry / api functions) and whether any pattern matches
+     zero files — that's the likely "pattern mismatch."
+
+2. SPA ROUTING (how /compare and /p are served today)
+   - Show the catch-all rewrite that sends non-/api routes to index.html (or however
+     the SPA fallback is configured). Quote it exactly.
+   - Trace what URL path currently resolves to: (a) the static frontend index.html,
+     (b) the Express server functions. I need to know whether /compare/:token hits
+     static HTML or a function right now.
+
+3. EDGE MIDDLEWARE
+   - Is there a middleware.ts / middleware.js at the project root (or configured
+     edge middleware)? If yes, print it. If no, say so explicitly. (This determines
+     whether OG can be done via middleware vs a rewrite-to-function.)
+
+4. BUILD SETUP
+   - package.json: print the build, dev, and any vercel-related scripts.
+   - Confirm the framework (Vite?) and the output directory the build produces.
+   - .vercelignore: print its full contents.
+
+5. SERVER ENTRY / FUNCTION SHAPE
+   - How is the Express app deployed on Vercel — one catch-all function or
+     per-route? Show the entry file and how it's referenced from vercel.json.
+
+6. RECENT CHANGES
+   - `git log --oneline -20 -- vercel.json .vercelignore package.json` and any other
+     build/config files. Flag commits around the config-failure timeframe.
+
+Deliver as a written report. No code, no edits, no implementation recommendations.
