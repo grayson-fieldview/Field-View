@@ -1,0 +1,41 @@
+SESSION — Beta tester auth diagnosis. DIAGNOSE ONLY. NO CODE CHANGES.
+
+A beta tester gets HTTP 401 "Unauthorized" when POSTing to create a
+project on mobile, and is repeatedly logged out. Another user (admin)
+on a constantly-refreshed session is never affected. The mobile app
+stores the session cookie in SecureStore and manually attaches it to
+each request. I need to know why this user's session cookie is being
+rejected. Investigate and report — do not change anything.
+
+1. SESSION STORE (highest priority)
+   a. Find the express-session setup (rg "express-session" and
+      rg "session(" server/). Paste the full session() config.
+   b. CRITICAL: identify the `store`. Is it MemoryStore (the default,
+      i.e. no store specified) or a persistent store (connect-pg-simple,
+      connect-redis, etc.)? If MemoryStore on Vercel serverless, sessions
+      do NOT survive cold starts / multiple Lambda instances — flag this
+      explicitly.
+   c. Report cookie settings: maxAge, rolling, secure, httpOnly,
+      sameSite, domain, path.
+
+2. THE 401 SOURCE
+   a. Find the auth-guard middleware that returns 401/"Unauthorized"
+      (rg "Unauthorized" server/ ; rg "401" server/). Paste it.
+   b. Trace POST /api/projects (rg "api/projects" server/). Confirm
+      whether the rejection on create is a 401 (no/invalid session) or
+      a 403 (authenticated but forbidden by role/subscription). Report
+      the exact status code and which middleware emits it.
+   c. If create-project has any owner-only / member-role / subscription-
+      status gate, describe the exact condition and what status it
+      returns when it fails.
+
+3. EVIDENCE
+   a. Check Sentry (web project) and Vercel runtime logs for 401s on
+      /api/projects and on session deserialization (deserializeUser)
+      over the last 7 days. Are they constant for one user, or
+      scattered cold-start-shaped spikes? Report counts/pattern.
+   b. Confirm whether deserializeUser fails silently (returns no user
+      vs throws) when the session row is missing.
+
+Report findings only. No snapshot, no migration, no edits. I'll decide
+the fix after reading the report.
