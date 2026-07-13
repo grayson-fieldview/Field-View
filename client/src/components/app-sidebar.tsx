@@ -25,7 +25,6 @@ import {
   FileBarChart,
   BarChart3,
   CalendarDays,
-  Clock,
   Gift,
 } from "lucide-react";
 import { useState } from "react";
@@ -57,7 +56,6 @@ const workspaceItems: NavItem[] = [
 
 const managerItems: NavItem[] = [
   { title: "Team", url: "/team", icon: Users, roles: ["admin", "manager"] },
-  { title: "Timesheets", url: "/manager/timesheets", icon: Clock, roles: ["admin", "manager"] },
 ];
 
 export function AppSidebar() {

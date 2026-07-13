@@ -36,7 +36,6 @@ import ProjectDetailPage from "@/pages/project-detail";
 import PhotosPage from "@/pages/photos";
 import MapPage from "@/pages/map";
 import TeamPage from "@/pages/team";
-import ManagerTimesheetsPage from "@/pages/manager-timesheets";
 import SettingsPage from "@/pages/settings";
 import ChecklistsPage from "@/pages/checklists";
 import ReportsPage from "@/pages/reports";
@@ -237,7 +236,6 @@ function AuthenticatedLayout() {
               <Route path="/calendar" component={CalendarPage} />
               <Route path="/map" component={MapPage} />
               <Route path="/team" component={TeamPage} />
-              <Route path="/manager/timesheets" component={ManagerTimesheetsPage} />
               <Route path="/settings" component={SettingsPage} />
               {/* Session 3 Commit B: /subscribe is now a real route inside
                   AuthenticatedLayout. Previously SubscribePage rendered
