@@ -1286,7 +1286,7 @@ export class DatabaseStorage implements IStorage {
     const { sections, ...report } = tree;
 
     const [project] = await db
-      .select({ id: projects.id, name: projects.name, address: projects.address, coverPhotoId: projects.coverPhotoId })
+      .select({ id: projects.id, name: projects.name, address: projects.address, coverPhotoId: projects.coverPhotoId, latitude: projects.latitude, longitude: projects.longitude })
       .from(projects)
       .where(eq(projects.id, report.projectId));
     if (!project) return undefined;

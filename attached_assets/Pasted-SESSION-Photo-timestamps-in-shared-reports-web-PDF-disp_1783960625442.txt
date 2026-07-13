@@ -1,0 +1,55 @@
+SESSION — Photo timestamps in shared reports (web + PDF), display-only
+Diagnosis already complete and approved. No schema changes. Implement
+exactly this scope.
+
+CONTEXT (from approved diagnosis — verify line numbers before editing):
+- Timestamp source is media.createdAt (upload time). The "takenAt"
+  field on the public project view is an alias of createdAt
+  (storage.ts:1532) — we are matching that convention.
+- Public report endpoint GET /api/public/reports/:token builds photo
+  payload at server/routes.ts:~2258 with no timestamp
+- Web card JSX: client/src/pages/public-report.tsx:~214–237
+- PDF: buildPdf.ts BodyPhoto already carries createdAt but
+  BodyPage.tsx does not forward it to PhotoCell
+
+CHANGES:
+
+1. SHARED TIMEZONE/FORMAT UTIL
+   - npm install tz-lookup
+   - New file server/lib/photoTime.ts exporting:
+     resolvePhotoTimeZone(photoLat, photoLng, projectLat, projectLng)
+       → IANA tz via tz-lookup; fallback chain: photo coords →
+         project coords → "UTC"
+       (report how projects store coordinates before wiring the
+        project fallback)
+     formatPhotoTimestamp(date, tz) → "Mar 4, 2026 · 2:37 PM" via
+       Intl.DateTimeFormat with explicit timeZone
+   - Single source of formatting for BOTH web and PDF. No inline
+     toLocaleDateString for photo timestamps anywhere.
+
+2. PUBLIC REPORT ENDPOINT (server/routes.ts ~2258)
+   - Add displayTimestamp to each photo object: server-formatted
+     string from formatPhotoTimestamp(media.createdAt, resolved tz).
+   - Confirm media lat/lng and project coords are available in this
+     query's joins; report if an additional select field is needed.
+
+3. WEB CARD (public-report.tsx)
+   - Render displayTimestamp under caption/description,
+     text-xs text-muted-foreground. Add to PublicPhoto type.
+   - data-testid="text-photo-timestamp-{photo.id}"
+
+4. PDF
+   - buildPdf.ts: format the same string per photo via the same util
+     (createdAt is already on BodyPhoto; verify getReportForPdf
+     selects media lat/lng, add if missing)
+   - BodyPage.tsx: forward to PhotoCell
+   - PhotoCell.tsx: new optional timestamp prop, rendered below
+     description in the existing small/muted text style
+
+OUT OF SCOPE — do not touch: schema, migrations, upload endpoints,
+mobile repo, timesheets code, authed report editor UI.
+
+TypeScript must compile with zero NEW errors — list any drift with
+file/line and categorize our-code vs dep-types.
+
+Show me the full diff before approving. Don't push.

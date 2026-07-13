@@ -5,10 +5,12 @@ export function PhotoCell({
   buffer,
   caption,
   description,
+  timestamp,
 }: {
   buffer: Buffer | undefined;
   caption: string | null;
   description: string | null;
+  timestamp?: string | null;
 }) {
   return (
     <View style={styles.cell} wrap={false}>
@@ -21,6 +23,7 @@ export function PhotoCell({
       </View>
       {caption ? <Text style={styles.cellCaption}>{caption}</Text> : null}
       {description ? <Text style={styles.cellDescription}>{description}</Text> : null}
+      {timestamp ? <Text style={styles.cellDescription}>{timestamp}</Text> : null}
     </View>
   );
 }

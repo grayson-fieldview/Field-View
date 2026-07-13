@@ -13,6 +13,7 @@ import { haversineMeters, formatLocalTime, DEFAULT_GEOFENCE_RADIUS_M, HEARTBEAT_
 import { users, invitations, accounts, assignedProjectIdsSchema } from "@shared/models/auth";
 import { MAX_UPLOAD_BATCH } from "@shared/constants";
 import { computeSeatUsage } from "./lib/seats";
+import { resolvePhotoTimeZone, formatPhotoTimestamp } from "./lib/photoTime";
 import { db } from "./db";
 import { eq, sql, and, or, inArray, count, isNull, desc } from "drizzle-orm";
 import { sanitizeUserForViewer, sanitizeTimeEntryForViewer, isManagerRole } from "./lib/userVisibility";
@@ -61,6 +62,8 @@ async function streamReportPdfById(id: number, res: any): Promise<void> {
       companyAddress: data.account.companyAddress,
     },
     creator: data.creator,
+    projectLatitude: data.project.latitude,
+    projectLongitude: data.project.longitude,
     sections: data.sections.map((s) => ({
       id: s.id,
       title: s.title,
@@ -70,6 +73,9 @@ async function streamReportPdfById(id: number, res: any): Promise<void> {
         s3Key: extractS3KeyFromUrl(p.media.url),
         caption: p.caption,
         description: p.description,
+        createdAt: p.media.createdAt,
+        latitude: p.media.latitude,
+        longitude: p.media.longitude,
       })),
     })),
     coverPhotoUrl: data.coverPhoto?.url ?? null,
@@ -2261,6 +2267,15 @@ export async function registerRoutes(
               caption: p.caption,
               description: p.description,
               sortOrder: p.sortOrder,
+              displayTimestamp: formatPhotoTimestamp(
+                p.media.createdAt,
+                resolvePhotoTimeZone(
+                  p.media.latitude,
+                  p.media.longitude,
+                  data.project.latitude,
+                  data.project.longitude,
+                ),
+              ),
             })),
           ),
         })),

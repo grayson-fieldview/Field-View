@@ -39,6 +39,7 @@ export function BodyPage({
               buffer={p.s3Key ? images.get(p.s3Key) : undefined}
               caption={p.caption}
               description={p.description}
+              timestamp={p.timestamp ?? null}
             />
           ))}
         </View>

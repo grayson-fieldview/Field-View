@@ -3,6 +3,7 @@ import { extractS3KeyFromUrl } from "../s3";
 import { fetchAndResize } from "./imagePipeline";
 import { ReportDocument } from "./layout/Document";
 import { FIELDVIEW_LOGO_BYTES } from "./assets/logoBase64";
+import { resolvePhotoTimeZone, formatPhotoTimestamp } from "../lib/photoTime";
 import type { BodyChunk, BodyPhoto, CoverPageData, CoverToggles } from "./types";
 
 const LOGO_BYTES = FIELDVIEW_LOGO_BYTES;
@@ -36,6 +37,8 @@ export type PdfData = {
     companyAddress: string | null;
   };
   creator: { firstName: string | null; lastName: string | null } | null;
+  projectLatitude: number | null;
+  projectLongitude: number | null;
   sections: { id: number; title: string; summary: string | null; photos: BodyPhoto[] }[];
   coverPhotoUrl: string | null;
   totalPhotos: number;
@@ -72,9 +75,27 @@ export async function buildReportPdfStream(data: PdfData): Promise<NodeJS.Readab
   }
   const images = await fetchAndResize(allKeys);
 
+  // Enrich each photo with a display timestamp using the same shared
+  // formatter as the web view, so both surfaces render identical strings.
+  const sectionsWithTimestamps = data.sections.map((s) => ({
+    ...s,
+    photos: s.photos.map((p) => ({
+      ...p,
+      timestamp: formatPhotoTimestamp(
+        p.createdAt,
+        resolvePhotoTimeZone(
+          p.latitude,
+          p.longitude,
+          data.projectLatitude,
+          data.projectLongitude,
+        ),
+      ),
+    })),
+  }));
+
   // Paginate sections: 4 photos per body page; empty section still gets one page.
   const bodyChunks: BodyChunk[] = [];
-  for (const s of data.sections) {
+  for (const s of sectionsWithTimestamps) {
     if (s.photos.length === 0) {
       bodyChunks.push({
         sectionTitle: s.title,

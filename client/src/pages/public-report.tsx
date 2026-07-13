@@ -11,6 +11,7 @@ interface PublicPhoto {
   caption: string | null;
   description: string | null;
   sortOrder: number;
+  displayTimestamp: string | null;
 }
 
 interface PublicSection {
@@ -231,6 +232,11 @@ export default function PublicReportPage({ token }: { token: string }) {
                       {photo.description && (
                         <p className="text-xs text-muted-foreground whitespace-pre-line" data-testid={`text-photo-description-${photo.id}`}>
                           {photo.description}
+                        </p>
+                      )}
+                      {photo.displayTimestamp && (
+                        <p className="text-xs text-muted-foreground" data-testid={`text-photo-timestamp-${photo.id}`}>
+                          {photo.displayTimestamp}
                         </p>
                       )}
                     </div>

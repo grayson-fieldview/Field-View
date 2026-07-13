@@ -25,6 +25,10 @@ export type BodyPhoto = {
   s3Key: string | null;
   caption: string | null;
   description: string | null;
+  createdAt: Date | string | null;
+  latitude: number | null;
+  longitude: number | null;
+  timestamp?: string | null;
 };
 
 export type BodyChunk = {
