@@ -1,0 +1,57 @@
+DIAGNOSE ONLY — DO NOT WRITE ANY CODE YET
+
+Goal (context, not for implementation yet): add API-key
+authentication so external services (Zapier) can call a small v1
+API: list photos since a timestamp, list projects, create a project.
+Keys are per-account, owner-generated, Bearer-token style.
+
+Investigate and report (rg for all searches, never grep):
+
+1. AUTH MIDDLEWARE ARCHITECTURE
+   - Where does session auth live (passport config, the middleware
+     protecting /api routes)? Paste the middleware chain for a
+     representative protected route.
+   - How does a route resolve the current account today —
+     req.user.account_id? Paste the pattern.
+   - Where is the CSRF middleware mounted and how does its bypass
+     list work (the /api/login etc. exemptions)? Paste the mount +
+     bypass mechanism. We will need API-key requests to bypass CSRF
+     — report how that would slot in WITHOUT weakening CSRF for
+     session-cookie requests.
+
+2. ROLE / PERMISSION MODEL
+   - How is "owner" determined (users.role)? Paste the enum/values
+     and one example of an owner-gated route.
+   - How do restricted accounts' project-visibility rules work
+     (project_assignments?) — an API key acting as the account will
+     need a defined visibility scope; report the existing pattern.
+
+3. RATE LIMITING
+   - How is rate-limiter-flexible configured today (which routes,
+     what backing store)? Could a per-API-key limiter reuse the same
+     setup? REMINDER: auth_rate_limits table is owned by
+     rate-limiter-flexible at runtime — mirror declaration only in
+     shared/schema.ts, never written from app code, never renamed.
+
+4. EXISTING PATTERNS TO REUSE
+   - Password hashing: which lib/params (we'll hash API keys the
+     same way or with SHA-256 — report what exists)?
+   - Is there any existing token infrastructure (email verification
+     tokens, password reset tokens) whose generation/storage pattern
+     we should mirror? Paste one.
+   - Settings page: where would an "API Keys" section live for
+     owners (which file renders account settings)?
+
+5. DATA SHAPES FOR THE V1 ENDPOINTS
+   - media: confirm the columns available for a photo payload (id,
+     url, caption, project_id, created_at, lat/lng, uploadedById).
+     Is url a permanent public URL (CloudFront) or presigned/
+     expiring? This determines whether the API returns stable URLs.
+   - projects: columns for list/create (name, address, status,
+     lat/lng). What does the existing create-project endpoint
+     validate/require? Paste its validation.
+
+Report findings with file paths and excerpts. No code. After I
+review, implementation will be scoped as: api_keys table +
+migration script (NOT run by you), key generation UI, auth
+middleware, then /api/v1 endpoints as a separate session.
