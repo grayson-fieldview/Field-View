@@ -870,3 +870,33 @@ export type InsertChecklistTemplateItemOption = z.infer<typeof insertChecklistTe
 export type ChecklistTemplateItemOption = typeof checklistTemplateItemOptions.$inferSelect;
 export type InsertReportTemplate = z.infer<typeof insertReportTemplateSchema>;
 export type ReportTemplate = typeof reportTemplates.$inferSelect;
+
+// API keys — per-account, owner-generated Bearer tokens for the external
+// /api/v1 API (Zapier etc.). keyHash is the sha256 hex of the full plaintext
+// key; the plaintext is shown to the user exactly once at creation and never
+// stored. keyPrefix (first 12 chars incl. "fv_live_") + lastFourChars are
+// display-only. Soft-revoke via revokedAt (rows are never hard-deleted).
+export const apiKeys = pgTable("api_keys", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  accountId: varchar("account_id").references(() => accounts.id).notNull(),
+  name: text("name").notNull(),
+  keyHash: text("key_hash").notNull().unique(),
+  keyPrefix: text("key_prefix").notNull(),
+  lastFourChars: text("last_four_chars").notNull(),
+  createdById: varchar("created_by_id").references(() => users.id).notNull(),
+  lastUsedAt: timestamp("last_used_at"),
+  revokedAt: timestamp("revoked_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("api_keys_key_hash_idx").on(table.keyHash),
+  index("api_keys_account_id_idx").on(table.accountId),
+]);
+
+export const insertApiKeySchema = createInsertSchema(apiKeys).omit({
+  id: true,
+  lastUsedAt: true,
+  revokedAt: true,
+  createdAt: true,
+});
+export type InsertApiKey = z.infer<typeof insertApiKeySchema>;
+export type ApiKey = typeof apiKeys.$inferSelect;

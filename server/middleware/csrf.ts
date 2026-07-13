@@ -132,6 +132,17 @@ export const csrfGuard: RequestHandler = (req, res, next) => {
   // Mobile branch — presence of the custom header is sufficient.
   if (req.headers[MOBILE_HEADER] === MOBILE_HEADER_VALUE) return next();
 
+  // API-key branch — a Bearer-token request carries no ambient session cookie,
+  // so there is no CSRF surface (nothing for a victim's browser to silently
+  // replay). Parallel to the mobile-header branch above. The API-key auth
+  // middleware (server/middleware/apiKeyAuth.ts) accepts the key ONLY from the
+  // Authorization header and never falls back to the session cookie, so this
+  // pass-through cannot be used to bypass cookie-session CSRF.
+  const authHeader = req.headers.authorization;
+  if (typeof authHeader === "string" && authHeader.startsWith("Bearer ")) {
+    return next();
+  }
+
   // Web branch — validate Origin (preferred) or Referer (fallback).
   const origin = originFromRequest(req);
   if (origin) {

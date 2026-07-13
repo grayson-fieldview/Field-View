@@ -148,5 +148,6 @@ export const assignedProjectIdsSchema = z.array(z.number().int().positive()).def
 
 export type UpsertUser = typeof users.$inferInsert;
 export type User = typeof users.$inferSelect;
+export type Account = typeof accounts.$inferSelect;
 export type Invitation = typeof invitations.$inferSelect;
 export type InsertInvitation = typeof invitations.$inferInsert;

@@ -41,6 +41,9 @@ import {
   Trash2,
   Users,
   Pencil,
+  KeyRound,
+  Copy,
+  Check,
 } from "lucide-react";
 
 type CalendarConnection = {
@@ -693,6 +696,304 @@ function TransferOwnershipDialog({
   );
 }
 
+type ApiKeyListItem = {
+  id: string;
+  name: string;
+  keyPrefix: string;
+  lastFourChars: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+};
+
+function ApiKeysCard() {
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [plaintext, setPlaintext] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [revokeTarget, setRevokeTarget] = useState<ApiKeyListItem | null>(null);
+
+  const { data: seatStatus } = useQuery<{ ownerId: string | null }>({
+    queryKey: ["/api/account/seats"],
+    enabled: !!user?.id && user?.role === "admin",
+  });
+
+  const isOwner =
+    !!user?.id && !!seatStatus?.ownerId && user.id === seatStatus.ownerId;
+
+  const { data: keys, isLoading } = useQuery<ApiKeyListItem[]>({
+    queryKey: ["/api/account/api-keys"],
+    enabled: isOwner,
+  });
+
+  const createMutation = useMutation({
+    mutationFn: async (name: string) => {
+      const res = await apiRequest("POST", "/api/account/api-keys", { name });
+      return (await res.json()) as ApiKeyListItem & { plaintext: string };
+    },
+    onSuccess: (data) => {
+      setPlaintext(data.plaintext);
+      setCopied(false);
+      setNewName("");
+      setCreateOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/account/api-keys"] });
+    },
+    onError: (err: any) => {
+      toast({
+        title: "Could not create API key",
+        description: err?.message || "Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const revokeMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/account/api-keys/${id}`);
+    },
+    onSuccess: () => {
+      setRevokeTarget(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/account/api-keys"] });
+      toast({ title: "API key revoked" });
+    },
+    onError: (err: any) => {
+      toast({
+        title: "Could not revoke API key",
+        description: err?.message || "Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const copyPlaintext = async () => {
+    if (!plaintext) return;
+    try {
+      await navigator.clipboard.writeText(plaintext);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast({
+        title: "Copy failed",
+        description: "Select the key and copy it manually.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  if (!isOwner || !user?.id) return null;
+
+  const activeKeys = (keys ?? []).filter((k) => !k.revokedAt);
+
+  const formatDate = (value: string | null) =>
+    value ? new Date(value).toLocaleDateString() : "Never";
+
+  return (
+    <Card className="p-6" data-testid="card-api-keys">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <KeyRound className="h-5 w-5 text-primary" />
+            <h2 className="text-lg font-semibold">API Keys</h2>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Create keys to let external services (like Zapier) access your
+            account's data. Keys act on behalf of the whole account.
+          </p>
+        </div>
+        <Button
+          onClick={() => {
+            setNewName("");
+            setCreateOpen(true);
+          }}
+          data-testid="button-create-api-key"
+        >
+          <Plus className="h-4 w-4 mr-2" />
+          New API Key
+        </Button>
+      </div>
+
+      <div className="mt-4">
+        {isLoading ? (
+          <div className="space-y-2">
+            <Skeleton className="h-14 w-full" />
+            <Skeleton className="h-14 w-full" />
+          </div>
+        ) : activeKeys.length === 0 ? (
+          <p
+            className="text-sm text-muted-foreground py-6 text-center"
+            data-testid="text-no-api-keys"
+          >
+            No API keys yet. Create one to get started.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {activeKeys.map((key) => (
+              <div
+                key={key.id}
+                className="flex items-center justify-between gap-4 rounded-md border p-3"
+                data-testid={`row-api-key-${key.id}`}
+              >
+                <div className="min-w-0 space-y-1">
+                  <p
+                    className="text-sm font-medium truncate"
+                    data-testid={`text-api-key-name-${key.id}`}
+                  >
+                    {key.name}
+                  </p>
+                  <p className="text-xs text-muted-foreground font-mono">
+                    {key.keyPrefix}…{key.lastFourChars}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Last used: {formatDate(key.lastUsedAt)} · Created:{" "}
+                    {formatDate(key.createdAt)}
+                  </p>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setRevokeTarget(key)}
+                  data-testid={`button-revoke-api-key-${key.id}`}
+                >
+                  <Trash2 className="h-4 w-4 text-destructive" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Create dialog */}
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent data-testid="dialog-create-api-key">
+          <DialogHeader>
+            <DialogTitle>Create API Key</DialogTitle>
+            <DialogDescription>
+              Give this key a name so you can recognize it later (e.g. "Zapier").
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="Key name"
+              maxLength={100}
+              data-testid="input-api-key-name"
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setCreateOpen(false)}
+              data-testid="button-cancel-create-api-key"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => createMutation.mutate(newName.trim())}
+              disabled={!newName.trim() || createMutation.isPending}
+              data-testid="button-confirm-create-api-key"
+            >
+              {createMutation.isPending && (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              )}
+              Create Key
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Plaintext reveal dialog — shown exactly once */}
+      <Dialog
+        open={!!plaintext}
+        onOpenChange={(open) => {
+          if (!open) setPlaintext(null);
+        }}
+      >
+        <DialogContent data-testid="dialog-api-key-plaintext">
+          <DialogHeader>
+            <DialogTitle>Your new API key</DialogTitle>
+            <DialogDescription>
+              Copy this key now — you won't be able to see it again. Store it
+              somewhere safe.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex items-center gap-2">
+            <code
+              className="flex-1 rounded-md bg-muted px-3 py-2 text-sm font-mono break-all"
+              data-testid="text-api-key-plaintext"
+            >
+              {plaintext}
+            </code>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={copyPlaintext}
+              data-testid="button-copy-api-key"
+            >
+              {copied ? (
+                <Check className="h-4 w-4 text-green-600" />
+              ) : (
+                <Copy className="h-4 w-4" />
+              )}
+            </Button>
+          </div>
+          <DialogFooter>
+            <Button
+              onClick={() => setPlaintext(null)}
+              data-testid="button-close-api-key-plaintext"
+            >
+              Done
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Revoke confirm dialog */}
+      <Dialog
+        open={!!revokeTarget}
+        onOpenChange={(open) => {
+          if (!open) setRevokeTarget(null);
+        }}
+      >
+        <DialogContent data-testid="dialog-revoke-api-key">
+          <DialogHeader>
+            <DialogTitle>Revoke API key?</DialogTitle>
+            <DialogDescription>
+              {revokeTarget
+                ? `"${revokeTarget.name}" will stop working immediately. Any service using it will lose access. This cannot be undone.`
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setRevokeTarget(null)}
+              data-testid="button-cancel-revoke-api-key"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() =>
+                revokeTarget && revokeMutation.mutate(revokeTarget.id)
+              }
+              disabled={revokeMutation.isPending}
+              data-testid="button-confirm-revoke-api-key"
+            >
+              {revokeMutation.isPending && (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              )}
+              Revoke Key
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </Card>
+  );
+}
+
 function AccountOwnershipCard() {
   const { user } = useAuth();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -958,6 +1259,8 @@ export default function SettingsPage() {
       <BillingCard />
 
       <AccountOwnershipCard />
+
+      <ApiKeysCard />
 
       <Card className="p-6" data-testid="card-account">
         <div className="flex items-center gap-2 mb-4">

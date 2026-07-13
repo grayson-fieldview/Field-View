@@ -466,10 +466,14 @@ export async function setupAuth(app: Express) {
       if (user.deletedAt) return cb(null, null);
       if (user.accountId) {
         const [account] = await db
-          .select({ deletedAt: accounts.deletedAt })
+          .select({ deletedAt: accounts.deletedAt, ownerId: accounts.ownerId })
           .from(accounts)
           .where(eq(accounts.id, user.accountId));
         if (account?.deletedAt) return cb(null, null);
+        // Attach account ownership so requireOwnerAdmin can gate owner-only
+        // routes (e.g. API-key management). deserializeUser is the single
+        // place req.user is assembled on every authenticated request.
+        (user as any).account = { ownerId: account?.ownerId ?? null };
       }
       cb(null, user);
     } catch (error) {

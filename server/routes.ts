@@ -4,10 +4,11 @@ import crypto from "crypto";
 import { storage } from "./storage";
 import { setupAuth, registerAuthRoutes, isAuthenticated, requireReadAccess, requireWriteAccess } from "./replit_integrations/auth";
 import { getAccountBilling, isAccountBillingEnabled, overlayAccountBillingOnUser, isSeatAddonItem } from "./lib/billing";
-import { requireAdmin, requireAdminOrManager } from "./middleware/auth";
+import { requireAdmin, requireAdminOrManager, requireOwnerAdmin } from "./middleware/auth";
+import { generateApiKey } from "./lib/apiKeys";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
-import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistSectionSchema, insertChecklistItemOptionSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, checklistItems, checklistSections, checklistItemOptions, checklistItemPhotos, checklistTemplates, checklistTemplateSections, checklistTemplateItems, checklistTemplateItemOptions, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, pendingGeofenceExits, pendingGeofenceEnters, templateConfigSchema, accountSettingsPatchSchema } from "@shared/schema";
+import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistSectionSchema, insertChecklistItemOptionSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, checklistItems, checklistSections, checklistItemOptions, checklistItemPhotos, checklistTemplates, checklistTemplateSections, checklistTemplateItems, checklistTemplateItemOptions, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, pendingGeofenceExits, pendingGeofenceEnters, templateConfigSchema, accountSettingsPatchSchema, apiKeys } from "@shared/schema";
 import { executeAutoClockOut, executeAutoClockIn, AUTO_CLOCK_IN_DWELL_MS } from "./lib/timesheets";
 import { haversineMeters, formatLocalTime, DEFAULT_GEOFENCE_RADIUS_M, HEARTBEAT_OUTSIDE_BUFFER_M, HEARTBEAT_DWELL_MS } from "./lib/geo";
 import { users, invitations, accounts, assignedProjectIdsSchema } from "@shared/models/auth";
@@ -2895,6 +2896,92 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Seat update error:", error);
       res.status(500).json({ message: error.message || "Failed to update seat count" });
+    }
+  });
+
+  // ── API keys — session-authed owner management for the settings UI ──
+  // These endpoints are guarded by requireOwnerAdmin (session cookie), NOT by
+  // the api-key auth middleware. The /api/v1 data endpoints that CONSUME keys
+  // are a separate session.
+  app.get("/api/account/api-keys", requireOwnerAdmin, async (req: any, res) => {
+    try {
+      const accountId = req.user.accountId;
+      const keys = await db
+        .select({
+          id: apiKeys.id,
+          name: apiKeys.name,
+          keyPrefix: apiKeys.keyPrefix,
+          lastFourChars: apiKeys.lastFourChars,
+          lastUsedAt: apiKeys.lastUsedAt,
+          revokedAt: apiKeys.revokedAt,
+          createdAt: apiKeys.createdAt,
+        })
+        .from(apiKeys)
+        .where(eq(apiKeys.accountId, accountId))
+        .orderBy(desc(apiKeys.createdAt));
+      res.json(keys);
+    } catch (error) {
+      console.error("[API] GET /api/account/api-keys failed:", error);
+      res.status(500).json({ message: "Failed to list API keys" });
+    }
+  });
+
+  app.post("/api/account/api-keys", requireOwnerAdmin, async (req: any, res) => {
+    try {
+      const parsed = z
+        .object({ name: z.string().trim().min(1).max(100) })
+        .safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: parsed.error.message });
+      }
+      const accountId = req.user.accountId;
+      const { plaintext, hash, prefix, lastFour } = generateApiKey();
+      const [created] = await db
+        .insert(apiKeys)
+        .values({
+          accountId,
+          name: parsed.data.name,
+          keyHash: hash,
+          keyPrefix: prefix,
+          lastFourChars: lastFour,
+          createdById: req.user.id,
+        })
+        .returning({
+          id: apiKeys.id,
+          name: apiKeys.name,
+          keyPrefix: apiKeys.keyPrefix,
+          lastFourChars: apiKeys.lastFourChars,
+          lastUsedAt: apiKeys.lastUsedAt,
+          revokedAt: apiKeys.revokedAt,
+          createdAt: apiKeys.createdAt,
+        });
+      // plaintext is returned exactly once here and never persisted.
+      res.status(201).json({ ...created, plaintext });
+    } catch (error) {
+      console.error("[API] POST /api/account/api-keys failed:", error);
+      res.status(500).json({ message: "Failed to create API key" });
+    }
+  });
+
+  app.delete("/api/account/api-keys/:id", requireOwnerAdmin, async (req: any, res) => {
+    try {
+      const accountId = req.user.accountId;
+      const id = req.params.id as string;
+      const [existing] = await db
+        .select({ id: apiKeys.id, revokedAt: apiKeys.revokedAt })
+        .from(apiKeys)
+        .where(and(eq(apiKeys.id, id), eq(apiKeys.accountId, accountId)));
+      if (!existing) {
+        return res.status(404).json({ message: "API key not found" });
+      }
+      if (existing.revokedAt) {
+        return res.status(200).json({ message: "API key already revoked" });
+      }
+      await db.update(apiKeys).set({ revokedAt: new Date() }).where(eq(apiKeys.id, id));
+      res.status(200).json({ message: "API key revoked" });
+    } catch (error) {
+      console.error("[API] DELETE /api/account/api-keys/:id failed:", error);
+      res.status(500).json({ message: "Failed to revoke API key" });
     }
   });
 

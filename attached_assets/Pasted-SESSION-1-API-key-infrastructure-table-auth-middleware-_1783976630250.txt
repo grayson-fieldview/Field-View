@@ -1,0 +1,75 @@
+SESSION 1 — API key infrastructure (table, auth middleware, settings UI)
+Diagnosis complete and approved. No /api/v1 endpoints yet — that is
+Session 2. Implement exactly this scope.
+
+0. VERIFY THE OWNER GATE FIRST (report before proceeding past it)
+   - Check whether deserializeUser populates req.user.account.owner_id
+     end-to-end so requireOwnerAdmin actually works. Trace it and
+     paste the relevant code. If it is NOT wired, fix the wiring as
+     part of this session (populate account ownerId onto req.user)
+     and remove the stale TODO. If it IS wired, just remove the TODO
+     and note verification. Report findings either way before
+     continuing.
+
+1. SCHEMA — api_keys table in shared/schema.ts:
+   id (varchar/uuid pk, matching existing table conventions),
+   accountId (notNull, fk convention as other tables),
+   name (text notNull — user label like "Zapier"),
+   keyHash (text notNull, unique) — sha256 hex of full key,
+   keyPrefix (text notNull) — first 12 chars incl fv_live_ for display,
+   lastFourChars (text notNull),
+   createdById (varchar notNull),
+   lastUsedAt (timestamp nullable),
+   revokedAt (timestamp nullable),
+   createdAt (timestamp defaultNow notNull)
+   Index on keyHash. Mirror existing schema conventions exactly.
+
+2. MIGRATION SCRIPT — script/migrations/ following the
+   migrate_session22_timesheets.ts template exactly: db.transaction(),
+   env guard (rds.amazonaws.com/neon.tech + ALLOW_PROD_MIGRATION=yes
+   for RDS), entry-point guard, host logging, IF NOT EXISTS on all
+   DDL. Do NOT run it — I run migrations manually.
+
+3. KEY SERVICE — server/lib/apiKeys.ts:
+   - generateApiKey(): crypto.randomBytes(32) → base64url, prefixed
+     fv_live_. Returns { plaintext, hash, prefix, lastFour }.
+   - authenticateApiKey(bearerToken): sha256 lookup by keyHash,
+     reject if revokedAt set; returns the key row + account. Update
+     lastUsedAt throttled (at most once per 5 min per key — do not
+     write on every request).
+
+4. AUTH MIDDLEWARE — server/middleware/apiKeyAuth.ts:
+   requireApiKey: reads ONLY the Authorization: Bearer header. NO
+   session/cookie fallback under any circumstances — if the header
+   is absent or invalid, 401, even if a valid session cookie exists.
+   On success attaches req.apiKeyAccount (accountId, ownerId, keyId).
+   Rate limiting: new limiter via the existing rate-limiter-flexible
+   setup, keyPrefix "rl_apikey", keyed on the api key id, generous
+   limit (300/min). REMINDER: auth_rate_limits is library-owned —
+   mirror declaration only, no app writes, no rename.
+
+5. CSRF — in csrfGuard, add the early Bearer-header pass-through
+   (before Origin logic), exactly parallel to the mobile-header
+   branch. Session-cookie paths must be completely unchanged — paste
+   the final csrfGuard in the diff so I can verify.
+
+6. KEY MANAGEMENT ENDPOINTS (session-authed, NOT api-key-authed —
+   these are for the settings UI):
+   POST /api/account/api-keys (requireOwnerAdmin) — create, returns
+     plaintext ONCE
+   GET /api/account/api-keys (requireOwnerAdmin) — list: name,
+     prefix, lastFour, lastUsedAt, createdAt (never hash)
+   DELETE /api/account/api-keys/:id (requireOwnerAdmin) — sets
+     revokedAt (soft revoke, not row delete)
+
+7. SETTINGS UI — client/src/pages/settings.tsx: "API Keys" card near
+   AccountOwnershipCard, owner-gated (hidden for non-owners). Create
+   (name input → shows plaintext once with copy button + "you won't
+   see this again"), list with prefix…last4 + last-used, revoke with
+   confirm dialog. Match existing card patterns/components.
+
+OUT OF SCOPE: /api/v1 data endpoints, Zapier config, webhooks,
+docs pages.
+
+TypeScript zero new errors, drift listed and categorized.
+Show me the full diff. Don't commit, don't push.
