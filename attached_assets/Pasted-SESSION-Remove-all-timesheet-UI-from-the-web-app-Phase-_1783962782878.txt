@@ -1,0 +1,44 @@
+SESSION — Remove all timesheet UI from the web app (Phase 2 of
+time-tracking removal). SERVER CODE STAYS — endpoints, cron,
+server/lib/timesheets.ts, and the hourly_rate_cents sanitizer in
+server/lib/userVisibility.ts are all OUT OF SCOPE and must not be
+touched. Old mobile builds in the field still call these endpoints.
+DB is also untouched.
+
+━━━ STEP 1: DIAGNOSE FIRST — DO NOT WRITE CODE YET
+Use rg for all searches, never grep. Report:
+
+1. Every client-side file referencing timesheets/time entries/clock
+   in/clock out: pages, components, hooks, API-call functions in the
+   client. File path + one-line role for each.
+2. Navigation: where do timesheet page links/routes live (sidebar,
+   nav config, router definitions)?
+3. Team page: locate the timesheet toggle + hourly rate UI (Session
+   23 work) — file, and paste the JSX block(s) so we remove exactly
+   that and nothing else (role change / remove user / invitations
+   UI must survive).
+4. Dashboard or reports: does anything else render time-entry data
+   (widgets, activity feeds, CSV export UI with the tz param)?
+5. Any client references to autoTrackingEnabled or geofence
+   settings on the web side?
+
+Report findings, then STOP for my approval of the removal list.
+
+━━━ STEP 2: IMPLEMENT (after approval)
+
+- Delete the timesheet pages/components/hooks identified in Step 1
+- Remove their routes and all nav links
+- Team page: remove the timesheet toggle + hourly rate field/column
+  only; all other member management stays intact
+- Remove client API functions that call timesheet/geofence endpoints
+  (server endpoints themselves stay live)
+- Remove any timesheet CSV export UI
+- Then sweep: rg -i "timesheet|time_entr|clock.?in|clock.?out|
+  hourly_rate|autoTracking|geofence" across client/ and report every
+  remaining hit with justification (server/ hits are expected and
+  fine)
+
+TypeScript must compile with zero NEW errors — list any drift with
+file/line, categorized our-code vs dep-types.
+
+Show me the full diff before approving. Don't commit, don't push.
