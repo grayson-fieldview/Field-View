@@ -54,7 +54,11 @@ export const requireApiKey: RequestHandler = async (req, res, next) => {
       .json({ error: "unauthorized", message: "Missing or invalid API key" });
   }
 
-  const token = authHeader.slice("Bearer ".length).trim();
+  // Strip ALL whitespace (not just edges): keys pasted from a line-wrapped
+  // terminal or manually selected from the wrapping display div can pick up
+  // interior spaces/newlines. base64url never contains whitespace, so this
+  // is lossless and does not change what gets hashed for a clean key.
+  const token = authHeader.slice("Bearer ".length).replace(/\s+/g, "");
   if (!token) {
     return res
       .status(401)
