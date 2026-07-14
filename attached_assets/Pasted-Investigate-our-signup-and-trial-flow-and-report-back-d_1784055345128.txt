@@ -1,0 +1,53 @@
+Investigate our signup and trial flow and report back — do NOT modify any code.
+Context: Our signup has two pages. Page 1 ("Get Started") collects company name, work email, password and creates the account. Page 2 ("Complete Setup") collects first name, last name, phone, industry, company size, and an SMS-consent checkbox. The free trial is 14 days with no credit card required. We have a Slack webhook that posts to #signup-updates when accounts are created. Answer each question with specific file names, route paths, table names, and column names. If something doesn't exist, say "does not exist" — do not guess.
+1. Page 1 — account creation:
+
+Which route handles the Get Started submission? (file + method + path)
+Which database table does it write to, and what are the exact columns saved at this moment?
+Confirm the password is hashed (which library?) and never stored in plaintext.
+What is the primary user ID column name and format?
+Where in the code does the Slack webhook fire? (file + function — I want to add another outbound webhook in the same place)
+
+2. Page 2 — profile completion:
+
+Which route handles Complete Setup? (file + path)
+Which columns store: first name, last name, phone, industry, company size, SMS consent? List exact column names and, for industry/company size, the exact dropdown option values as they're stored.
+Is there a column or derivable flag that marks profile completion (e.g., profile_completed_at, or first_name being non-null)? What's the most reliable indicator?
+Can a user skip page 2 and still get into the app, or is it required?
+
+3. Trial mechanics:
+
+Where is the 14-day trial tracked? Is there a trial_end_date/trial_ends_at column, or is it computed from created_at + 14?
+Does the trial clock start at page 1 (account creation) or page 2 (profile completion)?
+What happens in the app when the trial expires — hard lockout, read-only, paywall screen? Where is that enforced in code?
+Is there any existing scheduled job/cron related to trials?
+
+4. Stripe integration:
+
+Since no card is collected at signup, where does Stripe checkout happen? (The upgrade/subscribe flow — file + route.)
+Do we have a Stripe webhook endpoint? What's the path, which event types does it handle, and does it verify signatures with stripe.webhooks.constructEvent?
+When a user subscribes, what gets written back to the user record? (customer ID, subscription ID, plan, seat quantity?)
+How are additional user seats handled — quantity on the subscription, separate line item, or something else?
+
+5. Usage events (for activation tracking):
+
+Which route/function handles project creation? Photo upload? Team member invites?
+Do we store per-user or per-company counts/timestamps for these, or would they need to be counted with a query?
+
+6. Attribution:
+
+Does page 1 or its route capture UTM parameters, referrer, or landing page URL anywhere? If yes, where stored; if no, say so.
+
+7. Current data snapshot (run these queries and report numbers):
+
+Total user accounts
+Accounts that completed page 1 but NOT page 2 (using the completion indicator from question 2)
+Accounts currently in an active trial window
+Accounts with an active Stripe subscription
+Accounts whose trial expired with no subscription
+
+8. Config:
+
+Where do environment variables live, and list the NAMES only (not values) of existing Stripe, Slack, or other webhook-related keys.
+
+Output format: answer each numbered question directly. End with a one-paragraph summary of the complete signup → trial → paid flow as actually implemented, plus anything surprising you found.
