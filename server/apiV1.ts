@@ -129,6 +129,8 @@ apiV1Router.get("/photos", async (req, res) => {
       .select({
         id: media.id,
         projectId: media.projectId,
+        projectName: projects.name,
+        projectAddress: projects.address,
         url: media.url,
         caption: media.caption,
         tags: media.tags,
@@ -149,7 +151,14 @@ apiV1Router.get("/photos", async (req, res) => {
     res.json({
       data: rows.map((r) => ({
         id: r.id,
-        project_id: r.projectId,
+        // Embedded project (not a bare project_id) — the primary Zapier use
+        // case matches a photo to a CRM job by name/address in a Find step.
+        // Comes from the existing inner join; no extra query per photo.
+        project: {
+          id: r.projectId,
+          name: r.projectName,
+          address: r.projectAddress,
+        },
         url: permanentUrl(r.url),
         caption: r.caption,
         tags: r.tags ?? [],
