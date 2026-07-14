@@ -138,22 +138,26 @@ export function registerAuthRoutes(app: Express): void {
 
       // S46 GHL trial_started — fires ONLY on the NULL→set transition of
       // profileCompletedAt (page 2 / "Complete Setup" finished). Re-PATCHes
-      // never re-fire. Fire-and-forget; the account lookup is wrapped so a
-      // DB hiccup can't break the PATCH.
-      if (isFirstCompletion && updated.email && !isCompAccount(updated.email)) {
+      // never re-fire. OWNER-ONLY: gated on accounts.ownerId === user.id —
+      // the same flag that gates the HubSpot sync below. ownerId is stamped
+      // exclusively on self-serve account creation (both /api/register and
+      // the OAuth path leave it untouched for invitees), so this is exactly
+      // the user who fired partial_signup. An invited manager/admin finishing
+      // page 2 sends nothing. Fire-and-forget; lookup wrapped, non-fatal.
+      if (isFirstCompletion && updated.email && updated.accountId && !isCompAccount(updated.email)) {
         try {
-          let acctIndustry: string | null = accountUpdate.industry ?? null;
-          let acctCompanySize: string | null = accountUpdate.companySize ?? null;
-          if (updated.accountId && (acctIndustry == null || acctCompanySize == null)) {
-            const [acctRow] = await db
-              .select({ industry: accounts.industry, companySize: accounts.companySize })
-              .from(accounts)
-              .where(eq(accounts.id, updated.accountId))
-              .limit(1);
-            acctIndustry = acctIndustry ?? acctRow?.industry ?? null;
-            acctCompanySize = acctCompanySize ?? acctRow?.companySize ?? null;
-          }
-          sendGhlEvent("trial_started", {
+          const [acctRow] = await db
+            .select({
+              ownerId: accounts.ownerId,
+              industry: accounts.industry,
+              companySize: accounts.companySize,
+            })
+            .from(accounts)
+            .where(eq(accounts.id, updated.accountId))
+            .limit(1);
+          const acctIndustry = accountUpdate.industry ?? acctRow?.industry ?? null;
+          const acctCompanySize = accountUpdate.companySize ?? acctRow?.companySize ?? null;
+          if (acctRow?.ownerId === updated.id) sendGhlEvent("trial_started", {
             email: updated.email,
             app_user_id: updated.id,
             first_name: updated.firstName,

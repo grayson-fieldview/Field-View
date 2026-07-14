@@ -24,6 +24,8 @@ import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, dele
 import archiver from "archiver";
 import { sendInvitationEmail, sendAccountDeletionEmail } from "./services/email";
 import { trackEvent, CIO_EVENTS } from "./services/customerio";
+import { sendGhlEvent } from "./lib/ghl";
+import { isCompAccount } from "./lib/slack";
 import { toCsv } from "./lib/csv";
 import bcrypt from "bcryptjs";
 import { Sentry } from "./lib/sentry";
@@ -116,6 +118,60 @@ function hasUsableSubscription(acct: {
     !(acct.subscriptionStatus &&
       BLOCKED_SUBSCRIPTION_STATUSES.includes(acct.subscriptionStatus))
   );
+}
+
+// S46 GHL activation_milestone. Called fire-and-forget after every media
+// batch insert. Threshold: ≥1 project AND ≥5 photos (image mime types) for
+// the whole account. Idempotent via an atomic conditional UPDATE — only the
+// caller whose UPDATE actually flips activated_at (rowCount 1) sends the
+// event; racers see 0 rows and bail. Event identity is the account's
+// originating admin (accounts.ownerId), never the uploader.
+async function checkActivationMilestone(accountId: string | null): Promise<void> {
+  if (!accountId) return;
+
+  // Cheap short-circuit: already activated (the common case forever after).
+  const [acct] = await db
+    .select({ activatedAt: accounts.activatedAt, ownerId: accounts.ownerId })
+    .from(accounts)
+    .where(eq(accounts.id, accountId))
+    .limit(1);
+  if (!acct || acct.activatedAt) return;
+
+  const [projRow] = await db
+    .select({ c: count() })
+    .from(projects)
+    .where(eq(projects.accountId, accountId));
+  const projectsCreated = Number(projRow?.c ?? 0);
+  if (projectsCreated < 1) return;
+
+  const [photoRow] = await db
+    .select({ c: count() })
+    .from(media)
+    .innerJoin(projects, eq(media.projectId, projects.id))
+    .where(and(eq(projects.accountId, accountId), sql`${media.mimeType} LIKE 'image/%'`));
+  const photosUploaded = Number(photoRow?.c ?? 0);
+  if (photosUploaded < 5) return;
+
+  // Atomic check-and-set: exactly one request can win this UPDATE.
+  const flipped = await db
+    .update(accounts)
+    .set({ activatedAt: new Date() })
+    .where(and(eq(accounts.id, accountId), isNull(accounts.activatedAt)))
+    .returning({ activatedAt: accounts.activatedAt });
+  if (flipped.length === 0) return; // lost the race — someone else fired it
+
+  if (!acct.ownerId) return; // legacy account with no stamped owner — nothing to send
+  const owner = await authStorage.getUser(acct.ownerId);
+  if (!owner?.email || isCompAccount(owner.email)) return;
+
+  sendGhlEvent("activation_milestone", {
+    email: owner.email,
+    app_user_id: owner.id,
+    activation_status: "activated",
+    activation_date: flipped[0].activatedAt?.toISOString() ?? new Date().toISOString(),
+    projects_created: projectsCreated,
+    photos_uploaded: photosUploaded,
+  });
 }
 
 async function verifyProjectAccess(projectId: number, accountId: string): Promise<boolean> {
@@ -664,6 +720,17 @@ export async function registerRoutes(
         project_id: projectId,
         count: created.length,
       }).catch((err) => console.error("[customerio] track photo_uploaded failed:", err));
+
+      // S46 GHL activation_milestone — account crosses ≥1 project AND ≥5
+      // photos. Fully fire-and-forget (doesn't delay the upload response).
+      // Idempotency: atomic conditional UPDATE ... WHERE activated_at IS NULL;
+      // only the request that flips the row (rowCount=1) sends the event, so
+      // concurrent batch uploads can't double-fire. The event identity is the
+      // account's ORIGINATING ADMIN (accounts.ownerId — same rule as
+      // partial_signup/trial_started), not the uploading team member.
+      checkActivationMilestone(project.accountId).catch((err) =>
+        console.error("[ghl] activation_milestone check failed (non-fatal):", err));
+
       res.status(201).json(await presignMediaUrls(created));
     } catch (error: any) {
       console.error("Create media error:", error?.message || error);

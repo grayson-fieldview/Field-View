@@ -176,6 +176,15 @@ async function findOrCreateOAuthUser(opts: {
     trialEndsAt: initialTrialEndsAt,
   } as any);
 
+  // S46 GHL: stamp the self-serve creator as account owner, mirroring
+  // /api/register. Done after upsertUser because the user id only exists
+  // now. Without this, OAuth-created accounts had owner_id NULL, which
+  // silently skipped the owner-gated HubSpot sync AND would skip the
+  // owner-gated trial_started event.
+  if (isNewAccount) {
+    await db.update(accounts).set({ ownerId: created.id }).where(eq(accounts.id, accountId));
+  }
+
   // S41: invite acceptance — atomically mark invitation accepted and seed
   // project_assignments for any restricted-role pre-assignments. If a
   // referenced project was deleted between invite-send and acceptance,
