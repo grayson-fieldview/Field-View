@@ -188,6 +188,36 @@ async function findOrCreateOAuthUser(opts: {
   return { user: created, isNewSignup: true, isNewAccount, newAccountName };
 }
 
+// S46 — persist first-touch marketing attribution onto a freshly-created user
+// row. Shared by /api/register and the Google/Microsoft OAuth callbacks (the
+// session survives the OAuth redirect round-trip — same mechanism as
+// oauthInviteToken). Non-fatal by design: an attribution write failure must
+// never block signup.
+async function persistSignupAttribution(req: any, userId: string): Promise<void> {
+  try {
+    const attr = (req.session?.attribution ?? {}) as Record<string, string | undefined>;
+    const fbp = req.cookies?._fbp ?? null;
+    const fbc = req.cookies?._fbc ?? null;
+    await db.update(users).set({
+      signupReferrer: attr.referrer ?? null,
+      signupUtmSource: attr.utm_source ?? null,
+      signupUtmMedium: attr.utm_medium ?? null,
+      signupUtmCampaign: attr.utm_campaign ?? null,
+      signupUtmContent: attr.utm_content ?? null,
+      signupUtmTerm: attr.utm_term ?? null,
+      signupFbclid: attr.fbclid ?? null,
+      signupFbp: fbp,
+      signupFbc: fbc,
+    }).where(eq(users.id, userId));
+  } catch (attrErr) {
+    console.warn("[attribution] signup write failed (non-fatal):", attrErr);
+    Sentry.captureException(attrErr, {
+      tags: { stage: "signup_attribution" },
+      level: "warning",
+    });
+  }
+}
+
 /**
  * S41: shared acceptance writer. Wraps "mark invitation accepted" + "seed
  * project_assignments rows" in a single tx. Called from both the password
@@ -419,20 +449,24 @@ export async function setupAuth(app: Express) {
               const name = [user.firstName, user.lastName].filter(Boolean).join(" ").trim() || "(no name)";
               sendSlackNotification(`🎉 New signup (Google): ${user.email} — ${name}`).catch(() => {});
             }
+            // S46 — persist first-touch UTMs for any freshly-created user row
+            // (session survives the OAuth redirect, same as oauthInviteToken).
+            if (isNewSignup) {
+              await persistSignupAttribution(req, user.id);
+            }
             // S46 GHL partial_signup — only on first-time ACCOUNT creation
             // (isNewAccount), never on sign-ins or OAuth invite acceptances.
-            // No attribution capture exists on the OAuth path, so
-            // signup_source falls back to "direct".
             if (isNewAccount && !isCompAccount(user.email)) {
+              const ghlAttr = (req.session?.attribution ?? {}) as Record<string, string | undefined>;
               sendGhlEvent("partial_signup", {
                 email: user.email,
                 app_user_id: user.id,
                 company_name: newAccountName,
                 trial_ends_at: user.trialEndsAt, // trial clock starts NOW, at page 1
                 partial_signup_date: new Date().toISOString().slice(0, 10),
-                signup_source: "direct",
-                utm_medium: null,
-                utm_campaign: null,
+                signup_source: ghlAttr.utm_source ?? "direct",
+                utm_medium: ghlAttr.utm_medium ?? null,
+                utm_campaign: ghlAttr.utm_campaign ?? null,
                 signup_method: "google",
               });
             }
@@ -478,18 +512,24 @@ export async function setupAuth(app: Express) {
               const name = [user.firstName, user.lastName].filter(Boolean).join(" ").trim() || "(no name)";
               sendSlackNotification(`🎉 New signup (Microsoft): ${user.email} — ${name}`).catch(() => {});
             }
+            // S46 — persist first-touch UTMs for any freshly-created user row
+            // (session survives the OAuth redirect, same as oauthInviteToken).
+            if (isNewSignup) {
+              await persistSignupAttribution(req, user.id);
+            }
             // S46 GHL partial_signup — only on first-time ACCOUNT creation
             // (isNewAccount), never on sign-ins or OAuth invite acceptances.
             if (isNewAccount && !isCompAccount(user.email)) {
+              const ghlAttr = (req.session?.attribution ?? {}) as Record<string, string | undefined>;
               sendGhlEvent("partial_signup", {
                 email: user.email,
                 app_user_id: user.id,
                 company_name: newAccountName,
                 trial_ends_at: user.trialEndsAt, // trial clock starts NOW, at page 1
                 partial_signup_date: new Date().toISOString().slice(0, 10),
-                signup_source: "direct",
-                utm_medium: null,
-                utm_campaign: null,
+                signup_source: ghlAttr.utm_source ?? "direct",
+                utm_medium: ghlAttr.utm_medium ?? null,
+                utm_campaign: ghlAttr.utm_campaign ?? null,
                 signup_method: "microsoft",
               });
             }
@@ -689,28 +729,7 @@ export async function setupAuth(app: Express) {
       // land as NULL. Wrapped in try/catch — an attribution write failure
       // must never block signup. PR 4/5 will read these on
       // CompleteRegistration / Subscribe CAPI events.
-      try {
-        const attr = ((req.session as any)?.attribution ?? {}) as Record<string, string | undefined>;
-        const fbp = (req as any).cookies?._fbp ?? null;
-        const fbc = (req as any).cookies?._fbc ?? null;
-        await db.update(users).set({
-          signupReferrer: attr.referrer ?? null,
-          signupUtmSource: attr.utm_source ?? null,
-          signupUtmMedium: attr.utm_medium ?? null,
-          signupUtmCampaign: attr.utm_campaign ?? null,
-          signupUtmContent: attr.utm_content ?? null,
-          signupUtmTerm: attr.utm_term ?? null,
-          signupFbclid: attr.fbclid ?? null,
-          signupFbp: fbp,
-          signupFbc: fbc,
-        }).where(eq(users.id, user.id));
-      } catch (attrErr) {
-        console.warn("[attribution] signup write failed (non-fatal):", attrErr);
-        Sentry.captureException(attrErr, {
-          tags: { stage: "signup_attribution" },
-          level: "warning",
-        });
-      }
+      await persistSignupAttribution(req, user.id);
 
       // S41: invite acceptance writer — atomic invitation status flip + project_assignments seed.
       if (invitationForAssignment) {

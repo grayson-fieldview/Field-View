@@ -55,6 +55,8 @@ export default function WelcomePage() {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         phone: phone.trim(),
+        // S46 GHL: server persists this as users.sms_consent_at (set-once).
+        tcpaAccepted,
       };
       if (isAdmin) {
         body.industry = industry;

@@ -10,6 +10,8 @@ import { eq } from "drizzle-orm";
 import { INDUSTRY_VALUES, COMPANY_SIZE_VALUES } from "@shared/constants";
 import { sendEmailVerificationEmail } from "../../services/email";
 import { syncProfileToHubSpot } from "../../services/hubspot";
+import { sendGhlEvent, estimatedMrrFromCompanySize } from "../../lib/ghl";
+import { isCompAccount } from "../../lib/slack";
 
 export function registerAuthRoutes(app: Express): void {
   app.get("/api/auth/user", isAuthenticated, async (req: any, res) => {
@@ -42,7 +44,7 @@ export function registerAuthRoutes(app: Express): void {
 
   app.patch("/api/auth/me", isAuthenticated, async (req: any, res) => {
     try {
-      const { firstName, lastName, phone, industry, companySize } = req.body || {};
+      const { firstName, lastName, phone, industry, companySize, tcpaAccepted } = req.body || {};
 
       const userUpdate: Record<string, any> = {};
 
@@ -117,6 +119,14 @@ export function registerAuthRoutes(app: Express): void {
       // /welcome gate releases. Idempotent — re-PATCHing later just refreshes it.
       userUpdate.profileCompletedAt = new Date();
 
+      // S46 GHL: persist A2P/TCPA SMS consent. Previously the checkbox was
+      // client-side only. Set-once semantics: consent is stamped the first
+      // time tcpaAccepted=true arrives and never cleared or re-stamped here
+      // (an audit trail timestamp, not a toggle).
+      if (tcpaAccepted === true && existing.smsConsentAt == null) {
+        userUpdate.smsConsentAt = new Date();
+      }
+
       const updated = await authStorage.updateUser(req.user.id, userUpdate);
       if (!updated) {
         return res.status(404).json({ message: "User not found" });
@@ -124,6 +134,40 @@ export function registerAuthRoutes(app: Express): void {
 
       if (Object.keys(accountUpdate).length > 0 && updated.accountId) {
         await db.update(accounts).set(accountUpdate).where(eq(accounts.id, updated.accountId));
+      }
+
+      // S46 GHL trial_started — fires ONLY on the NULL→set transition of
+      // profileCompletedAt (page 2 / "Complete Setup" finished). Re-PATCHes
+      // never re-fire. Fire-and-forget; the account lookup is wrapped so a
+      // DB hiccup can't break the PATCH.
+      if (isFirstCompletion && updated.email && !isCompAccount(updated.email)) {
+        try {
+          let acctIndustry: string | null = accountUpdate.industry ?? null;
+          let acctCompanySize: string | null = accountUpdate.companySize ?? null;
+          if (updated.accountId && (acctIndustry == null || acctCompanySize == null)) {
+            const [acctRow] = await db
+              .select({ industry: accounts.industry, companySize: accounts.companySize })
+              .from(accounts)
+              .where(eq(accounts.id, updated.accountId))
+              .limit(1);
+            acctIndustry = acctIndustry ?? acctRow?.industry ?? null;
+            acctCompanySize = acctCompanySize ?? acctRow?.companySize ?? null;
+          }
+          sendGhlEvent("trial_started", {
+            email: updated.email,
+            app_user_id: updated.id,
+            first_name: updated.firstName,
+            last_name: updated.lastName,
+            phone: updated.phone,
+            sms_consent: updated.smsConsentAt != null,
+            trade_type: acctIndustry,
+            crew_size: acctCompanySize,
+            trial_ends_at: updated.trialEndsAt,
+            estimated_mrr: estimatedMrrFromCompanySize(acctCompanySize),
+          });
+        } catch (ghlErr) {
+          console.error("[auth/me] GHL trial_started lookup failed (non-fatal):", ghlErr);
+        }
       }
 
       // First-completion transition → mint verification token + send email.
