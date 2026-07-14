@@ -1,0 +1,14 @@
+Implement the GHL lifecycle integration described in the attached guide (ghl-integration-guide.md). The attached ghl.ts is the relay module — place it at server/lib/ghl.ts as-is, adjusting only import paths if needed.
+Rules:
+
+Implement in this order: (a) schema changes — add users.sms_consent_at and accounts.activated_at to the Drizzle schema and generate the migration, but do NOT run it against production; (b) place ghl.ts; (c) the four integration points from the guide, sections 1–4. Stop after each section and show me the diff before continuing.
+The guide's code snippets are reference implementations — adapt variable names, ORM syntax, and import paths to our actual codebase (you investigated it earlier; the guide is based on your report). Where the guide's assumptions don't match reality (e.g., column names, how the admin user is fetched in the Stripe handler), follow the codebase and tell me what you changed.
+Do not modify existing behavior: the Slack notifications, ChartMogul, Stripe signature verification, and Rewardful code stay exactly as they are. The GHL calls are additions alongside them, never replacements.
+Customer.io is deprecated — but do NOT remove its code in this change. Leave every Customer.io call untouched; we'll rip it out as a separate task. Just don't extend or copy its patterns.
+All four env var reads must no-op safely when unset (the module already does this — preserve that behavior). Add the four var names to .env.example or equivalent if one exists.
+In the PATCH /api/auth/me handler: the trial_started event must fire only when profile_completed_at transitions from NULL to set — fetch the prior value before updating. Also persist tcpaAccepted from the request body into sms_consent_at per the guide.
+The activation check-and-set must be atomic (conditional UPDATE with WHERE activated_at IS NULL, checking rows affected) so concurrent photo uploads can't double-fire.
+Don't fire the OAuth partial_signup calls for sign-INS — only for first-time account creation at the two OAuth call sites. If the existing code doesn't distinguish signup from login at those lines, tell me before proceeding.
+When done: list every file changed, confirm nothing sends to GHL until the env vars are set, and write the exact test commands/steps I can run locally to verify each of the four events fires with the correct payload (e.g., pointing the env vars at a webhook.site URL).
+
+Do not deploy. Stop at a reviewed, ready-to-merge state.

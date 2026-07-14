@@ -31,6 +31,10 @@ export const accounts = pgTable("accounts", {
   subscriptionLapsedAt: timestamp("subscription_lapsed_at"),
   industry: varchar("industry"),
   companySize: varchar("company_size"),
+  // S46 GHL: idempotency guard for the activation_milestone lifecycle event
+  // (≥1 project AND ≥5 photos). Set exactly once via an atomic conditional
+  // UPDATE ... WHERE activated_at IS NULL.
+  activatedAt: timestamp("activated_at"),
   companyLogoUrl: varchar("company_logo_url"),
   companyLegalName: text("company_legal_name"),
   companyAddress: text("company_address"),
@@ -65,6 +69,10 @@ export const users = pgTable("users", {
   hourlyRateCents: integer("hourly_rate_cents"),
   phone: varchar("phone"),
   profileCompletedAt: timestamp("profile_completed_at"),
+  // S46 GHL: A2P/TCPA SMS consent timestamp. Set when the user checks the
+  // consent box on the Complete Setup page (tcpaAccepted in PATCH
+  // /api/auth/me). Previously the checkbox was client-side only.
+  smsConsentAt: timestamp("sms_consent_at"),
   verificationCode: varchar("verification_code", { length: 6 }),
   verificationCodeExpiresAt: timestamp("verification_code_expires_at"),
   verificationCodeAttempts: integer("verification_code_attempts").notNull().default(0),
