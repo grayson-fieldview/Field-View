@@ -30,6 +30,7 @@ import {
 } from "../../middleware/rate-limit";
 import { Sentry } from "../../lib/sentry";
 import { sendSlackNotification, isCompAccount } from "../../lib/slack";
+import { sendGhlEvent } from "../../lib/ghl";
 import { csrfGuard } from "../../middleware/csrf";
 import { touchLastActive } from "../../middleware/touch-last-active";
 import { attributionCapture } from "../../middleware/attribution";
@@ -54,7 +55,16 @@ async function findOrCreateOAuthUser(opts: {
   lastName?: string | null;
   profileImageUrl?: string | null;
   inviteToken?: string | null;
-}): Promise<{ user: User; isNewSignup: boolean }> {
+}): Promise<{
+  user: User;
+  isNewSignup: boolean;
+  // S46 GHL: true ONLY when a brand-new self-serve account was created here
+  // (branch 3, no invite). False for returning users, email-linked sign-ins,
+  // AND invite acceptances — partial_signup must not fire for those.
+  isNewAccount: boolean;
+  // Name of the freshly-created account (null unless isNewAccount).
+  newAccountName: string | null;
+}> {
   const providerIdField = opts.provider === "google" ? "googleId" : "microsoftId";
 
   // 1. Match by provider id (returning user)
@@ -66,7 +76,7 @@ async function findOrCreateOAuthUser(opts: {
     if (restoreResult.expired) {
       throw new Error("Account no longer exists");
     }
-    return { user: restoreResult.user, isNewSignup: false };
+    return { user: restoreResult.user, isNewSignup: false, isNewAccount: false, newAccountName: null };
   }
 
   // 2. Match by email — link the provider id to the existing account.
@@ -85,7 +95,7 @@ async function findOrCreateOAuthUser(opts: {
         lastName: restoreResult.user.lastName || opts.lastName || null,
         profileImageUrl: restoreResult.user.profileImageUrl || opts.profileImageUrl || null,
       } as any);
-      return { user: updated!, isNewSignup: false };
+      return { user: updated!, isNewSignup: false, isNewAccount: false, newAccountName: null };
     }
   }
 
@@ -101,6 +111,8 @@ async function findOrCreateOAuthUser(opts: {
   // S41: stash the validated invitation here so we can run the
   // applyInvitationAcceptance tx AFTER the user row is created.
   let invitationForAssignment: typeof invitations.$inferSelect | null = null;
+  let isNewAccount = false;
+  let newAccountName: string | null = null;
 
   // TODO: Terms acceptance gate for OAuth signups. Users signing up via Google
   // currently bypass the terms checkbox on /register. Consider adding a
@@ -146,6 +158,8 @@ async function findOrCreateOAuthUser(opts: {
     }).returning();
     accountId = account.id;
     role = "admin";
+    isNewAccount = true;
+    newAccountName = account.name;
   }
 
   const created = await authStorage.upsertUser({
@@ -171,7 +185,7 @@ async function findOrCreateOAuthUser(opts: {
     await applyInvitationAcceptance(invitationForAssignment, created.id);
   }
 
-  return { user: created, isNewSignup: true };
+  return { user: created, isNewSignup: true, isNewAccount, newAccountName };
 }
 
 /**
@@ -392,7 +406,7 @@ export async function setupAuth(app: Express) {
           try {
             const email = profile.emails?.[0]?.value || null;
             const inviteToken = (req.session as any)?.oauthInviteToken || null;
-            const { user, isNewSignup } = await findOrCreateOAuthUser({
+            const { user, isNewSignup, isNewAccount, newAccountName } = await findOrCreateOAuthUser({
               provider: "google",
               providerId: profile.id,
               email,
@@ -404,6 +418,23 @@ export async function setupAuth(app: Express) {
             if (isNewSignup && !isCompAccount(user.email)) {
               const name = [user.firstName, user.lastName].filter(Boolean).join(" ").trim() || "(no name)";
               sendSlackNotification(`🎉 New signup (Google): ${user.email} — ${name}`).catch(() => {});
+            }
+            // S46 GHL partial_signup — only on first-time ACCOUNT creation
+            // (isNewAccount), never on sign-ins or OAuth invite acceptances.
+            // No attribution capture exists on the OAuth path, so
+            // signup_source falls back to "direct".
+            if (isNewAccount && !isCompAccount(user.email)) {
+              sendGhlEvent("partial_signup", {
+                email: user.email,
+                app_user_id: user.id,
+                company_name: newAccountName,
+                trial_ends_at: user.trialEndsAt, // trial clock starts NOW, at page 1
+                partial_signup_date: new Date().toISOString().slice(0, 10),
+                signup_source: "direct",
+                utm_medium: null,
+                utm_campaign: null,
+                signup_method: "google",
+              });
             }
             return done(null, user);
           } catch (err: any) {
@@ -434,7 +465,7 @@ export async function setupAuth(app: Express) {
               profile._json?.userPrincipalName ||
               null;
             const inviteToken = (req.session as any)?.oauthInviteToken || null;
-            const { user, isNewSignup } = await findOrCreateOAuthUser({
+            const { user, isNewSignup, isNewAccount, newAccountName } = await findOrCreateOAuthUser({
               provider: "microsoft",
               providerId: profile.id,
               email,
@@ -446,6 +477,21 @@ export async function setupAuth(app: Express) {
             if (isNewSignup && !isCompAccount(user.email)) {
               const name = [user.firstName, user.lastName].filter(Boolean).join(" ").trim() || "(no name)";
               sendSlackNotification(`🎉 New signup (Microsoft): ${user.email} — ${name}`).catch(() => {});
+            }
+            // S46 GHL partial_signup — only on first-time ACCOUNT creation
+            // (isNewAccount), never on sign-ins or OAuth invite acceptances.
+            if (isNewAccount && !isCompAccount(user.email)) {
+              sendGhlEvent("partial_signup", {
+                email: user.email,
+                app_user_id: user.id,
+                company_name: newAccountName,
+                trial_ends_at: user.trialEndsAt, // trial clock starts NOW, at page 1
+                partial_signup_date: new Date().toISOString().slice(0, 10),
+                signup_source: "direct",
+                utm_medium: null,
+                utm_campaign: null,
+                signup_method: "microsoft",
+              });
             }
             return done(null, user);
           } catch (err: any) {
@@ -674,6 +720,24 @@ export async function setupAuth(app: Express) {
       if (!isCompAccount(user.email)) {
         const name = [user.firstName, user.lastName].filter(Boolean).join(" ").trim() || "(no name)";
         sendSlackNotification(`🎉 New signup: ${user.email} — ${name}`).catch(() => {});
+      }
+
+      // S46 GHL partial_signup — self-serve account creations only (invitees
+      // join an existing account, so no lifecycle event). Attribution comes
+      // from the same session store the attribution UPDATE above used.
+      if (!inviteToken && !isCompAccount(user.email)) {
+        const ghlAttr = ((req.session as any)?.attribution ?? {}) as Record<string, string | undefined>;
+        sendGhlEvent("partial_signup", {
+          email: user.email,
+          app_user_id: user.id,
+          company_name: companyName.trim().slice(0, 200),
+          trial_ends_at: initialTrialEndsAt, // trial clock starts NOW, at page 1
+          partial_signup_date: new Date().toISOString().slice(0, 10),
+          signup_source: ghlAttr.utm_source ?? "direct",
+          utm_medium: ghlAttr.utm_medium ?? null,
+          utm_campaign: ghlAttr.utm_campaign ?? null,
+          signup_method: "email",
+        });
       }
 
       if (inviteToken) {

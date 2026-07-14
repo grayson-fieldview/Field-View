@@ -1,0 +1,70 @@
+// server/lib/ghl.ts
+// GHL (GoHighLevel) inbound-webhook relay for lifecycle events.
+// Mirrors the Slack notification pattern: fire-and-forget, never blocks
+// or fails the request path. If an env var is missing (e.g., local dev),
+// the call is a silent no-op.
+
+const GHL_URLS = {
+  partial_signup: process.env.GHL_PARTIAL_SIGNUP_WEBHOOK_URL,
+  trial_started: process.env.GHL_TRIAL_STARTED_WEBHOOK_URL,
+  activation_milestone: process.env.GHL_ACTIVATION_WEBHOOK_URL,
+  billing_event: process.env.GHL_BILLING_WEBHOOK_URL,
+} as const;
+
+export type GhlEvent = keyof typeof GHL_URLS;
+
+export function sendGhlEvent(
+  event: GhlEvent,
+  payload: Record<string, unknown>,
+): void {
+  const url = GHL_URLS[event];
+  if (!url) return;
+
+  fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ event, ...payload }),
+  }).catch(() => {
+    // Intentionally swallowed — a GHL outage must never break signup,
+    // profile completion, uploads, or Stripe webhook processing.
+    // (Optional: report to Sentry as a non-fatal breadcrumb.)
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Estimated MRR from the company_size dropdown (accounts.company_size).
+// Pricing: $79/mo includes 3 seats; each additional seat is $29/mo.
+//
+// NOTE: assumed seats are deliberately conservative — a company's headcount
+// is not its FieldView seat count (office staff, subs, and part-timers
+// usually don't get seats). Tune these as real seat data comes in, then
+// compare against actual accounts.seat_count for paid accounts.
+// ---------------------------------------------------------------------------
+
+const SEAT_ASSUMPTIONS: Record<string, number> = {
+  "1-5": 3, // covered by base plan
+  "6-20": 8, // 79 + 5 × 29  = $224
+  "21-50": 15, // 79 + 12 × 29 = $427
+  "51-100": 25, // 79 + 22 × 29 = $717
+  "100+": 40, // 79 + 37 × 29 = $1,152
+};
+
+const BASE_PRICE = 79;
+const SEAT_PRICE = 29;
+const INCLUDED_SEATS = 3;
+
+export function estimatedMrrFromCompanySize(
+  companySize?: string | null,
+): number {
+  const seats = SEAT_ASSUMPTIONS[companySize ?? ""] ?? INCLUDED_SEATS;
+  return BASE_PRICE + Math.max(0, seats - INCLUDED_SEATS) * SEAT_PRICE;
+}
+
+export function actualMrrFromSeats(seatCount: number, isAnnual: boolean): number {
+  const monthlyEquivalentBase = isAnnual ? 588 / 12 : BASE_PRICE; // $49/mo effective on annual
+  const monthlyEquivalentSeat = isAnnual ? 240 / 12 : SEAT_PRICE; // $20/mo effective on annual
+  return (
+    monthlyEquivalentBase +
+    Math.max(0, seatCount - INCLUDED_SEATS) * monthlyEquivalentSeat
+  );
+}
