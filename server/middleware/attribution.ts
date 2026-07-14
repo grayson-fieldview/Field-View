@@ -69,22 +69,45 @@ export function attributionCapture(
     const sess = (req as any).session;
     if (!sess) return next();
 
-    if (!sess.attribution || typeof sess.attribution !== "object") {
-      sess.attribution = {};
+    // Session-cookie hygiene (mobile logout incident): NEVER mutate a fresh
+    // session unless there is actually something to store. Assigning
+    // `sess.attribution = {}` unconditionally marks the session as modified,
+    // which defeats saveUninitialized:false — express-session then persists
+    // an empty session and emits Set-Cookie with a NEW sid on the response,
+    // INCLUDING 401/403 error responses. A mobile client whose session row
+    // had expired/been pruned would get its (otherwise recoverable) cookie
+    // replaced by an empty anonymous sid → permanent logout.
+    //
+    // Also skip /api/* entirely: attribution is a landing-page concern, and
+    // the Referer header on an API XHR is just our own app URL — worthless
+    // as marketing attribution, but enough to initialize a session.
+    if (req.path.startsWith("/api/")) {
+      // _fbc handling below is still skipped too — fbclid never arrives on
+      // API calls; landing-page hits carry it.
+      return next();
     }
-    const attr = sess.attribution as Record<string, string>;
 
-    // First-touch-wins for each query field.
+    const existing =
+      sess.attribution && typeof sess.attribution === "object"
+        ? (sess.attribution as Record<string, string>)
+        : undefined;
+
+    // Gather first-touch-wins updates WITHOUT touching the session.
+    const updates: Record<string, string> = {};
     for (const field of QUERY_FIELDS) {
-      if (attr[field]) continue;
+      if (existing?.[field]) continue;
       const value = clean((req.query as any)?.[field]);
-      if (value) attr[field] = value;
+      if (value) updates[field] = value;
+    }
+    if (!existing?.referrer) {
+      const referrer = clean(req.headers.referer);
+      if (referrer) updates.referrer = referrer;
     }
 
-    // First-touch-wins for referrer (HTTP Referer header).
-    if (!attr.referrer) {
-      const referrer = clean(req.headers.referer);
-      if (referrer) attr.referrer = referrer;
+    // Only now mutate the session — and only if there is new data.
+    if (Object.keys(updates).length > 0) {
+      if (!existing) sess.attribution = {};
+      Object.assign(sess.attribution, updates);
     }
 
     // _fbc cookie: Meta wants the LATEST click reflected in the browser
