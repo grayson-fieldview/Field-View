@@ -1,0 +1,56 @@
+SESSION 2 — /api/v1 endpoints for Zapier (consumes Session 1's
+requireApiKey middleware, now live in prod). Diagnosis + Session 1
+approved and deployed.
+
+MOUNT: /api/v1 router, all routes behind requireApiKey. Confirm the
+router is mounted so Bearer requests bypass csrfGuard per Session
+1's mechanism, and paste how it's mounted.
+
+Account scope for every endpoint: req.apiKeyAccount.accountId.
+Visibility: account-wide (owner-level) per approved design.
+
+ENDPOINTS:
+
+1. GET /api/v1/photos
+   Query params: since (ISO 8601, optional), project_id (optional),
+   limit (default 50, max 100), sorted created_at DESC.
+   Payload per photo: id, project_id, url (permanent CloudFront),
+   caption, tags, latitude, longitude, created_at, uploaded_by
+   { id, name }.
+   `since` filters created_at > since — this is the Zapier polling
+   contract; timestamps strict ISO 8601 UTC with milliseconds.
+
+2. GET /api/v1/projects
+   Query params: since (optional), status (optional), limit
+   (default 50, max 100), created_at DESC.
+   Payload: id, name, description, status, address, latitude,
+   longitude, tags, created_at, updated_at.
+
+3. POST /api/v1/projects
+   Body: name (required), description, address, status, tags —
+   validate with the existing insertProjectSchema pattern, inject
+   accountId from the key and createdById = accounts.ownerId
+   (approved decision). Return the created project in the GET
+   payload shape. 422 with field-level errors on validation failure.
+
+4. GET /api/v1/reports
+   Query params: since (optional), limit (default 50, max 100).
+   Payload: id, project_id, title, share_url (the public tokened
+   URL), created_at. Powers the "Report Shared" trigger. Report how
+   report share tokens/URLs are stored and construct share_url
+   accordingly.
+
+CONVENTIONS:
+- Responses: { data: [...] } for lists, { data: {...} } for single.
+  Errors: { error: { code, message } }.
+- snake_case keys in API payloads (Zapier convention) — map
+  explicitly from the camelCase DB layer.
+- 401 bad/missing/revoked key (middleware), 429 from rate limiter,
+  404 for wrong-account project_id.
+- No pagination cursors in v1 — since + limit covers Zapier polling.
+
+OUT OF SCOPE: webhooks/REST hooks, Zapier app config, docs pages,
+any new tables or migrations.
+
+TS zero new errors, categorized drift. Show me the full diff.
+Don't commit, don't push.

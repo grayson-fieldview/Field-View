@@ -6,6 +6,7 @@ import { setupAuth, registerAuthRoutes, isAuthenticated, requireReadAccess, requ
 import { getAccountBilling, isAccountBillingEnabled, overlayAccountBillingOnUser, isSeatAddonItem } from "./lib/billing";
 import { requireAdmin, requireAdminOrManager, requireOwnerAdmin } from "./middleware/auth";
 import { generateApiKey } from "./lib/apiKeys";
+import { apiV1Router } from "./apiV1";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
 import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistSectionSchema, insertChecklistItemOptionSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, checklistItems, checklistSections, checklistItemOptions, checklistItemPhotos, checklistTemplates, checklistTemplateSections, checklistTemplateItems, checklistTemplateItemOptions, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, pendingGeofenceExits, pendingGeofenceEnters, templateConfigSchema, accountSettingsPatchSchema, apiKeys } from "@shared/schema";
@@ -2898,6 +2899,13 @@ export async function registerRoutes(
       res.status(500).json({ message: error.message || "Failed to update seat count" });
     }
   });
+
+  // ── /api/v1 — external (Zapier) data endpoints, API-key authed ──
+  // Mounted inside registerRoutes, i.e. AFTER setupAuth(app) has installed
+  // csrfGuard, so every request passes through csrfGuard first. Bearer
+  // requests are admitted by csrfGuard's Authorization-header branch, then
+  // authenticated by requireApiKey at the router level (no session fallback).
+  app.use("/api/v1", apiV1Router);
 
   // ── API keys — session-authed owner management for the settings UI ──
   // These endpoints are guarded by requireOwnerAdmin (session cookie), NOT by
