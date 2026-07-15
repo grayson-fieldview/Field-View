@@ -11,11 +11,6 @@
 // user hitting two warm instances within the throttle window may get
 // touched twice. That's fine — accuracy is within ~1 minute, and one
 // extra UPDATE per cold instance is negligible vs. one-per-request.
-//
-// Customer.io is NOT synced here. last_active_at goes to CIO via the
-// next identify() call (e.g. on the user's next signup-adjacent event,
-// or via the periodic re-identify cron in a later phase). Syncing on
-// every touch would explode our CIO API budget.
 
 import type { RequestHandler } from "express";
 import { db } from "../db";

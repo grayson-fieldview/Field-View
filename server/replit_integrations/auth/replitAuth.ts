@@ -35,8 +35,6 @@ import { normalizeEmail } from "../../lib/normalizeEmail";
 import { csrfGuard } from "../../middleware/csrf";
 import { touchLastActive } from "../../middleware/touch-last-active";
 import { attributionCapture } from "../../middleware/attribution";
-import { identifyUser, trackEvent, CIO_EVENTS } from "../../services/customerio";
-import { syncNewAccountToHubSpot } from "../../services/hubspot";
 
 function getBaseUrl(req?: Request) {
   if (process.env.OAUTH_BASE_URL) return process.env.OAUTH_BASE_URL;
@@ -180,8 +178,7 @@ async function findOrCreateOAuthUser(opts: {
   // S46 GHL: stamp the self-serve creator as account owner, mirroring
   // /api/register. Done after upsertUser because the user id only exists
   // now. Without this, OAuth-created accounts had owner_id NULL, which
-  // silently skipped the owner-gated HubSpot sync AND would skip the
-  // owner-gated trial_started event.
+  // would skip the owner-gated trial_started event.
   if (isNewAccount) {
     await db.update(accounts).set({ ownerId: created.id }).where(eq(accounts.id, accountId));
   }
@@ -725,8 +722,8 @@ export async function setupAuth(app: Express) {
 
       // New self-serve account: stamp its owner as the creating admin. Done here
       // (not at the accounts insert above) because the user id only exists after
-      // upsertUser. Owner identity gates the HubSpot profile sync in
-      // PATCH /api/auth/me so invited users never become HubSpot contacts.
+      // upsertUser. Owner identity gates owner-only GHL events (e.g.
+      // trial_started) so invited users never fire them.
       if (!inviteToken) {
         await db.update(accounts).set({ ownerId: user.id }).where(eq(accounts.id, accountId));
       }
@@ -793,16 +790,6 @@ export async function setupAuth(app: Express) {
       // flow — they were already emailed a verification link above and must
       // click it before signing in cleanly.
       if (inviteToken) {
-        // S45 — fire CIO signed_up for invitee path even though there's no
-        // auto-login here. The user row exists; the welcome/activation
-        // campaign should start now and the email_verified event will
-        // follow when they click the verification link.
-        identifyUser(user.id).catch((err) =>
-          console.error("[customerio] identify on signup (invitee) failed:", err),
-        );
-        trackEvent(user.id, CIO_EVENTS.SIGNED_UP, { via: "invite" }).catch((err) =>
-          console.error("[customerio] track signed_up (invitee) failed:", err),
-        );
         return res.status(201).json({
           message: "Please check your email to verify your account.",
           email: user.email,
@@ -825,25 +812,6 @@ export async function setupAuth(app: Express) {
           }
           const { password: _pw, ...safeUser } = user as any;
           const safeUserWithBilling = await overlayAccountBillingOnUser(safeUser, req);
-          // S45 — fire CIO identify + signed_up after req.login + session.save
-          // succeed. Fire-and-forget so a slow CIO never blocks the 201.
-          identifyUser(user.id).catch((err) =>
-            console.error("[customerio] identify on signup (trial) failed:", err),
-          );
-          trackEvent(user.id, CIO_EVENTS.SIGNED_UP, { via: "trial" }).catch((err) =>
-            console.error("[customerio] track signed_up (trial) failed:", err),
-          );
-          // HubSpot signup sync — NEW-ACCOUNT path only (this req.login block is
-          // the no-inviteToken/trial branch). Fire-and-forget ALONGSIDE the CIO
-          // calls above; the helper is non-fatal and never throws into the 201.
-          if (!inviteToken && user.email) {
-            syncNewAccountToHubSpot({
-              email: user.email,
-              accountId,
-              accountName: companyName.trim().slice(0, 200),
-              trialEndsAt: initialTrialEndsAt,
-            });
-          }
           return res.status(201).json(safeUserWithBilling);
         });
       });
@@ -1114,18 +1082,6 @@ export async function setupAuth(app: Express) {
       }).where(eq(users.id, user.id));
 
       console.info("[verify-email-code] verified", { userId: user.id, email: user.email });
-
-      // Welcome email migrated out of Resend to Customer.io (pre-launch, gap accepted).
-      // The CIO welcome campaign keys off this event.
-      // S45 prod fix — defensive identify here ensures the Person has full
-      // attributes even if the signup-time identify lost the Vercel-suspension
-      // race. waitUntil inside customerio.ts keeps both calls alive past res.json().
-      identifyUser(user.id).catch((err) =>
-        console.error("[customerio] identify on email_verified failed:", err),
-      );
-      trackEvent(user.id, CIO_EVENTS.EMAIL_VERIFIED).catch((err) =>
-        console.error("[customerio] track email_verified failed:", err),
-      );
 
       const [verifiedUser] = await db.select().from(users).where(eq(users.id, user.id));
       if (!verifiedUser) {

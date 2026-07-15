@@ -1,5 +1,5 @@
 - [Team page seat-cap gating](seat-cap-gating.md) — trial cap is enforced in 3 client gates (preflight, disabled button, inline warning), not just the API; change all in lockstep or the UI blocks before the server signal fires.
-- [CRM/marketing side-effect sync](hubspot-cio-side-effect-sync.md) — HubSpot/CIO syncs are fire-and-forget via deferToVercel; helpers return ids, orchestrator wraps+catches; never throw into the request path.
+- [CRM/marketing side-effect sync](hubspot-cio-side-effect-sync.md) — GHL is the only lifecycle platform (CIO/HubSpot removed July 2026); syncs stay fire-and-forget + waitUntil-deferred, never throw into the request path.
 - [Owner gate req.user assembly](owner-gate-req-user-assembly.md) — requireOwnerAdmin reads req.user.account.ownerId, attached only in deserializeUser (the single req.user assembly point); enrich there, never assume the field exists.
 - [Session cookie hygiene](session-cookie-hygiene.md) — any req.session mutation defeats saveUninitialized:false and emits a fresh sid on 401/403, logging out mobile; only write session when there's real data.
 - [Billing flag user fallback](billing-flag-user-fallback.md) — getAccountBilling honors accounts.subscription_status only when ACCOUNT_BILLING_ENABLED is on; otherwise the USER row's status (default 'none') decides → 402 locked.

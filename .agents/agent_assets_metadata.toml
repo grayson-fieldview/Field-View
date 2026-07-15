@@ -6,3 +6,9 @@ id = "oW2wSYIHPuMeuya4k8Ql1"
 uri = "file://.local/geofence_removal.diff.txt"
 type = "text"
 title = "Geofence removal — full diff (1,757 lines)"
+
+[[outputs]]
+id = "BYIO8erwoWV9DCE8H2Mri"
+uri = "file://.local/cio_hubspot_removal.diff.txt"
+type = "text"
+title = "Customer.io + HubSpot removal — full diff (1,124 lines)"

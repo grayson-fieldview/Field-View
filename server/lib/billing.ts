@@ -164,39 +164,6 @@ export function computeSeatCountFromSub(sub: any): number {
   return 3 + extra;
 }
 
-// Customer.io MRR computation. Per-seat-cent constants live here (next to
-// the rest of the billing math) rather than in customerio.ts because they
-// are billing facts, not lifecycle-marketing facts. Sourced from the live
-// Stripe price catalog at audit time — keep in sync if Stripe prices change.
-//
-// Plan shape: $79/mo (or $588/yr = $49/mo) base for the first 3 seats,
-// then $29/mo (or $290/yr = ~$24.17/mo) per additional seat add-on. MRR is
-// expressed as monthly recurring revenue — annual subscriptions are
-// divided by 12 so CIO segments compare like-for-like.
-export const MONTHLY_BASE_PRICE_CENTS = 7900;
-export const ANNUAL_BASE_PRICE_CENTS = 58800;
-export const MONTHLY_SEAT_ADDON_PRICE_CENTS = 2900;
-export const ANNUAL_SEAT_ADDON_PRICE_CENTS = 29000;
-const BASE_SEATS_INCLUDED = 3;
-
-export function computeMrrCents(
-  seatCount: number | null | undefined,
-  billingCycle: string | null | undefined,
-): number | null {
-  if (!billingCycle) return null;
-  const seats = seatCount ?? BASE_SEATS_INCLUDED;
-  const addonSeats = Math.max(0, seats - BASE_SEATS_INCLUDED);
-  if (billingCycle === "monthly") {
-    return MONTHLY_BASE_PRICE_CENTS + addonSeats * MONTHLY_SEAT_ADDON_PRICE_CENTS;
-  }
-  if (billingCycle === "annual") {
-    const annualTotal =
-      ANNUAL_BASE_PRICE_CENTS + addonSeats * ANNUAL_SEAT_ADDON_PRICE_CENTS;
-    return Math.round(annualTotal / 12);
-  }
-  return null;
-}
-
 export async function overlayAccountBillingOnUser<T extends Record<string, any>>(
   user: T,
   req: any,
