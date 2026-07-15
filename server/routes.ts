@@ -6768,6 +6768,44 @@ export async function registerRoutes(
       }
 
       const baseUrl = `${req.protocol}://${req.get("host")}`;
+
+      // Duplicate-subscription guard: if this account already has a live
+      // subscription (id stored AND status active/trialing/past_due), do NOT
+      // create a new Checkout session — a second checkout would create a
+      // duplicate subscription on the same customer. Send them to the Stripe
+      // billing portal instead (same pattern as /api/create-portal-session).
+      // The client redirects to whatever `url` comes back, so no UI change.
+      // Sub id + status are evaluated as PAIRS from the same source (billing
+      // row, then user row) — mixing fields across sources can misclassify
+      // when the two records have drifted.
+      const liveStatuses = ["active", "trialing", "past_due"];
+      const billingLive =
+        !!billing.stripeSubscriptionId &&
+        liveStatuses.includes(billing.subscriptionStatus || "");
+      const userLive =
+        !!user.stripeSubscriptionId &&
+        liveStatuses.includes(user.subscriptionStatus || "");
+      const existingSubId = billingLive
+        ? billing.stripeSubscriptionId
+        : userLive
+          ? user.stripeSubscriptionId
+          : null;
+      const existingStatus = billingLive
+        ? billing.subscriptionStatus
+        : userLive
+          ? user.subscriptionStatus
+          : null;
+      if (existingSubId) {
+        console.log(
+          `[checkout] user ${user.id} already has live subscription ${existingSubId} (${existingStatus}) — redirecting to billing portal instead of checkout`,
+        );
+        const portalSession = await stripe.billingPortal.sessions.create({
+          customer: customerId,
+          return_url: `${baseUrl}/settings`,
+        });
+        return res.json({ url: portalSession.url, redirected: "billing_portal" });
+      }
+
       const hasSubscription =
         billing.subscriptionStatus === "active" ||
         !!billing.stripeSubscriptionId ||
@@ -6848,14 +6886,35 @@ export async function registerRoutes(
       }
 
       const stripe = await getUncachableStripeClient();
-      const subscriptions = await stripe.subscriptions.list({
-        customer: user.stripeCustomerId,
-        limit: 1,
-        status: "all",
-      });
 
-      if (subscriptions.data.length > 0) {
-        const sub = subscriptions.data[0];
+      // Multi-subscription safety: if we already know the account's
+      // subscription, sync THAT one by id — a `list({ limit: 1, status:
+      // "all" })` can return a stale duplicate first and overwrite the
+      // stored id. Only fall back to listing when nothing is stored, and
+      // then prefer live subs (active/trialing, most recent by created)
+      // over canceled leftovers.
+      let sub: any = null;
+      if (user.stripeSubscriptionId) {
+        try {
+          sub = await stripe.subscriptions.retrieve(user.stripeSubscriptionId);
+        } catch (e: any) {
+          console.error(
+            `[confirm-checkout] failed to retrieve stored sub ${user.stripeSubscriptionId}: ${e?.message} — falling back to list`,
+          );
+        }
+      }
+      if (!sub) {
+        const [activeSubs, trialingSubs] = await Promise.all([
+          stripe.subscriptions.list({ customer: user.stripeCustomerId, status: "active", limit: 10 }),
+          stripe.subscriptions.list({ customer: user.stripeCustomerId, status: "trialing", limit: 10 }),
+        ]);
+        const candidates = [...activeSubs.data, ...trialingSubs.data].sort(
+          (a, b) => (b.created || 0) - (a.created || 0),
+        );
+        sub = candidates[0] || null;
+      }
+
+      if (sub) {
         let appStatus = "none";
         if (sub.status === "active") appStatus = "active";
         else if (sub.status === "trialing") appStatus = "trialing";
