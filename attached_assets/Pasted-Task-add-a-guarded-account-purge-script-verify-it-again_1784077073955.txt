@@ -1,0 +1,148 @@
+Task: add a guarded account-purge script, verify it against our schema, and run its DRY RUN only. Do not delete anything.
+Step 1 — Create this file at script/migrations/purge_session48_stale_accounts.ts with exactly this content:
+typescript/**
+ * purge_session48_stale_accounts.ts
+ *
+ * Deletes:
+ *   1. Both Southern Brush Painting accounts (any user email @southernbrushpainting.com)
+ *   2. All accounts where NO user has ever logged in (every users.last_active_at IS NULL)
+ *
+ * Default mode is DRY RUN (read-only). Deletion requires CONFIRM_DELETE=yes.
+ */
+
+import { db } from "../../server/db"; // adjust import to match repo layout
+import { sql } from "drizzle-orm";
+
+const DATABASE_URL = process.env.DATABASE_URL ?? "";
+
+function assertSafeTarget() {
+  const isRds = DATABASE_URL.includes("rds.amazonaws.com");
+  const isNeon = DATABASE_URL.includes("neon.tech");
+  if (!isRds && !isNeon) {
+    throw new Error("REFUSING TO RUN: DATABASE_URL is neither RDS nor Neon. Aborting.");
+  }
+  if (isRds && process.env.ALLOW_PROD_MIGRATION !== "yes") {
+    throw new Error("REFUSING TO RUN against prod RDS without ALLOW_PROD_MIGRATION=yes");
+  }
+  const host = DATABASE_URL.split("@")[1]?.split("/")[0] ?? "(unparseable)";
+  console.log(`[purge] target DB host: ${host}`);
+  console.log(`[purge] mode: ${process.env.CONFIRM_DELETE === "yes" ? "DELETE" : "DRY RUN (read-only)"}`);
+}
+
+// Accounts that must never be deleted regardless of criteria.
+const PROTECTED_EMAIL_PATTERNS = [
+  "%@palmbeach-painters.com",
+  "%@field-view.com",
+];
+
+async function main() {
+  assertSafeTarget();
+
+  const candidates = await db.execute(sql`
+    WITH colin_accounts AS (
+      SELECT DISTINCT a.id
+      FROM accounts a
+      JOIN users u ON u.account_id = a.id
+      WHERE u.email ILIKE '%@southernbrushpainting.com'
+    ),
+    never_logged_in AS (
+      SELECT a.id
+      FROM accounts a
+      WHERE NOT EXISTS (
+        SELECT 1 FROM users u
+        WHERE u.account_id = a.id AND u.last_active_at IS NOT NULL
+      )
+    ),
+    combined AS (
+      SELECT id FROM colin_accounts
+      UNION
+      SELECT id FROM never_logged_in
+    ),
+    protected AS (
+      SELECT DISTINCT u.account_id AS id
+      FROM users u
+      WHERE u.email ILIKE ANY(ARRAY[${sql.join(
+        PROTECTED_EMAIL_PATTERNS.map((p) => sql`${p}`),
+        sql`, `
+      )}])
+    )
+    SELECT
+      a.id,
+      a.company_name,
+      a.created_at,
+      (SELECT string_agg(u.email || COALESCE(' [last login: ' || u.last_active_at::text || ']', ' [never logged in]'), '; ')
+         FROM users u WHERE u.account_id = a.id) AS user_emails,
+      (SELECT COUNT(*) FROM users u WHERE u.account_id = a.id) AS user_count,
+      (SELECT COUNT(*) FROM projects p WHERE p.account_id = a.id) AS project_count,
+      (SELECT COUNT(*) FROM media m WHERE m.account_id = a.id) AS media_count
+    FROM accounts a
+    WHERE a.id IN (SELECT id FROM combined)
+      AND a.id NOT IN (SELECT id FROM protected)
+    ORDER BY a.created_at
+  `);
+
+  const rows = candidates.rows as any[];
+  if (rows.length === 0) {
+    console.log("[purge] No accounts matched. Nothing to do.");
+    return;
+  }
+
+  console.log(`\n[purge] ===== KILL LIST: ${rows.length} account(s) =====`);
+  for (const r of rows) {
+    console.log(
+      `  - ${r.id} | ${r.company_name ?? "(no name)"} | signed up ${r.created_at} | users: ${r.user_count} | projects: ${r.project_count} | media: ${r.media_count}`
+    );
+    console.log(`      ${r.user_emails}`);
+  }
+
+  const accountIds = rows.map((r) => r.id);
+
+  const mediaRows = await db.execute(sql`
+    SELECT id, account_id, s3_key
+    FROM media
+    WHERE account_id = ANY(${accountIds})
+  `);
+  const media = mediaRows.rows as any[];
+  if (media.length > 0) {
+    console.log(`\n[purge] ===== S3 KEYS TO DELETE MANUALLY (${media.length}) =====`);
+    for (const m of media) console.log(`  ${m.s3_key}`);
+  } else {
+    console.log("\n[purge] No media rows — nothing to clean in S3.");
+  }
+
+  if (process.env.CONFIRM_DELETE !== "yes") {
+    console.log("\n[purge] DRY RUN complete. No rows deleted. Re-run with CONFIRM_DELETE=yes to delete.");
+    return;
+  }
+
+  await db.transaction(async (tx) => {
+    const del = async (label: string, query: any) => {
+      const res = await tx.execute(query);
+      console.log(`[purge] deleted from ${label}: ${res.rowCount ?? "?"} row(s)`);
+    };
+
+    await del("media", sql`DELETE FROM media WHERE account_id = ANY(${accountIds})`);
+    await del("timesheets", sql`DELETE FROM timesheets WHERE account_id = ANY(${accountIds})`);
+    await del("projects", sql`DELETE FROM projects WHERE account_id = ANY(${accountIds})`);
+    await del("users", sql`DELETE FROM users WHERE account_id = ANY(${accountIds})`);
+    await del("accounts", sql`DELETE FROM accounts WHERE id = ANY(${accountIds})`);
+  });
+
+  console.log("\n[purge] DONE. Verify in TablePlus and remove the Replit IP from the RDS SG.");
+}
+
+main().catch((err) => {
+  console.error("[purge] FAILED — transaction rolled back:", err);
+  process.exit(1);
+});
+Step 2 — Verify against our actual schema before running. Check shared/schema.ts (use rg, not grep) and correct the script if needed:
+
+The import path for db — fix it to match how our other migration scripts (e.g. script/migrations/migrate_session22_timesheets.ts) import the drizzle instance.
+The media table's S3 key column — I assumed s3_key. Use the real column name.
+The timesheets table's real name and whether it references account_id directly. If it references user_id instead, change that delete to WHERE user_id IN (SELECT id FROM users WHERE account_id = ANY(...)).
+List ALL other tables in the schema with foreign keys to accounts, users, or projects (invites, comments, sessions, anything). For each, add a delete statement in correct FK order inside the transaction. Do NOT touch auth_rate_limits — it is owned by rate-limiter-flexible and must never be written to by app code.
+
+Step 3 — Report your changes, then run the DRY RUN only:
+npx tsx script/migrations/purge_session48_stale_accounts.ts
+If the environment's DATABASE_URL points at prod RDS, the dry run will refuse without ALLOW_PROD_MIGRATION=yes — you may add that flag for the dry run ONLY. Paste the complete output including the full kill list and S3 keys.
+Step 4 — STOP. Do not set CONFIRM_DELETE under any circumstances. Do not delete anything. Do not modify any other files. Show me the diff before approving. Don't push.
