@@ -123,12 +123,16 @@ async function main() {
   }
 
   const accountIds = rows.map((r) => r.id);
+  // Individually-parameterized IN-list — the driver binds a JS array passed
+  // to "= ANY" as a scalar ("op ANY/ALL (array) requires array"), so each id
+  // is bound separately.
+  const idList = sql.join(accountIds.map((id) => sql`${id}`), sql`, `);
 
   const mediaRows = await db.execute(sql`
     SELECT m.id, p.account_id, m.url
     FROM media m
     JOIN projects p ON p.id = m.project_id
-    WHERE p.account_id = ANY(${accountIds})
+    WHERE p.account_id IN (${idList})
   `);
   const media = mediaRows.rows as any[];
   if (media.length > 0) {
@@ -151,15 +155,14 @@ async function main() {
       console.log(`[purge] deleted from ${label}: ${res.rowCount ?? "?"} row(s)`);
     };
     // Scoping CTE fragments (inlined per statement).
-    const A = accountIds;
-    const projSel = sql`SELECT id FROM projects WHERE account_id = ANY(${A})`;
-    const userSel = sql`SELECT id FROM users WHERE account_id = ANY(${A})`;
+    const projSel = sql`SELECT id FROM projects WHERE account_id IN (${idList})`;
+    const userSel = sql`SELECT id FROM users WHERE account_id IN (${idList})`;
     const mediaSel = sql`SELECT id FROM media WHERE project_id IN (${projSel})`;
     const checklistSel = sql`SELECT id FROM checklists WHERE project_id IN (${projSel})`;
     const itemSel = sql`SELECT id FROM checklist_items WHERE checklist_id IN (${checklistSel})`;
-    const reportSel = sql`SELECT id FROM reports WHERE account_id = ANY(${A}) OR project_id IN (${projSel})`;
+    const reportSel = sql`SELECT id FROM reports WHERE account_id IN (${idList}) OR project_id IN (${projSel})`;
     const sectionSel = sql`SELECT id FROM report_sections WHERE report_id IN (${reportSel})`;
-    const tplSel = sql`SELECT id FROM checklist_templates WHERE account_id = ANY(${A})`;
+    const tplSel = sql`SELECT id FROM checklist_templates WHERE account_id IN (${idList})`;
     const tplSectionSel = sql`SELECT id FROM checklist_template_sections WHERE template_id IN (${tplSel})`;
     const tplItemSel = sql`SELECT id FROM checklist_template_items WHERE template_id IN (${tplSel})`;
 
@@ -178,28 +181,28 @@ async function main() {
 
     // 3. Reports tree (section photos already gone)
     await del("report_sections", sql`DELETE FROM report_sections WHERE report_id IN (${reportSel})`);
-    await del("reports", sql`DELETE FROM reports WHERE account_id = ANY(${A}) OR project_id IN (${projSel})`);
+    await del("reports", sql`DELETE FROM reports WHERE account_id IN (${idList}) OR project_id IN (${projSel})`);
 
     // 4. Project-scoped rows
     await del("tasks", sql`DELETE FROM tasks WHERE project_id IN (${projSel})`);
-    await del("pending_geofence_exits", sql`DELETE FROM pending_geofence_exits WHERE account_id = ANY(${A}) OR user_id IN (${userSel})`);
-    await del("pending_geofence_enters", sql`DELETE FROM pending_geofence_enters WHERE account_id = ANY(${A}) OR user_id IN (${userSel})`);
-    await del("time_entries", sql`DELETE FROM time_entries WHERE account_id = ANY(${A}) OR user_id IN (${userSel})`); // BEFORE projects (project_id FK is ON DELETE RESTRICT)
+    await del("pending_geofence_exits", sql`DELETE FROM pending_geofence_exits WHERE account_id IN (${idList}) OR user_id IN (${userSel})`);
+    await del("pending_geofence_enters", sql`DELETE FROM pending_geofence_enters WHERE account_id IN (${idList}) OR user_id IN (${userSel})`);
+    await del("time_entries", sql`DELETE FROM time_entries WHERE account_id IN (${idList}) OR user_id IN (${userSel})`); // BEFORE projects (project_id FK is ON DELETE RESTRICT)
     await del("project_assignments", sql`DELETE FROM project_assignments WHERE project_id IN (${projSel}) OR user_id IN (${userSel})`);
     await del("media", sql`DELETE FROM media WHERE project_id IN (${projSel})`);
-    await del("projects", sql`DELETE FROM projects WHERE account_id = ANY(${A})`);
+    await del("projects", sql`DELETE FROM projects WHERE account_id IN (${idList})`);
 
     // 5. Account-scoped rows
-    await del("calendar_events", sql`DELETE FROM calendar_events WHERE account_id = ANY(${A})`);
-    await del("calendar_connections", sql`DELETE FROM calendar_connections WHERE account_id = ANY(${A}) OR user_id IN (${userSel})`);
-    await del("account_tags", sql`DELETE FROM account_tags WHERE account_id = ANY(${A})`);
-    await del("api_keys", sql`DELETE FROM api_keys WHERE account_id = ANY(${A})`);
-    await del("report_templates", sql`DELETE FROM report_templates WHERE account_id = ANY(${A})`);
+    await del("calendar_events", sql`DELETE FROM calendar_events WHERE account_id IN (${idList})`);
+    await del("calendar_connections", sql`DELETE FROM calendar_connections WHERE account_id IN (${idList}) OR user_id IN (${userSel})`);
+    await del("account_tags", sql`DELETE FROM account_tags WHERE account_id IN (${idList})`);
+    await del("api_keys", sql`DELETE FROM api_keys WHERE account_id IN (${idList})`);
+    await del("report_templates", sql`DELETE FROM report_templates WHERE account_id IN (${idList})`);
     await del("checklist_template_item_options", sql`DELETE FROM checklist_template_item_options WHERE item_id IN (${tplItemSel})`);
     await del("checklist_template_items", sql`DELETE FROM checklist_template_items WHERE template_id IN (${tplSel}) OR section_id IN (${tplSectionSel})`);
     await del("checklist_template_sections", sql`DELETE FROM checklist_template_sections WHERE template_id IN (${tplSel})`);
-    await del("checklist_templates", sql`DELETE FROM checklist_templates WHERE account_id = ANY(${A})`);
-    await del("invitations", sql`DELETE FROM invitations WHERE account_id = ANY(${A}) OR invited_by_id IN (${userSel})`);
+    await del("checklist_templates", sql`DELETE FROM checklist_templates WHERE account_id IN (${idList})`);
+    await del("invitations", sql`DELETE FROM invitations WHERE account_id IN (${idList}) OR invited_by_id IN (${userSel})`);
 
     // 6. User-scoped auth rows
     await del("password_reset_tokens", sql`DELETE FROM password_reset_tokens WHERE user_id IN (${userSel})`);
@@ -211,8 +214,8 @@ async function main() {
     console.log(`[purge] nulled checklist_templates.created_by_id: ${tplNull.rowCount ?? "?"} row(s)`);
 
     // 8. Users, then accounts
-    await del("users", sql`DELETE FROM users WHERE account_id = ANY(${A})`);
-    await del("accounts", sql`DELETE FROM accounts WHERE id = ANY(${A})`);
+    await del("users", sql`DELETE FROM users WHERE account_id IN (${idList})`);
+    await del("accounts", sql`DELETE FROM accounts WHERE id IN (${idList})`);
 
     // NOTE: auth_rate_limits intentionally untouched (rate-limiter-flexible
     // owns it). sessions has no user FK (opaque jsonb) — stale sessions for
