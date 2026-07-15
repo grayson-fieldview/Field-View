@@ -243,6 +243,23 @@ export async function handleSubscriptionEvent(event: any) {
         else if (status === "canceled" || status === "unpaid")
           appStatus = "canceled";
 
+        // Multi-subscription guard: an update that would downgrade the
+        // account (canceled/lapsed states) must come from the account's
+        // active subscription — a stale duplicate sub must not overwrite
+        // stripeSubscriptionId or downgrade the account. Upgrades/neutral
+        // statuses and users with no stored sub keep current behavior.
+        const isDowngrade = appStatus === "canceled" || appStatus === "past_due";
+        if (
+          isDowngrade &&
+          user.stripeSubscriptionId &&
+          data.id !== user.stripeSubscriptionId
+        ) {
+          console.log(
+            `[stripeWebhook] subscription.updated (${status}) for ${data.id} ignored — account's active sub is ${user.stripeSubscriptionId}`,
+          );
+          return;
+        }
+
         let seatCountFromSub: number | undefined;
         let subForGhl: any = data; // event payload already carries items; upgraded below
         try {
@@ -331,6 +348,15 @@ export async function handleSubscriptionEvent(event: any) {
       const customerId = data.customer;
       const user = await authStorage.getUserByStripeCustomerId(customerId);
       if (user) {
+        // Multi-subscription guard: canceling a stale duplicate subscription
+        // must not churn an account whose active subscription is different.
+        // Null/empty stored sub keeps current behavior.
+        if (user.stripeSubscriptionId && data.id !== user.stripeSubscriptionId) {
+          console.log(
+            `[stripeWebhook] subscription.deleted for ${data.id} ignored — account's active sub is ${user.stripeSubscriptionId}`,
+          );
+          return;
+        }
         await authStorage.updateUser(user.id, {
           subscriptionStatus: "canceled",
         });
