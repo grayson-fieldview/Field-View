@@ -6,6 +6,7 @@ import { setupAuth, registerAuthRoutes, isAuthenticated, requireReadAccess, requ
 import { getAccountBilling, isAccountBillingEnabled, overlayAccountBillingOnUser, isSeatAddonItem } from "./lib/billing";
 import { requireAdmin, requireAdminOrManager, requireOwnerAdmin } from "./middleware/auth";
 import { generateApiKey } from "./lib/apiKeys";
+import { normalizeEmail } from "./lib/normalizeEmail";
 import { apiV1Router } from "./apiV1";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
@@ -3417,7 +3418,7 @@ export async function registerRoutes(
 
         const [existingInvite] = await tx.select().from(invitations).where(
           and(
-            eq(invitations.email, email.toLowerCase()),
+            eq(invitations.email, normalizeEmail(String(email))),
             eq(invitations.accountId, currentUser.accountId),
             eq(invitations.status, "pending"),
           ),
@@ -3426,7 +3427,7 @@ export async function registerRoutes(
 
         const [created] = await tx.insert(invitations).values({
           accountId: currentUser.accountId,
-          email: email.toLowerCase(),
+          email: normalizeEmail(String(email)),
           firstName: trimmedFirst,
           lastName: trimmedLast,
           role: effectiveRole,

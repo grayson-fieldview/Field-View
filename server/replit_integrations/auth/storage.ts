@@ -1,6 +1,7 @@
 import { users, type User, type UpsertUser } from "@shared/models/auth";
 import { db } from "../../db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
+import { normalizeEmail } from "../../lib/normalizeEmail";
 
 export interface IAuthStorage {
   getUser(id: string): Promise<User | undefined>;
@@ -21,10 +22,15 @@ class AuthStorage implements IAuthStorage {
 
   async getUserByEmail(email: string): Promise<User | undefined> {
     if (!email) return undefined;
-    // Session 3 BUG 1 fix: case-insensitive lookup so callers can't
-    // accidentally bypass the duplicate-email guard with mixed casing.
-    const normalized = email.trim().toLowerCase();
-    const [user] = await db.select().from(users).where(eq(users.email, normalized));
+    // Case-insensitive on BOTH sides: legacy rows stored with mixed case
+    // (pre-normalization signups) must still be reachable, so the stored
+    // column is lowered in SQL rather than compared verbatim. No index on
+    // lower(email) — acceptable seq scan at current user-table size.
+    const normalized = normalizeEmail(email);
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(sql`lower(${users.email}) = ${normalized}`);
     return user;
   }
 

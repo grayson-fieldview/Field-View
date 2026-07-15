@@ -9,7 +9,8 @@ import { WebhookHandlers } from "./webhookHandlers";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { db } from "./db";
 import { users, accounts } from "@shared/models/auth";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
+import { normalizeEmail } from "./lib/normalizeEmail";
 import { initSentry, Sentry } from "./lib/sentry";
 import { logCsrfStartupMode } from "./middleware/csrf";
 import { handleSubscriptionEvent } from "./lib/stripeWebhook";
@@ -160,7 +161,7 @@ export async function bootstrapAdminAndOrphans() {
           lastName: users.lastName,
         })
         .from(users)
-        .where(eq(users.email, admin.email));
+        .where(sql`lower(${users.email}) = ${normalizeEmail(admin.email)}`);
       if (existing) {
         const updates: Record<string, any> = {};
         if (existing.subscriptionStatus !== "active") {
@@ -179,7 +180,7 @@ export async function bootstrapAdminAndOrphans() {
           await db
             .update(users)
             .set(updates)
-            .where(eq(users.email, admin.email));
+            .where(sql`lower(${users.email}) = ${normalizeEmail(admin.email)}`);
           console.log(
             `Admin account ${admin.email} updated:`,
             Object.keys(updates).join(", "),

@@ -31,6 +31,7 @@ import {
 import { Sentry } from "../../lib/sentry";
 import { sendSlackNotification, isCompAccount } from "../../lib/slack";
 import { sendGhlEvent } from "../../lib/ghl";
+import { normalizeEmail } from "../../lib/normalizeEmail";
 import { csrfGuard } from "../../middleware/csrf";
 import { touchLastActive } from "../../middleware/touch-last-active";
 import { attributionCapture } from "../../middleware/attribution";
@@ -80,8 +81,8 @@ async function findOrCreateOAuthUser(opts: {
   }
 
   // 2. Match by email — link the provider id to the existing account.
-  // Session 3 BUG 1 fix: normalize casing for symmetry with /api/register.
-  const normalizedEmail = opts.email ? opts.email.trim().toLowerCase() : null;
+  // Normalized for symmetry with /api/register.
+  const normalizedEmail = normalizeEmail(opts.email) || null;
   if (normalizedEmail) {
     const existing = await authStorage.getUserByEmail(normalizedEmail);
     if (existing) {
@@ -124,7 +125,7 @@ async function findOrCreateOAuthUser(opts: {
     if (!invitation || new Date() > invitation.expiresAt) {
       throw new Error("Invalid or expired invitation");
     }
-    if (invitation.email.toLowerCase() !== normalizedEmail) {
+    if (normalizeEmail(invitation.email) !== normalizedEmail) {
       throw new Error("Email does not match invitation");
     }
     accountId = invitation.accountId;
@@ -388,7 +389,7 @@ export async function setupAuth(app: Express) {
       { usernameField: "email", passwordField: "password", passReqToCallback: true },
       async (req: any, email: string, password: string, done: any) => {
         const logFail = (reason: string) => {
-          const normalizedEmail = (email || "").toLowerCase();
+          const normalizedEmail = normalizeEmail(email || "");
           const ip = req.ip || req.socket?.remoteAddress || "unknown";
           const ts = new Date().toISOString();
           console.warn(
@@ -620,10 +621,10 @@ export async function setupAuth(app: Express) {
         return res.status(400).json({ message: "Email and password are required" });
       }
 
-      // Session 3 BUG 1 fix: normalize email casing so the duplicate check
-      // and the eventual users.email row are case-insensitive (matches how
-      // login + invite-email comparisons already lowercase).
-      const email = String(rawEmail).trim().toLowerCase();
+      // Normalize email casing so the duplicate check and the eventual
+      // users.email row are case-insensitive (matches how login +
+      // invite-email comparisons already lowercase).
+      const email = normalizeEmail(String(rawEmail));
 
       if (password.length < 8) {
         return res.status(400).json({ message: "Password must be at least 8 characters" });
@@ -653,7 +654,7 @@ export async function setupAuth(app: Express) {
         if (!invitation || new Date() > invitation.expiresAt) {
           return res.status(400).json({ message: "Invalid or expired invitation" });
         }
-        if (invitation.email.toLowerCase() !== email.toLowerCase()) {
+        if (normalizeEmail(invitation.email) !== email) {
           return res.status(400).json({ message: "Email does not match invitation" });
         }
         accountId = invitation.accountId;
@@ -993,7 +994,9 @@ export async function setupAuth(app: Express) {
         });
 
         try {
-          await sendPasswordResetEmail(email, token);
+          // Send to the canonical stored address, not the raw request value
+          // (which may carry stray whitespace/casing).
+          await sendPasswordResetEmail(user.email!, token);
         } catch (emailErr) {
           console.error("[forgot-password] email send failed:", emailErr);
         }
