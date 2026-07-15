@@ -1,0 +1,16 @@
+Two-step task: investigate, then remove ALL Customer.io and ALL HubSpot integration code. Do not change anything until I approve the investigation report.
+Context: Customer.io and HubSpot are both fully deprecated — GoHighLevel is the lifecycle platform of record. Customer.io's credentials are already dead (every call 401s in prod logs: [customerio] track failed ... Unauthorized, firing on photo_uploaded and project_created). HubSpot Phase 1 (contacts/companies/deals at trial signup) is no longer used. Both should be removed entirely.
+CRITICAL constraint: GHL integration is untouchable. server/lib/ghl.ts, every sendGhlEvent call, and everything GHL-related stays exactly as-is. Customer.io/HubSpot calls often sit adjacent to GHL calls in the same handlers (signup routes, Stripe webhook, activation) — remove only the CIO/HubSpot lines, never the surrounding logic.
+Step 1 — Investigation (use rg, not grep):
+
+Map every Customer.io call site: rg -ni "customerio|customer.io|cio_" server/ shared/ --glob '!node_modules'. For each, report file:line and what event it tracks.
+Same for HubSpot: rg -ni "hubspot|hs_" server/ shared/ --glob '!node_modules'.
+Identify the module files themselves (e.g., server/lib/customerio.ts, any hubspot lib), their exports, and confirm nothing outside their own call sites imports them.
+Check package.json for dedicated dependencies (customerio SDK, hubspot API client) that become removable.
+List all env vars referenced (CUSTOMERIO_, HUBSPOT_) so I can delete them from Vercel afterward.
+Flag any place where a CIO/HubSpot call shares a try/catch, a variable, or control flow with GHL or other surviving logic — these need careful extraction, not block deletion.
+Check client/src for any references (there shouldn't be any, but verify).
+Report and stop.
+
+Step 2 — Removal (after my approval):
+Delete the module files, every call site, dead imports, and the removable package.json dependencies (update the lockfile). Surrounding handler logic must be behaviorally identical afterward — same responses, same GHL events, same error handling for what remains. No schema changes, no env var file changes (I'll clean Vercel manually). TypeScript holds the 46-error baseline. Show me the diff before approving. Don't push.
