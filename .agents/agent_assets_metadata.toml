@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "oW2wSYIHPuMeuya4k8Ql1"
+uri = "file://.local/geofence_removal.diff.txt"
+type = "text"
+title = "Geofence removal — full diff (1,757 lines)"

@@ -18,14 +18,6 @@
   ],
   "crons": [
     {
-      "path": "/api/cron/process-pending-exits",
-      "schedule": "* * * * *"
-    },
-    {
-      "path": "/api/cron/process-pending-enters",
-      "schedule": "* * * * *"
-    },
-    {
       "path": "/api/cron/max-shift-cleanup",
       "schedule": "*/30 * * * *"
     }
