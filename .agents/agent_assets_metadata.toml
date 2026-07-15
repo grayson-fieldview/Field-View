@@ -12,3 +12,9 @@ id = "BYIO8erwoWV9DCE8H2Mri"
 uri = "file://.local/cio_hubspot_removal.diff.txt"
 type = "text"
 title = "Customer.io + HubSpot removal — full diff (1,124 lines)"
+
+[[outputs]]
+id = "V-nadgiC_1SnyXWhMta5O"
+uri = "file://.local/slack_gating.diff.txt"
+type = "text"
+title = "Slack signup alert gating — full diff"

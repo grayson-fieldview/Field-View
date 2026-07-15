@@ -36,6 +36,34 @@ import { csrfGuard } from "../../middleware/csrf";
 import { touchLastActive } from "../../middleware/touch-last-active";
 import { attributionCapture } from "../../middleware/attribution";
 
+// Slack "team member joined" alert for invite acceptances. Fully
+// fire-and-forget: the account-name lookup and the Slack post both run
+// detached from the request path, and any failure degrades gracefully
+// (falls back to the account id, then to omitting the company entirely).
+function notifyTeamMemberJoined(
+  user: Pick<User, "id" | "email" | "firstName" | "lastName" | "accountId">,
+): void {
+  void (async () => {
+    const name =
+      [user.firstName, user.lastName].filter(Boolean).join(" ").trim() || "(no name)";
+    let company = "";
+    try {
+      if (user.accountId != null) {
+        const [acct] = await db
+          .select({ name: accounts.name })
+          .from(accounts)
+          .where(eq(accounts.id, user.accountId))
+          .limit(1);
+        company = acct?.name?.trim() || `account ${user.accountId}`;
+      }
+    } catch {
+      company = user.accountId != null ? `account ${user.accountId}` : "";
+    }
+    const suffix = company ? ` → ${company}` : "";
+    await sendSlackNotification(`➕ Team member joined: ${user.email} — ${name}${suffix}`);
+  })().catch(() => {});
+}
+
 function getBaseUrl(req?: Request) {
   if (process.env.OAUTH_BASE_URL) return process.env.OAUTH_BASE_URL;
   if (process.env.REPLIT_DOMAINS) {
@@ -452,9 +480,13 @@ export async function setupAuth(app: Express) {
               profileImageUrl: profile.photos?.[0]?.value || null,
               inviteToken,
             });
-            if (isNewSignup && !isCompAccount(user.email)) {
+            // Mirrors the GHL partial_signup gate below: alert only on
+            // brand-new self-serve accounts, never on invite acceptances.
+            if (isNewAccount && !isCompAccount(user.email)) {
               const name = [user.firstName, user.lastName].filter(Boolean).join(" ").trim() || "(no name)";
               sendSlackNotification(`🎉 New signup (Google): ${user.email} — ${name}`).catch(() => {});
+            } else if (isNewSignup && !isNewAccount && !isCompAccount(user.email)) {
+              notifyTeamMemberJoined(user);
             }
             // S46 — persist first-touch UTMs for any freshly-created user row
             // (session survives the OAuth redirect, same as oauthInviteToken).
@@ -515,9 +547,13 @@ export async function setupAuth(app: Express) {
               profileImageUrl: null,
               inviteToken,
             });
-            if (isNewSignup && !isCompAccount(user.email)) {
+            // Mirrors the GHL partial_signup gate below: alert only on
+            // brand-new self-serve accounts, never on invite acceptances.
+            if (isNewAccount && !isCompAccount(user.email)) {
               const name = [user.firstName, user.lastName].filter(Boolean).join(" ").trim() || "(no name)";
               sendSlackNotification(`🎉 New signup (Microsoft): ${user.email} — ${name}`).catch(() => {});
+            } else if (isNewSignup && !isNewAccount && !isCompAccount(user.email)) {
+              notifyTeamMemberJoined(user);
             }
             // S46 — persist first-touch UTMs for any freshly-created user row
             // (session survives the OAuth redirect, same as oauthInviteToken).
@@ -743,9 +779,13 @@ export async function setupAuth(app: Express) {
         await applyInvitationAcceptance(invitationForAssignment, user.id);
       }
 
-      if (!isCompAccount(user.email)) {
+      // Mirrors the GHL partial_signup gate below: "New signup" only for
+      // self-serve account creations; invite acceptances get a distinct alert.
+      if (!inviteToken && !isCompAccount(user.email)) {
         const name = [user.firstName, user.lastName].filter(Boolean).join(" ").trim() || "(no name)";
         sendSlackNotification(`🎉 New signup: ${user.email} — ${name}`).catch(() => {});
+      } else if (inviteToken && !isCompAccount(user.email)) {
+        notifyTeamMemberJoined(user);
       }
 
       // S46 GHL partial_signup — self-serve account creations only (invitees
