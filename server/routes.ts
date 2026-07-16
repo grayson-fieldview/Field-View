@@ -24,7 +24,7 @@ import { z } from "zod";
 import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, deleteFromS3, getObjectStream } from "./s3";
 import archiver from "archiver";
 import { sendInvitationEmail, sendAccountDeletionEmail } from "./services/email";
-import { sendGhlEvent } from "./lib/ghl";
+import { sendGhlEvent, syncUsageToGhl } from "./lib/ghl";
 import { isCompAccount } from "./lib/slack";
 import { toCsv } from "./lib/csv";
 import bcrypt from "bcryptjs";
@@ -3936,6 +3936,39 @@ export async function registerRoutes(
       });
     } catch (error: any) {
       console.error("[cron] max-shift-cleanup fatal:", error);
+      Sentry.captureException(error);
+      res.status(500).json({ message: "Cron run failed" });
+    }
+  });
+
+  // GET /api/cron/ghl-usage-sync
+  // Vercel Cron hits this daily at 10:00 UTC (see vercel.json `crons`).
+  // Auth: `Authorization: Bearer <CRON_SECRET>` — same pattern as
+  // max-shift-cleanup above (fail-closed if the secret is unset).
+  // Syncs live usage stats into GHL contact custom fields; DB access is
+  // read-only. Returns the run summary so a manual test-fire shows results.
+  app.get("/api/cron/ghl-usage-sync", async (req, res) => {
+    try {
+      const expected = process.env.CRON_SECRET;
+      if (!expected) {
+        console.error("[cron] CRON_SECRET not set — refusing");
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const auth = req.headers.authorization || "";
+      if (auth !== `Bearer ${expected}`) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const summary = await syncUsageToGhl();
+      if (!summary) {
+        return res.status(200).json({
+          skipped: true,
+          reason: "GHL_API_TOKEN or GHL_LOCATION_ID not set",
+        });
+      }
+      return res.status(200).json(summary);
+    } catch (error: any) {
+      console.error("[cron] ghl-usage-sync fatal:", error);
       Sentry.captureException(error);
       res.status(500).json({ message: "Cron run failed" });
     }

@@ -20,6 +20,10 @@
     {
       "path": "/api/cron/max-shift-cleanup",
       "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/cron/ghl-usage-sync",
+      "schedule": "0 10 * * *"
     }
   ]
 }

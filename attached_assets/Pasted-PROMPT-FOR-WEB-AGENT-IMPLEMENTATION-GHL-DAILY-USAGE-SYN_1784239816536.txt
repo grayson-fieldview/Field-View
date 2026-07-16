@@ -1,0 +1,60 @@
+PROMPT FOR WEB AGENT — IMPLEMENTATION: GHL DAILY USAGE SYNC
+Implement a daily cron job that syncs live usage stats into GoHighLevel contact custom fields. The investigation report from the prior task is the source of truth for all patterns referenced below. Show me the full diff and STOP — no commits, no pushes.
+1. New function — syncUsageToGhl() in server/lib/ghl.ts
+
+Query accounts matching:
+
+sqlWHERE deleted_at IS NULL
+  AND (
+    subscription_status IN ('active', 'past_due')
+    OR (subscription_status IN ('trialing', 'trial') AND trial_ends_at > NOW())
+  )
+(Note: past_due is intentionally included — sales needs usage context on recoverable accounts.)
+
+Resolve each account's owner via accounts.owner_id (the established pattern from routes.ts L128–167). Skip accounts with NULL owner_id (count them). Skip owners matching the existing isCompAccount(email) check, consistent with other GHL call sites.
+Compute per account, reusing the exact counting definitions from checkActivationMilestone (routes.ts ~L129):
+
+projects_created: count of projects for the account
+photos_uploaded: count of media INNER JOINed through projects, mime_type LIKE 'image/%' (videos excluded)
+photos_last_7d: same photo count, additionally filtered media.created_at > NOW() - INTERVAL '7 days'
+seat_count: pattern from server/lib/seats.ts L27 (users on account, deleted_at IS NULL)
+last_activity_at: MAX(users.last_active_at) over the account's non-deleted users
+last_synced_at: NOW()
+
+
+Prefer set-based queries over per-account N+1 where reasonable.
+
+2. GHL API client (new, minimal, in the same module)
+
+Endpoint: POST https://services.leadconnectorhq.com/contacts/upsert with headers Authorization: Bearer ${GHL_API_TOKEN}, Version: 2021-07-28, Content-Type: application/json. Body: locationId: ${GHL_LOCATION_ID}, email (owner's email), and customFields.
+Custom field key map — use exactly these values:
+
+tsconst GHL_FIELD_KEYS = {
+  projects_created: "contact.projects_created",
+  photos_uploaded: "contact.photos_uploaded",
+  seat_count: "contact.seat_count",
+  last_activity_at: "contact.last_activity_at",
+  last_synced_at: "contact.last_synced_at",
+  photos_last_7d: "contact.photos_last_7d",
+};
+
+IMPORTANT — key format: GHL API 2.0's upsert customFields array expects entries shaped like { key: "<field key>", field_value: <value> }. Depending on API version behavior, the key may need the contact. prefix stripped (i.e. projects_created not contact.projects_created). Implement with the full prefixed key as primary, but isolate the key-formatting in one small helper function (e.g. toGhlFieldKey()) so it's a one-line change if the live test shows fields not populating. Add a code comment noting this ambiguity.
+Date fields (last_activity_at, last_synced_at): send as YYYY-MM-DD strings (GHL date-picker fields are date-only).
+Env vars: GHL_API_TOKEN, GHL_LOCATION_ID (both already set in Vercel). If either is unset, log a warning and no-op the entire sync — matching the existing webhook env-var fail-safe behavior.
+Sequential loop, ~150ms delay between contacts. Per-contact try/catch — one failure must not abort the run. If the API responds non-2xx, capture status + response body in the log for that contact. End-of-run summary log: synced N, skipped_null_owner X, skipped_comp Y, failed Z (with emails).
+
+3. Cron route + config
+
+New route GET /api/cron/ghl-usage-sync, authenticated identically to the existing /api/cron/max-shift-cleanup route (routes.ts L3802): Authorization: Bearer ${CRON_SECRET}, 401 fail-closed if unset or mismatched.
+Route returns the summary JSON (synced/skipped/failed counts) so a manual test-fire shows results directly.
+Add to the existing crons array in vercel.json: path /api/cron/ghl-usage-sync, schedule 0 10 * * *.
+Respect the 60s maxDuration: cap processing at 200 accounts per run; if more match, process the first 200 and include "truncated": true in the summary. Do not build pagination yet.
+
+4. Constraints
+
+READ-only against our database — no schema changes, no migrations, no DB writes.
+Do not modify sendGhlEvent() or any existing webhook call sites.
+No new dependencies; use the existing fetch pattern from ghl.ts.
+TypeScript must compile clean. If the baseline has pre-existing TS errors, list them separately — do not fold new errors into an assumed baseline.
+
+Show the full diff and stop.

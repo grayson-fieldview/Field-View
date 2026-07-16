@@ -18,3 +18,9 @@ id = "V-nadgiC_1SnyXWhMta5O"
 uri = "file://.local/slack_gating.diff.txt"
 type = "text"
 title = "Slack signup alert gating — full diff"
+
+[[outputs]]
+id = "WSbu2nZI-vxYIbN5M0SWu"
+uri = "file://.local/ghl_usage_sync.diff.txt"
+type = "text"
+title = "GHL daily usage sync — full diff"
