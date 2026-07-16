@@ -93,11 +93,10 @@ const GHL_FIELD_KEYS = {
 } as const;
 
 // GHL API 2.0's upsert customFields array takes { key, field_value } entries.
-// Primary format is the full "contact."-prefixed key. If the live test shows
-// fields not populating, strip the prefix here (one-line change):
-//   return key.replace(/^contact\./, "");
+// Live test showed the "contact."-prefixed keys don't populate — GHL expects
+// the bare key (e.g. "projects_created"), so the prefix is stripped here.
 function toGhlFieldKey(key: string): string {
-  return key;
+  return key.replace(/^contact\./, "");
 }
 
 // YYYY-MM-DD — GHL date-picker fields are date-only.
