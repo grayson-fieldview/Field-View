@@ -1,0 +1,31 @@
+This is a read-only investigation task. Do NOT modify, create, or delete any files. Do NOT run any migrations or write to any database. Produce a written report only.
+Context: We're planning a daily cron job that syncs live usage stats (project count, photo count, seat count, last activity) from our Postgres database into GoHighLevel contact custom fields, so sales can see account usage inside GHL. This will be a direct GHL REST API contact update — NOT an event webhook like our existing sendGhlEvent() calls. Before implementing, I need you to investigate and report on the following:
+1. Existing GHL integration (server/lib/ghl.ts)
+
+Document how authentication works today: what env vars hold the GHL credentials, what type of token (API key, OAuth access token, Private Integration token), and what base URL/API version the existing code targets
+Confirm whether the current integration only sends webhook events, or whether any code already calls GHL's REST API (contacts, opportunities, custom fields endpoints)
+List the exact function signatures currently exported from ghl.ts
+
+2. GHL custom field coverage
+
+Search the codebase for all references to GHL custom field names/keys (use rg, not grep). List every custom field key the code currently sends values for
+Compare against these fields we want the sync to write: total projects, total photos, seats used, last activity date, last synced timestamp, photos in last 7 days. Report which already exist in the code's vocabulary and which would be new
+
+3. Usage stats queries
+
+Identify the tables/columns needed to compute per-account: project count, photo count (photos only — confirm how videos are distinguished and exclude them, matching the activation milestone logic), active seat count, and most recent activity timestamp (define what candidate timestamps exist: last photo upload, last login, etc. — list options, don't decide)
+Show the query pattern the activation milestone check uses today (the ≥1 project / ≥5 photos logic) so the sync can reuse the same counting definitions
+Confirm the correct owner resolution: we know owner_id on accounts is unreliable; verify the working pattern is users.account_id joined with users.role = 'owner' and show where in the codebase this pattern is already used
+Identify how account status is stored (trial active, paid, expired, churned): exact column(s), enum values, and where trial expiry is computed. The sync will target trial-active + paid accounts only — report the precise WHERE clause that would select these
+
+4. Cron infrastructure
+
+Check whether vercel.json exists and whether any Vercel Cron jobs are already configured
+Check whether any existing API routes implement secret-header authentication we should mirror for the cron route (search for patterns like bearer token checks or shared-secret headers on internal routes)
+Confirm which env var store the production DATABASE_URL comes from at runtime (Vercel env, not Replit's $DATABASE_URL which points at Neon dev)
+
+5. Rate limit / volume estimate
+
+Count (read-only SELECT is fine against dev; do NOT query prod) or estimate from the schema how many accounts would currently match trial-active + paid, so we can sanity-check GHL API call volume for the daily sync
+
+Deliverable: A single report with findings organized under headings 1–5, including exact file paths, function names, column names, and code snippets where relevant. Flag anything surprising or inconsistent with the assumptions above. Do not propose an implementation yet — findings only.
