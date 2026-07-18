@@ -28,6 +28,7 @@ import { sendGhlEvent, syncUsageToGhl } from "./lib/ghl";
 import { isCompAccount } from "./lib/slack";
 import { toCsv } from "./lib/csv";
 import bcrypt from "bcryptjs";
+import { registerShowcaseRoutes } from "./showcases";
 import { Sentry } from "./lib/sentry";
 import { sendPushNotification } from "./lib/push";
 import {
@@ -400,6 +401,7 @@ export async function registerRoutes(
 ): Promise<Server> {
   await setupAuth(app);
   registerAuthRoutes(app);
+  registerShowcaseRoutes(app);
 
   app.get("/api/config/maps", requireReadAccess, (_req, res) => {
     const apiKey = process.env.GOOGLE_MAPS_API_KEY;

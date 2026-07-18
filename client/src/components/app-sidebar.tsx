@@ -26,6 +26,7 @@ import {
   BarChart3,
   CalendarDays,
   Gift,
+  Images,
 } from "lucide-react";
 import { useState } from "react";
 import { useLocation, Link } from "wouter";
@@ -48,6 +49,7 @@ const workspaceItems: NavItem[] = [
   { title: "Photos", url: "/photos", icon: Camera, roles: null },
   { title: "Checklists", url: "/checklists", icon: ClipboardCheck, roles: null },
   { title: "Reports", url: "/reports", icon: FileBarChart, roles: null },
+  { title: "Showcases", url: "/showcases", icon: Images, roles: null },
   { title: "Analytics", url: "/analytics", icon: BarChart3, roles: null },
   { title: "Calendar", url: "/calendar", icon: CalendarDays, roles: null },
   { title: "Map", url: "/map", icon: MapPin, roles: null },

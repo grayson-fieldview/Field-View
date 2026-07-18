@@ -900,3 +900,107 @@ export const insertApiKeySchema = createInsertSchema(apiKeys).omit({
 });
 export type InsertApiKey = z.infer<typeof insertApiKeySchema>;
 export type ApiKey = typeof apiKeys.$inferSelect;
+
+// ---------------------------------------------------------------------------
+// Showcases — curated public portfolio feature (Task: Showcases).
+// Privacy: public surfaces NEVER expose exact addresses or precise GPS.
+// displayLat/displayLng are OBFUSCATED coordinates (city snap or ~0.5mi
+// jitter) stored on the showcase; locationLabel is a city-level label.
+// ---------------------------------------------------------------------------
+export const showcaseStatusEnum = pgEnum("showcase_status", ["draft", "published"]);
+export const showcasePairRoleEnum = pgEnum("showcase_pair_role", ["before", "after"]);
+
+export const showcases = pgTable("showcases", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  accountId: varchar("account_id").references(() => accounts.id).notNull(),
+  projectId: integer("project_id").references(() => projects.id, { onDelete: "set null" }),
+  title: text("title").notNull(),
+  // Unique per account (uniqueIndex below). Public URL: /p/{portfolioSlug}/{slug}
+  slug: text("slug").notNull(),
+  description: text("description"),
+  projectTypes: text("project_types").array().default(sql`'{}'::text[]`).notNull(),
+  productsUsed: text("products_used").array().default(sql`'{}'::text[]`).notNull(),
+  status: showcaseStatusEnum("status").default("draft").notNull(),
+  coverMediaId: integer("cover_media_id").references(() => media.id, { onDelete: "set null" }),
+  displayLat: real("display_lat"),
+  displayLng: real("display_lng"),
+  locationLabel: text("location_label"),
+  publishedAt: timestamp("published_at"),
+  createdById: varchar("created_by_id").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("showcases_account_id_idx").on(table.accountId),
+  uniqueIndex("showcases_account_slug_idx").on(table.accountId, table.slug),
+]);
+
+export const showcasePhotos = pgTable("showcase_photos", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  showcaseId: integer("showcase_id").references(() => showcases.id, { onDelete: "cascade" }).notNull(),
+  mediaId: integer("media_id").references(() => media.id, { onDelete: "cascade" }).notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  caption: text("caption"),
+  // Before/after pairing: photos sharing a pairGroupId form one slider;
+  // exactly one "before" + one "after" per group (validated server-side).
+  pairGroupId: varchar("pair_group_id", { length: 36 }),
+  pairRole: showcasePairRoleEnum("pair_role"),
+}, (table) => [
+  index("showcase_photos_showcase_id_idx").on(table.showcaseId),
+  index("showcase_photos_media_id_idx").on(table.mediaId),
+]);
+
+export const showcaseSettings = pgTable("showcase_settings", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  accountId: varchar("account_id").references(() => accounts.id).notNull().unique(),
+  portfolioEnabled: boolean("portfolio_enabled").default(false).notNull(),
+  // Globally unique public slug: /p/{portfolioSlug}
+  portfolioSlug: varchar("portfolio_slug", { length: 60 }).unique(),
+  displayName: text("display_name"),
+  logoUrl: text("logo_url"),
+  brandColor: varchar("brand_color", { length: 9 }),
+  showMap: boolean("show_map").default(true).notNull(),
+  contactCtaEnabled: boolean("contact_cta_enabled").default(false).notNull(),
+  contactCtaLabel: text("contact_cta_label"),
+  contactCtaUrl: text("contact_cta_url"),
+  introText: text("intro_text"),
+  // Company-manageable project-type tag list used by the showcase editor.
+  showcaseTags: text("showcase_tags").array().default(sql`'{}'::text[]`).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const showcaseViews = pgTable("showcase_views", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  accountId: varchar("account_id").references(() => accounts.id).notNull(),
+  // NULL showcaseId = a portfolio-level (index page) view.
+  showcaseId: integer("showcase_id").references(() => showcases.id, { onDelete: "cascade" }),
+  viewedAt: timestamp("viewed_at").defaultNow().notNull(),
+  referrer: text("referrer"),
+}, (table) => [
+  index("showcase_views_account_viewed_idx").on(table.accountId, table.viewedAt),
+  index("showcase_views_showcase_id_idx").on(table.showcaseId),
+]);
+
+export const insertShowcaseSchema = createInsertSchema(showcases).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  publishedAt: true,
+});
+export type InsertShowcase = z.infer<typeof insertShowcaseSchema>;
+export type Showcase = typeof showcases.$inferSelect;
+
+export const insertShowcasePhotoSchema = createInsertSchema(showcasePhotos).omit({
+  id: true,
+});
+export type InsertShowcasePhoto = z.infer<typeof insertShowcasePhotoSchema>;
+export type ShowcasePhoto = typeof showcasePhotos.$inferSelect;
+
+export const insertShowcaseSettingsSchema = createInsertSchema(showcaseSettings).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertShowcaseSettings = z.infer<typeof insertShowcaseSettingsSchema>;
+export type ShowcaseSettings = typeof showcaseSettings.$inferSelect;
+export type ShowcaseView = typeof showcaseViews.$inferSelect;

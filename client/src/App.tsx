@@ -46,9 +46,14 @@ import GalleryPage from "@/pages/gallery";
 import PublicReportPage from "@/pages/public-report";
 import PublicProjectPage from "@/pages/public-project";
 import PublicComparisonPage from "@/pages/public-comparison";
+import { PublicPortfolioPage, PublicPRouter } from "@/pages/public-portfolio";
+import { PublicShowcasePage } from "@/pages/public-showcase";
 import TasksPage from "@/pages/tasks";
 import AnalyticsPage from "@/pages/analytics";
 import CalendarPage from "@/pages/calendar";
+import ShowcasesPage from "@/pages/showcases";
+import ShowcaseEditPage from "@/pages/showcase-edit";
+import PortfolioSettingsPage from "@/pages/portfolio-settings";
 
 function BillingBanner() {
   const { user } = useAuth();
@@ -232,6 +237,11 @@ function AuthenticatedLayout() {
               <Route path="/checklist-templates/:id/edit">
                 {(params) => <ChecklistTemplateEditPage id={params.id} />}
               </Route>
+              <Route path="/showcases" component={ShowcasesPage} />
+              <Route path="/showcases/settings" component={PortfolioSettingsPage} />
+              <Route path="/showcases/:id/edit">
+                {(params) => <ShowcaseEditPage id={params.id} />}
+              </Route>
               <Route path="/analytics" component={AnalyticsPage} />
               <Route path="/calendar" component={CalendarPage} />
               <Route path="/map" component={MapPage} />
@@ -411,8 +421,19 @@ function App() {
               <Route path="/report/:token">
                 {(params) => <PublicReportPage token={params.token} />}
               </Route>
-              <Route path="/p/:token">
-                {(params) => <PublicProjectPage token={params.token} />}
+              <Route path="/p/:slug/embed">
+                {(params) => <PublicPortfolioPage slug={params.slug} embed />}
+              </Route>
+              <Route path="/p/:slug/:showcaseSlug">
+                {(params) => (
+                  <PublicShowcasePage
+                    slug={params.slug}
+                    showcaseSlug={params.showcaseSlug}
+                  />
+                )}
+              </Route>
+              <Route path="/p/:slug">
+                {(params) => <PublicPRouter slug={params.slug} />}
               </Route>
               <Route path="/compare/:token">
                 {(params) => <PublicComparisonPage token={params.token} />}
