@@ -1,4 +1,5 @@
 - [Team page seat-cap gating](seat-cap-gating.md) — trial cap is enforced in 3 client gates (preflight, disabled button, inline warning), not just the API; change all in lockstep or the UI blocks before the server signal fires.
+- [Two production databases](two-production-databases.md) — real prod is Vercel+RDS; Replit's "production" DB is stale (froze Mar 2026); never diff/advise from it. Prod DDL via script/migrations convention.
 - [CRM/marketing side-effect sync](hubspot-cio-side-effect-sync.md) — GHL is the only lifecycle platform (CIO/HubSpot removed July 2026); syncs stay fire-and-forget + waitUntil-deferred, never throw into the request path.
 - [Owner gate req.user assembly](owner-gate-req-user-assembly.md) — requireOwnerAdmin reads req.user.account.ownerId, attached only in deserializeUser (the single req.user assembly point); enrich there, never assume the field exists.
 - [Session cookie hygiene](session-cookie-hygiene.md) — any req.session mutation defeats saveUninitialized:false and emits a fresh sid on 401/403, logging out mobile; only write session when there's real data.
