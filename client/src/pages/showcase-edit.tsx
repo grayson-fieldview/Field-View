@@ -200,6 +200,25 @@ export default function ShowcaseEditPage({ id }: { id: string }) {
   const [initialized, setInitialized] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const dragIndex = useRef<number | null>(null);
+  // Set once the user types in the label field — suppresses auto-geocoding so
+  // a manual override is never clobbered by a later pin move.
+  const labelEditedRef = useRef(false);
+  const geocodeSeqRef = useRef(0);
+
+  const autoGeocodeLabel = async (la: number, ln: number) => {
+    if (labelEditedRef.current) return;
+    const seq = ++geocodeSeqRef.current;
+    try {
+      const res = await fetch(`/api/geocode/reverse?lat=${la}&lng=${ln}`, { credentials: "include" });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (seq === geocodeSeqRef.current && data.label && !labelEditedRef.current) {
+        setLocationLabel(data.label);
+      }
+    } catch {
+      // best-effort; label stays editable
+    }
+  };
 
   useEffect(() => {
     if (showcase && !initialized) {
@@ -576,6 +595,7 @@ export default function ShowcaseEditPage({ id }: { id: string }) {
           onChange={(la, ln) => {
             setDisplayLat(la);
             setDisplayLng(ln);
+            autoGeocodeLabel(la, ln);
           }}
         />
         {projectLocation?.latitude != null && projectLocation?.longitude != null && (
@@ -583,8 +603,11 @@ export default function ShowcaseEditPage({ id }: { id: string }) {
             variant="outline"
             size="sm"
             onClick={() => {
-              setDisplayLat(jitter(projectLocation.latitude!));
-              setDisplayLng(jitter(projectLocation.longitude!));
+              const la = jitter(projectLocation.latitude!);
+              const ln = jitter(projectLocation.longitude!);
+              setDisplayLat(la);
+              setDisplayLng(ln);
+              autoGeocodeLabel(la, ln);
             }}
             data-testid="button-use-project-location"
           >
@@ -595,7 +618,10 @@ export default function ShowcaseEditPage({ id }: { id: string }) {
           <label className="text-sm font-medium">Location label</label>
           <Input
             value={locationLabel}
-            onChange={(e) => setLocationLabel(e.target.value)}
+            onChange={(e) => {
+              labelEditedRef.current = true;
+              setLocationLabel(e.target.value);
+            }}
             placeholder="City, ST"
             data-testid="input-location-label"
           />

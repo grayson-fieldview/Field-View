@@ -445,11 +445,59 @@ export function registerShowcaseRoutes(app: Express): void {
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
       const settings = await getOrCreateSettings(accountId);
-      const [acct] = await db.select({ name: accounts.name, companyLogoUrl: accounts.companyLogoUrl }).from(accounts).where(eq(accounts.id, accountId)).limit(1);
-      res.json({ ...settings, accountName: acct?.name ?? null, accountLogoUrl: acct?.companyLogoUrl ?? null });
+      const [acct] = await db.select({ name: accounts.name, companyLegalName: accounts.companyLegalName, companyLogoUrl: accounts.companyLogoUrl }).from(accounts).where(eq(accounts.id, accountId)).limit(1);
+      res.json({
+        ...settings,
+        accountName: acct?.name ?? null,
+        companyName: acct?.companyLegalName || acct?.name || null,
+        accountLogoUrl: acct?.companyLogoUrl ?? null,
+      });
     } catch (e) {
       console.error("[showcases] settings get failed:", e);
       res.status(500).json({ message: "Failed to fetch settings" });
+    }
+  });
+
+  // Reverse-geocode display coordinates to a "City, ST" label. Auth-gated so
+  // the Google key isn't an open proxy; uses the server-side Geocoding API.
+  app.get("/api/geocode/reverse", requireReadAccess, async (req: any, res) => {
+    try {
+      const lat = Number(req.query.lat);
+      const lng = Number(req.query.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+        return res.status(400).json({ message: "Invalid coordinates" });
+      }
+      const key = process.env.GOOGLE_MAPS_API_KEY;
+      if (!key) return res.status(503).json({ message: "Geocoding not configured" });
+      const r = await fetch(
+        `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&result_type=locality|administrative_area_level_1&key=${key}`,
+      );
+      const data: any = await r.json();
+      if (data.status !== "OK" || !Array.isArray(data.results) || data.results.length === 0) {
+        if (data.status !== "ZERO_RESULTS") {
+          console.error("[geocode] reverse failed:", data.status, data.error_message || "");
+        }
+        return res.json({ label: null });
+      }
+      let city: string | null = null;
+      let state: string | null = null;
+      for (const result of data.results) {
+        for (const comp of result.address_components || []) {
+          const types: string[] = comp.types || [];
+          if (!city && (types.includes("locality") || types.includes("postal_town") || types.includes("sublocality"))) {
+            city = comp.long_name;
+          }
+          if (!state && types.includes("administrative_area_level_1")) {
+            state = comp.short_name;
+          }
+        }
+        if (city && state) break;
+      }
+      const label = city && state ? `${city}, ${state}` : state || city || null;
+      res.json({ label });
+    } catch (e) {
+      console.error("[geocode] reverse error:", e);
+      res.status(500).json({ message: "Geocoding failed" });
     }
   });
 
@@ -746,13 +794,49 @@ export function registerShowcaseRoutes(app: Express): void {
   const jsonLd = (o: unknown) =>
     JSON.stringify(o).replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/&/g, "\\u0026");
 
+  // Resolve the built SPA index.html across every runtime:
+  //  - dev (tsx, ESM): no dist build → null → fall through to Vite middleware
+  //  - Replit prod (dist/index.cjs from repo root): dist/public/index.html
+  //  - Vercel serverless (CJS bundle, import.meta is {}): dist/public/index.html
+  //    is bundled into the function via vercel.json "includeFiles"; if that is
+  //    ever missing we fetch the statically-served /index.html once and cache.
+  function resolveDistIndex(): string | null {
+    const candidates: string[] = [];
+    try {
+      const dirname = (import.meta as any)?.dirname;
+      if (dirname) candidates.push(path.resolve(dirname, "public", "index.html"));
+    } catch {}
+    candidates.push(path.resolve(process.cwd(), "dist", "public", "index.html"));
+    for (const c of candidates) {
+      try {
+        if (fs.existsSync(c)) return c;
+      } catch {}
+    }
+    return null;
+  }
+  let fetchedIndexHtml: string | null = null;
+
   async function renderPHtml(req: any, res: any, next: any) {
     try {
-      const distIndex = path.resolve(import.meta.dirname, "public", "index.html");
-      if (!fs.existsSync(distIndex)) return next(); // dev — let Vite serve
+      let html: string | null = null;
+      const distIndex = resolveDistIndex();
+      if (distIndex) {
+        html = fs.readFileSync(distIndex, "utf-8");
+      } else if (process.env.VERCEL || process.env.NODE_ENV === "production") {
+        // Serverless fallback: pull the static index.html served by the CDN.
+        if (!fetchedIndexHtml) {
+          try {
+            const r = await fetch(`${req.protocol}://${req.get("host")}/index.html`);
+            if (r.ok) fetchedIndexHtml = await r.text();
+          } catch (fe) {
+            console.error("[showcases] index.html fetch fallback failed:", fe);
+          }
+        }
+        html = fetchedIndexHtml;
+      }
+      if (!html) return next(); // dev — let Vite serve
       const slug = req.params.slug as string;
       const sub = (req.params.showcaseSlug as string | undefined) || undefined;
-      let html = fs.readFileSync(distIndex, "utf-8");
       const ctx = await loadPublicPortfolio(slug);
       if (!ctx) return res.status(200).setHeader("Content-Type", "text/html").end(html);
 

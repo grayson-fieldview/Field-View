@@ -23,8 +23,18 @@ import type { ShowcaseSettings } from "@shared/schema";
 
 type ShowcaseSettingsData = ShowcaseSettings & {
   accountName: string | null;
+  companyName: string | null;
   accountLogoUrl: string | null;
 };
+
+function slugifyName(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60)
+    .replace(/-+$/g, "");
+}
 
 export default function PortfolioSettingsPage() {
   const { toast } = useToast();
@@ -49,9 +59,10 @@ export default function PortfolioSettingsPage() {
 
   useEffect(() => {
     if (settings && !initialized) {
+      const company = settings.companyName || settings.accountName || "";
       setPortfolioEnabled(settings.portfolioEnabled);
-      setPortfolioSlug(settings.portfolioSlug || "");
-      setDisplayName(settings.displayName || "");
+      setPortfolioSlug(settings.portfolioSlug || slugifyName(company));
+      setDisplayName(settings.displayName || company);
       setLogoUrl(settings.logoUrl || "");
       setBrandColor(settings.brandColor || "#F09000");
       setShowMap(settings.showMap);
