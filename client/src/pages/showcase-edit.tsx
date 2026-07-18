@@ -270,7 +270,7 @@ export default function ShowcaseEditPage({ id }: { id: string }) {
         locationLabel: locationLabel.trim() || null,
         coverMediaId: coverMediaId,
       };
-      if (publish) body.status = "published";
+      body.status = publish ? "published" : "draft";
       const res = await apiRequest("PATCH", `/api/showcases/${showcaseId}`, body);
       return res.json();
     },

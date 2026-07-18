@@ -321,20 +321,30 @@ export function registerShowcaseRoutes(app: Express): void {
       }
 
       const next = { ...existing, ...patch };
+      // Publish invariants are enforced whenever the RESULTING status is
+      // published — not just on the draft→published transition — so edits to
+      // a published showcase can't strip its required fields.
+      const resultingStatus = patch.status ?? existing.status;
       let publishedAt = existing.publishedAt;
-      if (patch.status === "published" && existing.status !== "published") {
+      if (resultingStatus === "published") {
         const [{ c }] = await db.select({ c: sql<number>`count(*)::int` }).from(showcasePhotos).where(eq(showcasePhotos.showcaseId, id));
         const problems: string[] = [];
         if (!next.title?.trim()) problems.push("a title");
         if (Number(c) < 1) problems.push("at least one photo");
         if (next.displayLat == null || next.displayLng == null) problems.push("a location");
         if (problems.length) {
-          return res.status(400).json({ message: `To publish, add ${problems.join(", ")}.` });
+          return res.status(400).json({
+            message: existing.status === "published"
+              ? `A published showcase needs ${problems.join(", ")}. Unpublish it first, or add ${problems.join(", ")}.`
+              : `To publish, add ${problems.join(", ")}.`,
+          });
         }
-        publishedAt = new Date();
+        if (existing.status !== "published") publishedAt = new Date();
       }
       // Server-side privacy guarantee: never persist precise coords. Obfuscate
-      // deterministically (seeded by showcase id) so the pin is stable across saves.
+      // deterministically (seeded by showcase id) so the pin is stable across
+      // saves. Skip when the submitted coords equal the stored (already
+      // obfuscated) values, so repeated saves don't drift the pin.
       const coordPatch: { displayLat?: number | null; displayLng?: number | null } = {};
       if (patch.displayLat !== undefined || patch.displayLng !== undefined) {
         const lat = patch.displayLat !== undefined ? patch.displayLat : existing.displayLat;
@@ -342,6 +352,10 @@ export function registerShowcaseRoutes(app: Express): void {
         if (lat == null || lng == null) {
           coordPatch.displayLat = lat ?? null;
           coordPatch.displayLng = lng ?? null;
+        } else if (lat === existing.displayLat && lng === existing.displayLng) {
+          // Unchanged — already obfuscated; don't re-jitter.
+          coordPatch.displayLat = lat;
+          coordPatch.displayLng = lng;
         } else {
           const ob = obfuscateLocation(lat, lng, `showcase:${id}`);
           coordPatch.displayLat = ob.lat;
