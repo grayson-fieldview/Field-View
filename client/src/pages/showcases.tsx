@@ -190,12 +190,13 @@ export default function ShowcasesPage() {
   const [newTitle, setNewTitle] = useState("");
   const [newProjectId, setNewProjectId] = useState<string>("none");
   const [deleteTarget, setDeleteTarget] = useState<ShowcaseListItem | null>(null);
+  const [period, setPeriod] = useState<7 | 30 | 90>(30);
 
   const { data: showcases, isLoading } = useQuery<ShowcaseListItem[]>({
     queryKey: ["/api/showcases"],
   });
   const { data: analytics } = useQuery<AnalyticsData>({
-    queryKey: ["/api/showcases/analytics?days=30"],
+    queryKey: [`/api/showcases/analytics?days=${period}`],
   });
   const { data: settings } = useQuery<ShowcaseSettingsData>({
     queryKey: ["/api/showcase-settings"],
@@ -286,6 +287,11 @@ export default function ShowcasesPage() {
   };
 
   const sparkData = (analytics?.daily || []).map((d) => ({ day: d.day, views: d.views }));
+  const viewsByShowcase = useMemo(() => {
+    const m = new Map<number, number>();
+    (analytics?.byShowcase || []).forEach((r) => m.set(r.showcaseId, r.views));
+    return m;
+  }, [analytics]);
 
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-7xl mx-auto">
@@ -312,6 +318,24 @@ export default function ShowcasesPage() {
         </div>
       </div>
 
+      {/* Analytics period selector */}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <p className="text-sm font-medium text-muted-foreground">Analytics</p>
+        <div className="flex items-center gap-1" data-testid="group-analytics-period">
+          {([7, 30, 90] as const).map((d) => (
+            <Button
+              key={d}
+              size="sm"
+              variant={period === d ? "default" : "outline"}
+              onClick={() => setPeriod(d)}
+              data-testid={`button-analytics-${d}d`}
+            >
+              {d}d
+            </Button>
+          ))}
+        </div>
+      </div>
+
       {/* Stat strip */}
       <div className="grid gap-4 sm:grid-cols-3">
         <Card className="p-4" data-testid="stat-total-views">
@@ -323,14 +347,27 @@ export default function ShowcasesPage() {
               <p className="text-2xl font-bold" data-testid="text-total-views">
                 {analytics?.totalViews ?? 0}
               </p>
-              <p className="text-xs text-muted-foreground">Views (30 days)</p>
+              <p className="text-xs text-muted-foreground">Total views ({period}d)</p>
+            </div>
+          </div>
+        </Card>
+        <Card className="p-4" data-testid="stat-portfolio-views">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary/10">
+              <Images className="h-5 w-5 text-primary" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold" data-testid="text-portfolio-views">
+                {analytics?.portfolioViews ?? 0}
+              </p>
+              <p className="text-xs text-muted-foreground">Portfolio views ({period}d)</p>
             </div>
           </div>
         </Card>
         <Card className="p-4" data-testid="stat-views-trend">
           <div className="flex items-center gap-2 mb-1">
             <TrendingUp className="h-4 w-4 text-primary" />
-            <p className="text-xs text-muted-foreground">Daily views</p>
+            <p className="text-xs text-muted-foreground">Daily views ({period}d)</p>
           </div>
           <div className="h-[52px]">
             {sparkData.length > 0 ? (
@@ -349,19 +386,6 @@ export default function ShowcasesPage() {
             ) : (
               <div className="h-full flex items-center text-xs text-muted-foreground">No views yet</div>
             )}
-          </div>
-        </Card>
-        <Card className="p-4" data-testid="stat-published-count">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary/10">
-              <Images className="h-5 w-5 text-primary" />
-            </div>
-            <div>
-              <p className="text-2xl font-bold" data-testid="text-published-count">
-                {publishedCount}
-              </p>
-              <p className="text-xs text-muted-foreground">Published</p>
-            </div>
           </div>
         </Card>
       </div>
@@ -540,9 +564,12 @@ export default function ShowcasesPage() {
                 <div className="flex items-center justify-between gap-2 mt-auto pt-2">
                   <div className="flex items-center gap-3 text-xs text-muted-foreground">
                     <span data-testid={`text-photo-count-${sc.id}`}>{sc.photoCount} photos</span>
-                    <span className="flex items-center gap-1">
+                    <span
+                      className="flex items-center gap-1"
+                      data-testid={`text-views-${sc.id}`}
+                    >
                       <Eye className="h-3 w-3" />
-                      {sc.views30d}
+                      {viewsByShowcase.get(sc.id) ?? 0} views · {period}d
                     </span>
                   </div>
                   <label className="flex items-center gap-1.5 text-xs cursor-pointer">

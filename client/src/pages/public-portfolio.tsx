@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { MapPin, Image as ImageIcon, ExternalLink } from "lucide-react";
+import { loadGoogleMaps } from "@/lib/google-maps";
 import PublicProjectPage from "@/pages/public-project";
 
 interface PortfolioMeta {
@@ -52,6 +53,161 @@ function recordPortfolioView(slug: string, showcaseSlug: string | null) {
       referrer: document.referrer || null,
     }),
   }).catch(() => {});
+}
+
+function PortfolioMap({
+  slug,
+  showcases,
+  embed,
+  onNavigate,
+}: {
+  slug: string;
+  showcases: PortfolioShowcase[];
+  embed?: boolean;
+  onNavigate: (path: string) => void;
+}) {
+  const mapRef = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<google.maps.Map | null>(null);
+  const markersRef = useRef<google.maps.marker.AdvancedMarkerElement[]>([]);
+  const infoWindowRef = useRef<google.maps.InfoWindow | null>(null);
+  const [mapReady, setMapReady] = useState(false);
+
+  const { data: mapsConfig, error: mapsError } = useQuery<{ apiKey: string }>({
+    queryKey: ["/api/public/maps-config"],
+    retry: false,
+  });
+
+  const withCoords = useMemo(
+    () =>
+      showcases.filter((s) => s.displayLat != null && s.displayLng != null),
+    [showcases],
+  );
+
+  const initMap = useCallback(async () => {
+    if (!mapsConfig?.apiKey || !mapRef.current || mapInstanceRef.current) return;
+    try {
+      await loadGoogleMaps(mapsConfig.apiKey);
+      const map = new google.maps.Map(mapRef.current, {
+        center: { lat: 39.8283, lng: -98.5795 },
+        zoom: 4,
+        mapId: "fieldview-map",
+        disableDefaultUI: false,
+        zoomControl: true,
+        mapTypeControl: false,
+        streetViewControl: false,
+        fullscreenControl: true,
+      });
+      infoWindowRef.current = new google.maps.InfoWindow();
+      mapInstanceRef.current = map;
+      setMapReady(true);
+    } catch (err) {
+      console.error("Failed to init portfolio map:", err);
+    }
+  }, [mapsConfig?.apiKey]);
+
+  useEffect(() => {
+    initMap();
+    return () => {
+      markersRef.current.forEach((m) => (m.map = null));
+      markersRef.current = [];
+      if (infoWindowRef.current) infoWindowRef.current.close();
+      mapInstanceRef.current = null;
+      setMapReady(false);
+    };
+  }, [initMap]);
+
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !mapReady) return;
+    markersRef.current.forEach((m) => (m.map = null));
+    markersRef.current = [];
+    if (!withCoords.length) return;
+    const bounds = new google.maps.LatLngBounds();
+    withCoords.forEach((sc) => {
+      const position = { lat: sc.displayLat!, lng: sc.displayLng! };
+      bounds.extend(position);
+      const pinEl = document.createElement("div");
+      pinEl.style.cssText = `width:28px;height:28px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:#F09000;border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.3);cursor:pointer;`;
+      const marker = new google.maps.marker.AdvancedMarkerElement({
+        map,
+        position,
+        content: pinEl,
+        title: sc.title,
+      });
+      marker.addListener("click", () => {
+        const iw = infoWindowRef.current;
+        if (!iw) return;
+        const href = embed
+          ? `${window.location.origin}/p/${slug}/${sc.slug}`
+          : `/p/${slug}/${sc.slug}`;
+        const linkAttrs = embed
+          ? `href="${href}" target="_blank" rel="noopener noreferrer"`
+          : `href="${href}" id="iw-link-${sc.slug}"`;
+        iw.setContent(
+          `<div style="width:200px;font-family:inherit">
+            ${sc.coverUrl ? `<img src="${sc.coverUrl}" alt="" style="width:100%;height:110px;object-fit:cover;border-radius:4px;margin-bottom:6px" />` : ""}
+            <strong style="font-size:13px;display:block">${sc.title}</strong>
+            ${sc.locationLabel ? `<div style="font-size:12px;color:#666;margin-top:2px">${sc.locationLabel}</div>` : ""}
+            <a ${linkAttrs} style="display:inline-block;margin-top:6px;font-size:12px;color:#F09000;font-weight:500;text-decoration:none">View project →</a>
+          </div>`,
+        );
+        iw.open(map, marker);
+        if (!embed) {
+          google.maps.event.addListenerOnce(iw, "domready", () => {
+            const el = document.getElementById(`iw-link-${sc.slug}`);
+            if (el) {
+              el.addEventListener("click", (e) => {
+                e.preventDefault();
+                onNavigate(`/p/${slug}/${sc.slug}`);
+              });
+            }
+          });
+        }
+      });
+      markersRef.current.push(marker);
+    });
+    if (withCoords.length === 1) {
+      map.setCenter(bounds.getCenter());
+      map.setZoom(11);
+    } else {
+      map.fitBounds(bounds, { top: 40, right: 40, bottom: 40, left: 40 });
+    }
+  }, [withCoords, mapReady, embed, slug, onNavigate]);
+
+  // Graceful fallback to the location chips strip if the key can't be fetched.
+  if (mapsError || (mapsConfig && !mapsConfig.apiKey)) {
+    return (
+      <div
+        className="flex flex-wrap gap-2"
+        data-testid="strip-portfolio-locations"
+      >
+        {showcases
+          .filter((s) => s.locationLabel)
+          .map((s) => (
+            <Badge
+              key={s.slug}
+              variant="secondary"
+              data-testid={`badge-location-${s.slug}`}
+            >
+              <MapPin className="h-3 w-3 mr-1" />
+              {s.locationLabel}
+            </Badge>
+          ))}
+      </div>
+    );
+  }
+
+  if (!mapsConfig) {
+    return <Skeleton className="w-full h-[360px] rounded-md" />;
+  }
+
+  return (
+    <div
+      ref={mapRef}
+      className="w-full h-[360px] rounded-md border overflow-hidden"
+      data-testid="map-public-portfolio"
+    />
+  );
 }
 
 function ShowcaseCard({
@@ -142,6 +298,7 @@ export function PublicPortfolioPage({
     retry: false,
   });
 
+  const [, navigate] = useLocation();
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
 
   useEffect(() => {
@@ -269,23 +426,12 @@ export function PublicPortfolioPage({
         }
       >
         {portfolio.showMap && hasCoords && (
-          <div
-            className="flex flex-wrap gap-2"
-            data-testid="strip-portfolio-locations"
-          >
-            {showcases
-              .filter((s) => s.locationLabel)
-              .map((s) => (
-                <Badge
-                  key={s.slug}
-                  variant="secondary"
-                  data-testid={`badge-location-${s.slug}`}
-                >
-                  <MapPin className="h-3 w-3 mr-1" />
-                  {s.locationLabel}
-                </Badge>
-              ))}
-          </div>
+          <PortfolioMap
+            slug={slug}
+            showcases={showcases}
+            embed={embed}
+            onNavigate={navigate}
+          />
         )}
 
         {!embed && allTypes.length > 0 && (

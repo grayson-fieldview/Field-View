@@ -111,8 +111,11 @@ async function verifyShowcaseAccess(id: number, accountId: string) {
 }
 
 // Public image variant URL — resized + EXIF-stripped, never the original.
-function publicImgUrl(mediaId: number): string {
-  return `/api/public/showcase-img/${mediaId}`;
+// When a portfolio slug is provided the URL is scoped to that portfolio;
+// unauthenticated access REQUIRES the slug (prevents cross-tenant media-id
+// enumeration). URLs without a slug only work for the authenticated owner.
+function publicImgUrl(mediaId: number, portfolioSlug?: string | null): string {
+  return `/api/public/showcase-img/${mediaId}${portfolioSlug ? `?s=${encodeURIComponent(portfolioSlug)}` : ""}`;
 }
 
 async function loadShowcasePhotoRows(showcaseIds: number[]) {
@@ -503,6 +506,14 @@ export function registerShowcaseRoutes(app: Express): void {
     };
   }
 
+  // Maps JS API keys are client-side by design (restrict by HTTP referrer in
+  // the Google Cloud console). Public portfolio pages need it for the map.
+  app.get("/api/public/maps-config", (_req, res) => {
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+    if (!apiKey) return res.status(404).json({ message: "Maps not configured" });
+    res.json({ apiKey });
+  });
+
   app.get("/api/public/portfolio/:slug", async (req, res) => {
     try {
       const ctx = await loadPublicPortfolio(req.params.slug);
@@ -530,7 +541,7 @@ export function registerShowcaseRoutes(app: Express): void {
           displayLat: r.displayLat,
           displayLng: r.displayLng,
           photoCount: counts.get(r.id) || 0,
-          coverUrl: publicImgUrl(r.coverMediaId || firstMedia.get(r.id) || 0),
+          coverUrl: publicImgUrl(r.coverMediaId || firstMedia.get(r.id) || 0, ctx.settings.portfolioSlug),
         })),
       });
     } catch (e) {
@@ -576,10 +587,10 @@ export function registerShowcaseRoutes(app: Express): void {
           displayLat: sc.displayLat,
           displayLng: sc.displayLng,
           publishedAt: sc.publishedAt,
-          coverUrl: publicImgUrl(sc.coverMediaId || photos[0]?.mediaId || 0),
+          coverUrl: publicImgUrl(sc.coverMediaId || photos[0]?.mediaId || 0, ctx.settings.portfolioSlug),
           photos: photos.map((p) => ({
             id: p.id,
-            url: publicImgUrl(p.mediaId),
+            url: publicImgUrl(p.mediaId, ctx.settings.portfolioSlug),
             caption: p.caption,
             pairGroupId: p.pairGroupId,
             pairRole: p.pairRole,
@@ -590,7 +601,7 @@ export function registerShowcaseRoutes(app: Express): void {
           slug: m.slug,
           title: m.title,
           locationLabel: m.locationLabel,
-          coverUrl: publicImgUrl(m.coverMediaId || moreFirst.get(m.id) || 0),
+          coverUrl: publicImgUrl(m.coverMediaId || moreFirst.get(m.id) || 0, ctx.settings.portfolioSlug),
         })),
       });
     } catch (e) {
@@ -632,22 +643,17 @@ export function registerShowcaseRoutes(app: Express): void {
     try {
       const mediaId = parseInt(req.params.mediaId);
       if (!Number.isFinite(mediaId) || mediaId <= 0) return res.status(404).end();
-      const [row] = await db
-        .select({ url: media.url, mimeType: media.mimeType })
-        .from(showcasePhotos)
-        .innerJoin(showcases, eq(showcasePhotos.showcaseId, showcases.id))
-        .innerJoin(showcaseSettings, eq(showcases.accountId, showcaseSettings.accountId))
-        .innerJoin(media, eq(showcasePhotos.mediaId, media.id))
-        .where(and(
-          eq(showcasePhotos.mediaId, mediaId),
-          eq(showcaseSettings.portfolioEnabled, true),
-          sql`${media.mimeType} LIKE 'image/%'`,
-        ))
-        .limit(1);
-      // Internal editor also uses this URL for drafts — allow when the request
-      // is authenticated for the owning account; otherwise require published.
+      const portfolioSlug = typeof req.query.s === "string" ? req.query.s : null;
+
+      // Access rules:
+      //  - Unauthenticated: REQUIRES ?s=portfolioSlug; media must belong to a
+      //    PUBLISHED showcase of the account owning that ENABLED portfolio.
+      //    (No slug ⇒ no anonymous access — prevents cross-tenant media-id
+      //    enumeration.)
+      //  - Authenticated owner: may access any media of its own showcases
+      //    (drafts included) without a slug.
       let allowed = false;
-      if (row) {
+      if (portfolioSlug) {
         const [pub] = await db
           .select({ id: showcasePhotos.id })
           .from(showcasePhotos)
@@ -657,6 +663,7 @@ export function registerShowcaseRoutes(app: Express): void {
             eq(showcasePhotos.mediaId, mediaId),
             eq(showcases.status, "published"),
             eq(showcaseSettings.portfolioEnabled, true),
+            eq(showcaseSettings.portfolioSlug, portfolioSlug),
           ))
           .limit(1);
         allowed = !!pub;
@@ -676,13 +683,13 @@ export function registerShowcaseRoutes(app: Express): void {
       }
       if (!allowed) return res.status(404).end();
 
-      // Fetch original bytes.
-      let urlRow = row;
-      if (!urlRow) {
-        const [m] = await db.select({ url: media.url, mimeType: media.mimeType }).from(media).where(eq(media.id, mediaId)).limit(1);
-        if (!m) return res.status(404).end();
-        urlRow = m;
-      }
+      // Fetch original bytes (image media only).
+      const [urlRow] = await db
+        .select({ url: media.url, mimeType: media.mimeType })
+        .from(media)
+        .where(and(eq(media.id, mediaId), sql`${media.mimeType} LIKE 'image/%'`))
+        .limit(1);
+      if (!urlRow) return res.status(404).end();
       const w = Math.min(Math.max(parseInt(String(req.query.w || "1600")) || 1600, 200), 2400);
       let raw: Buffer;
       if (isS3Url(urlRow.url)) {
@@ -754,7 +761,7 @@ export function registerShowcaseRoutes(app: Express): void {
           description = sc.description?.slice(0, 200) || `${sc.title}${sc.locationLabel ? ` in ${sc.locationLabel}` : ""} by ${p.displayName}.`;
           const photos = await loadShowcasePhotoRows([sc.id]);
           const coverId = sc.coverMediaId || photos[0]?.mediaId;
-          if (coverId) image = `${base}${publicImgUrl(coverId)}?w=1200`;
+          if (coverId) image = `${base}${publicImgUrl(coverId, slug)}&w=1200`;
           url = `${base}/p/${slug}/${sc.slug}`;
           ldExtra = `<script type="application/ld+json">${jsonLd({
             "@context": "https://schema.org",
@@ -762,7 +769,7 @@ export function registerShowcaseRoutes(app: Express): void {
             name: sc.title,
             description,
             url,
-            image: photos.slice(0, 10).map((ph) => `${base}${publicImgUrl(ph.mediaId)}`),
+            image: photos.slice(0, 10).map((ph) => `${base}${publicImgUrl(ph.mediaId, slug)}`),
           })}</script>`;
         }
       } else {
@@ -773,7 +780,7 @@ export function registerShowcaseRoutes(app: Express): void {
         if (first) {
           const photos = await loadShowcasePhotoRows([first.id]);
           const coverId = first.coverMediaId || photos[0]?.mediaId;
-          if (coverId) image = `${base}${publicImgUrl(coverId)}?w=1200`;
+          if (coverId) image = `${base}${publicImgUrl(coverId, slug)}&w=1200`;
         }
       }
 
