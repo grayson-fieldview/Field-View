@@ -153,9 +153,20 @@ function ShowcaseMapPreview({ showcases }: { showcases: ShowcaseListItem[] }) {
       marker.addListener("click", () => {
         const iw = infoWindowRef.current;
         if (!iw) return;
-        iw.setContent(
-          `<div style="padding:6px;min-width:160px"><strong style="font-size:13px">${sc.title}</strong>${sc.locationLabel ? `<div style="font-size:12px;color:#666;margin-top:2px">${sc.locationLabel}</div>` : ""}</div>`,
-        );
+        // DOM-built content (textContent) so titles/labels can't inject HTML.
+        const root = document.createElement("div");
+        root.style.cssText = "padding:6px;min-width:160px";
+        const titleEl = document.createElement("strong");
+        titleEl.style.cssText = "font-size:13px";
+        titleEl.textContent = sc.title;
+        root.appendChild(titleEl);
+        if (sc.locationLabel) {
+          const loc = document.createElement("div");
+          loc.style.cssText = "font-size:12px;color:#666;margin-top:2px";
+          loc.textContent = sc.locationLabel;
+          root.appendChild(loc);
+        }
+        iw.setContent(root);
         iw.open(map, marker);
       });
       markersRef.current.push(marker);

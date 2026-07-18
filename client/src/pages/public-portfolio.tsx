@@ -140,29 +140,46 @@ function PortfolioMap({
         const href = embed
           ? `${window.location.origin}/p/${slug}/${sc.slug}`
           : `/p/${slug}/${sc.slug}`;
-        const linkAttrs = embed
-          ? `href="${href}" target="_blank" rel="noopener noreferrer"`
-          : `href="${href}" id="iw-link-${sc.slug}"`;
-        iw.setContent(
-          `<div style="width:200px;font-family:inherit">
-            ${sc.coverUrl ? `<img src="${sc.coverUrl}" alt="" style="width:100%;height:110px;object-fit:cover;border-radius:4px;margin-bottom:6px" />` : ""}
-            <strong style="font-size:13px;display:block">${sc.title}</strong>
-            ${sc.locationLabel ? `<div style="font-size:12px;color:#666;margin-top:2px">${sc.locationLabel}</div>` : ""}
-            <a ${linkAttrs} style="display:inline-block;margin-top:6px;font-size:12px;color:#F09000;font-weight:500;text-decoration:none">View project →</a>
-          </div>`,
-        );
-        iw.open(map, marker);
-        if (!embed) {
-          google.maps.event.addListenerOnce(iw, "domready", () => {
-            const el = document.getElementById(`iw-link-${sc.slug}`);
-            if (el) {
-              el.addEventListener("click", (e) => {
-                e.preventDefault();
-                onNavigate(`/p/${slug}/${sc.slug}`);
-              });
-            }
+        // Build the info window with DOM APIs (textContent / setAttribute)
+        // so account-controlled fields can never inject HTML into the
+        // public page (XSS-safe — no string-interpolated markup).
+        const root = document.createElement("div");
+        root.style.cssText = "width:200px;font-family:inherit";
+        if (sc.coverUrl) {
+          const img = document.createElement("img");
+          img.src = sc.coverUrl;
+          img.alt = "";
+          img.style.cssText =
+            "width:100%;height:110px;object-fit:cover;border-radius:4px;margin-bottom:6px";
+          root.appendChild(img);
+        }
+        const titleEl = document.createElement("strong");
+        titleEl.style.cssText = "font-size:13px;display:block";
+        titleEl.textContent = sc.title;
+        root.appendChild(titleEl);
+        if (sc.locationLabel) {
+          const loc = document.createElement("div");
+          loc.style.cssText = "font-size:12px;color:#666;margin-top:2px";
+          loc.textContent = sc.locationLabel;
+          root.appendChild(loc);
+        }
+        const link = document.createElement("a");
+        link.href = href;
+        link.style.cssText =
+          "display:inline-block;margin-top:6px;font-size:12px;color:#F09000;font-weight:500;text-decoration:none";
+        link.textContent = "View project →";
+        if (embed) {
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+        } else {
+          link.addEventListener("click", (e) => {
+            e.preventDefault();
+            onNavigate(`/p/${slug}/${sc.slug}`);
           });
         }
+        root.appendChild(link);
+        iw.setContent(root);
+        iw.open(map, marker);
       });
       markersRef.current.push(marker);
     });
