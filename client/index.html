@@ -6,14 +6,8 @@
     <!-- Rewardful referral tracker (loaded BEFORE other scripts so window.rewardful is queued early) -->
     <script>(function(w,r){w._rwq=r;w[r]=w[r]||function(){(w[r].q=w[r].q||[]).push(arguments)}})(window,'rewardful');</script>
     <script async src="https://r.wdfl.co/rw.js" data-rewardful="4645a8"></script>
-    <!-- Google Analytics 4 (gtag.js) -->
-    <script async src="https://www.googletagmanager.com/gtag/js?id=G-0NJ8BV5VP2"></script>
-    <script>
-      window.dataLayer = window.dataLayer || [];
-      function gtag(){dataLayer.push(arguments);}
-      gtag('js', new Date());
-      gtag('config', 'G-0NJ8BV5VP2');
-    </script>
+    <!-- Google Analytics 4 (gtag.js) is initialized conditionally from
+         client/src/lib/google-analytics.ts (signup funnel pages only). -->
     <title>Field View - Jobsite Photo Documentation & Project Management</title>
     <meta name="description" content="The all-in-one platform for field service teams to capture photos, manage projects, and collaborate in real time. Built for construction crews, inspectors, and maintenance workers." />
     <meta property="og:title" content="Field View - Jobsite Photo Documentation & Project Management" />
