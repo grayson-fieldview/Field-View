@@ -1,0 +1,169 @@
+FieldView — Showcases Feature (Replit Build Prompt)
+
+Build a new Showcases feature for FieldView, a photo documentation and job management SaaS for trade contractors. This is our answer to CompanyCam's Showcase/Portfolio feature. It lets a contractor curate their best project photos into public, shareable portfolio pages — with a company-wide portfolio site, an embeddable map of completed projects, and per-project showcase pages featuring hand-picked photos, captions, and before/after sliders.
+
+Work within the existing FieldView codebase and conventions. Photos already live in S3 with metadata (project ID, GPS coordinates, timestamp, uploader) in Postgres. Do not duplicate photo storage — showcases reference existing photo records.
+
+
+1. Data model
+
+Add these tables (adjust naming to match existing conventions):
+
+showcases
+
+
+id, company_id, project_id (nullable — a showcase is usually tied to a project but can be standalone)
+title (default: "Project in {city}" derived from project address — never expose the full street address publicly)
+slug (unique per company, URL-safe, auto-generated from title, editable)
+project_type (array of tags, e.g. Exterior, Interior, Cabinets, Commercial — company-manageable tag list)
+products_used (optional array of strings)
+description (optional text)
+status: draft | published
+cover_photo_id (nullable — defaults to first photo)
+display_location (lat/lng, defaulted from project location but obfuscated: snap to city centroid or add random ~0.5mi jitter so the public map never reveals a customer's exact house)
+location_label (e.g. "Palm Beach Gardens, FL")
+published_at, created_at, updated_at
+
+
+showcase_photos
+
+
+id, showcase_id, photo_id (FK to existing photos table)
+sort_order
+caption (optional text, shown under the photo on the public page)
+pair_group_id (nullable — see before/after below)
+pair_role: before | after | null
+
+
+showcase_settings (one row per company)
+
+
+portfolio_enabled (bool)
+portfolio_slug (e.g. fieldview.com/p/palm-beach-painters — unique across all companies)
+company_display_name, logo_url, brand_color
+show_map (bool), contact_cta_enabled (bool), contact_cta_url or phone
+custom_intro_text (optional)
+
+
+showcase_views (lightweight analytics)
+
+
+showcase_id (nullable for portfolio-level views), viewed_at, referrer, user_agent hash
+
+
+
+2. Internal app — "Showcases" tab
+
+Add Showcases to the main left nav (web app only for now).
+
+Index page
+
+
+Header: "Showcases" with a Create Showcase button and a Portfolio Settings button.
+Engagement stat strip at top: total views last 30 days, top-performing showcase.
+Portfolio Map Preview: a Google Map (or Mapbox — use whichever is already in the codebase) plotting all published showcases as pins at their obfuscated display_location. Clicking a pin shows a mini-card (cover photo, title, tags, "Edit" link).
+Below the map: showcase cards in a grid, filterable by Published / Drafts tabs and by project_type tag. Each card: cover photo, title, tag chips, photo count, view count, published toggle.
+"Copy Portfolio Link" and "Copy Embed Code" buttons (embed code = an iframe snippet for the map + gallery so contractors can drop it on their own website).
+
+
+Create / Edit Showcase modal (or full page — full page preferred given photo curation)
+
+Fields:
+
+
+Published toggle
+Title
+Project Type (multi-select tags with a "Manage" link to edit the company's tag list)
+Products Used (optional, free-text tags)
+Description/Summary (optional)
+Location: auto-filled from project; show the obfuscated pin on a small map with a note "Exact address is never shown publicly"; allow dragging the pin or editing the city label
+Photo selection: "Select Photos" opens the project's photo grid (reuse the existing photo browser component). Multi-select with checkboxes. Selected photos appear in a sortable strip (drag-and-drop reorder). Each selected photo has:
+
+a caption input (inline, appears on hover/click)
+a "Set as cover" action
+a "Pair for Before/After" action
+
+
+
+Before/After pairing: user selects exactly two photos and marks one "Before," one "After." Paired photos render together on the public page as an interactive slider. A showcase can contain multiple pairs plus standalone photos, interleaved in sort order.
+Delete Showcase (with confirm)
+Save as Draft / Publish buttons. Publishing requires: title, at least 1 photo, a location.
+
+
+Portfolio Settings page
+
+
+Enable/disable public portfolio
+Portfolio URL slug (with availability check)
+Logo upload, display name, brand color picker
+Toggle map on/off, toggle contact CTA, CTA destination (phone, email, or URL)
+Intro text
+Live preview pane or "View public portfolio" link
+
+
+
+3. Public pages (no auth, SEO-friendly, server-rendered)
+
+Company portfolio page — /p/{portfolio_slug}
+
+
+Company logo, display name, intro text, contact CTA button
+Interactive map of all published showcases (pins → click opens the showcase card → click through to the showcase page)
+Grid of published showcase cards (cover photo, title, city, tags), filterable by project type
+Clean, fast, mobile-first. Lazy-load images. Serve S3 images through resized/optimized variants (generate thumbnails if we don't already).
+
+
+Individual showcase page — /p/{portfolio_slug}/{showcase_slug}
+
+
+Title, city label, project type tags, products used, description
+Photo gallery in the curated sort order:
+
+Standalone photos: large image with caption below, lightbox on click
+Before/After pairs: interactive drag-slider component (touch-friendly). Labels "Before" / "After" in the corners. Caption below.
+
+
+
+"More projects" strip linking to 3–4 other published showcases
+Contact CTA repeated at bottom
+OpenGraph meta tags (cover photo, title, company name) so links unfurl nicely when texted/emailed to prospects
+Basic schema.org LocalBusiness + ImageGallery markup for SEO
+
+
+Privacy rules (hard requirements)
+
+
+Never render the customer's name, exact street address, or precise GPS on any public page
+Strip EXIF (including GPS) from all publicly served image variants
+Public pages must only ever query published showcases scoped to the portfolio slug — no ID enumeration of drafts or other companies' content
+
+
+
+4. Analytics
+
+
+Record a view (throttled per session) on portfolio and showcase page loads
+Surface in-app: views per showcase (7/30/90 days), total portfolio views, simple sparkline on the Showcases index
+
+
+5. Embed
+
+
+/p/{portfolio_slug}/embed — a stripped-down version of the portfolio (map + grid, no header/footer) designed for iframe embedding on the contractor's own website
+Provide the copy-paste iframe snippet in Portfolio Settings
+
+
+
+Build order
+
+
+Data model + migrations
+Internal Showcases tab: index, create/edit with photo selection + reorder + captions
+Before/After pairing UI + public slider component
+Public portfolio + showcase pages with privacy rules and EXIF stripping
+Map (internal preview + public)
+Portfolio settings + embed
+Analytics
+
+
+Match FieldView's existing design system, auth, and multi-tenant scoping throughout. Every query must be scoped to company_id. Write it production-quality — this is a customer-facing, SEO-indexed surface.
