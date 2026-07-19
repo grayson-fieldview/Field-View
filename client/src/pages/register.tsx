@@ -47,24 +47,12 @@ export default function RegisterPage() {
     }
   }, [inviteInfo]);
 
-  // Meta Pixel: fire a custom event once when a user reaches the signup form,
-  // so Facebook ads can optimize toward "reached signup". Mirrors the existing
-  // fbq pattern (CompleteRegistration on success). The ref guard ensures a
-  // single fire per mount even under React StrictMode's dev double-invoke, and
-  // the window/fbq guard keeps SSR/test/pixel-blocked browsers from throwing.
-  const startFreeSignupFiredRef = useRef(false);
-  useEffect(() => {
-    // Skip invitee flows (/register?token=...) — those arrive from invitation
-    // emails, not Facebook ads, and accept an existing account rather than
-    // starting a free trial. Keeping them out keeps the ad-optimization signal
-    // clean.
-    if (inviteToken) return;
-    if (startFreeSignupFiredRef.current) return;
-    startFreeSignupFiredRef.current = true;
-    if (typeof window !== "undefined" && window.fbq) {
-      window.fbq("trackCustom", "StartFreeSignup");
-    }
-  }, [inviteToken]);
+  // Meta CAPI dedup: a fresh UUID is generated per submit attempt, sent to
+  // the server as metaEventId (so the server-side CAPI Lead carries the same
+  // event_id), and reused as the browser pixel's eventID on success — Meta
+  // dedupes the pair. Stored in a ref so onSuccess sees the exact id the
+  // request carried.
+  const metaEventIdRef = useRef<string>("");
 
   const registerMutation = useMutation({
     mutationFn: async () => {
@@ -87,6 +75,8 @@ export default function RegisterPage() {
         recaptchaToken = await executeRecaptcha("signup");
       }
 
+      metaEventIdRef.current = crypto.randomUUID();
+
       const res = await fetch("/api/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -98,6 +88,7 @@ export default function RegisterPage() {
           ...(inviteToken ? { inviteToken } : {}),
           ...(recaptchaToken ? { recaptchaToken } : {}),
           termsAccepted: true,
+          metaEventId: metaEventIdRef.current,
         }),
       });
       if (!res.ok) {
@@ -109,12 +100,13 @@ export default function RegisterPage() {
       return res.json();
     },
     onSuccess: (data) => {
-      // PR 3: Meta Pixel CompleteRegistration. Fires for BOTH branches
-      // (trial signup + invitee accepting an invite) — any successful 201
-      // from /api/register counts as a completed registration. Guarded so
-      // SSR/test contexts and pixel-blocked browsers don't throw.
-      if (typeof window !== "undefined" && window.fbq) {
-        window.fbq("track", "CompleteRegistration");
+      // Meta Pixel Lead — replaces the previous StartFreeSignup /
+      // CompleteRegistration events. Fires only for the trial branch (the
+      // server-side CAPI Lead only fires for self-serve account creations)
+      // with the same eventID the server received, so Meta dedupes the pair.
+      // Guarded so SSR/test contexts and pixel-blocked browsers don't throw.
+      if (!inviteToken && typeof window !== "undefined" && window.fbq) {
+        window.fbq("track", "Lead", {}, { eventID: metaEventIdRef.current });
       }
       // [DIAG] Session 3 BUG 2 instrumentation
       console.log("[register] success", {

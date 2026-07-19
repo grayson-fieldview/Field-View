@@ -7,6 +7,8 @@ import { getUncachableStripeClient } from "../stripeClient";
 import { Sentry } from "./sentry";
 import { sendSlackNotification, isCompAccount } from "./slack";
 import { sendGhlEvent, actualMrrFromSeats } from "./ghl";
+import { sendMetaCapiEvent } from "./metaCapi";
+import crypto from "crypto";
 
 // ---------------------------------------------------------------------------
 // S46 GHL billing_event helpers.
@@ -62,7 +64,12 @@ async function sendGhlBillingEvent(opts: {
       .limit(1);
     if (!acct?.ownerId) return;
     const [owner] = await db
-      .select({ id: users.id, email: users.email })
+      .select({
+        id: users.id,
+        email: users.email,
+        signupFbp: users.signupFbp,
+        signupFbc: users.signupFbc,
+      })
       .from(users)
       .where(eq(users.id, acct.ownerId))
       .limit(1);
@@ -82,6 +89,22 @@ async function sendGhlBillingEvent(opts: {
       paid_conversion_date: opts.paidConversion ? now : null,
       churn_date: opts.churn ? now : null,
     });
+
+    // Meta CAPI Subscribe — ONLY on the paid-conversion path
+    // (checkout.session.completed / new subscription), never on updates or
+    // cancellations. No browser context (request comes from Stripe's
+    // servers): fbp/fbc recovered from the owner row's signup attribution.
+    if (opts.paidConversion) {
+      sendMetaCapiEvent({
+        eventName: "Subscribe",
+        eventId: crypto.randomUUID(),
+        email: owner.email,
+        value: actualMrrFromSeats(seatCount, isAnnual),
+        currency: "USD",
+        fbp: owner.signupFbp,
+        fbc: owner.signupFbc,
+      });
+    }
   } catch (err: any) {
     console.error("[ghl] billing_event failed (non-fatal):", err?.message || err);
   }

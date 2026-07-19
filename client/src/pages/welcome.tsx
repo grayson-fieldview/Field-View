@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -49,14 +49,21 @@ export default function WelcomePage() {
   const [companySize, setCompanySize] = useState("");
   const [tcpaAccepted, setTcpaAccepted] = useState(false);
 
+  // Meta CAPI dedup: UUID generated per submit, sent as metaEventId so the
+  // server-side CAPI StartTrial shares the event_id with the browser pixel's
+  // StartTrial fired on success — Meta dedupes the pair.
+  const metaEventIdRef = useRef<string>("");
+
   const submit = useMutation({
     mutationFn: async () => {
+      metaEventIdRef.current = crypto.randomUUID();
       const body: Record<string, any> = {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         phone: phone.trim(),
         // S46 GHL: server persists this as users.sms_consent_at (set-once).
         tcpaAccepted,
+        metaEventId: metaEventIdRef.current,
       };
       if (isAdmin) {
         body.industry = industry;
@@ -78,6 +85,12 @@ export default function WelcomePage() {
         profileCompletedAt: data?.profileCompletedAt,
         emailVerified: data?.emailVerified,
       });
+      // Meta Pixel StartTrial with the same eventID the server received, so
+      // Meta dedupes it against the server-side CAPI StartTrial. Guarded so
+      // SSR/test contexts and pixel-blocked browsers don't throw.
+      if (typeof window !== "undefined" && (window as any).fbq) {
+        (window as any).fbq("track", "StartTrial", {}, { eventID: metaEventIdRef.current });
+      }
       qc.setQueryData(["/api/auth/user"], data);
       setLocation("/verify-email");
     },

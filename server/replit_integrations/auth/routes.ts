@@ -10,6 +10,7 @@ import { eq } from "drizzle-orm";
 import { INDUSTRY_VALUES, COMPANY_SIZE_VALUES } from "@shared/constants";
 import { sendEmailVerificationEmail } from "../../services/email";
 import { sendGhlEvent, estimatedMrrFromCompanySize } from "../../lib/ghl";
+import { sendMetaCapiEvent } from "../../lib/metaCapi";
 import { isCompAccount } from "../../lib/slack";
 
 export function registerAuthRoutes(app: Express): void {
@@ -168,6 +169,28 @@ export function registerAuthRoutes(app: Express): void {
             trial_ends_at: updated.trialEndsAt,
             estimated_mrr: estimatedMrrFromCompanySize(acctCompanySize),
           });
+          // Meta CAPI StartTrial — same first-completion + owner gate as
+          // trial_started above. eventId from the client's metaEventId (PATCH
+          // body) when present so the browser pixel's StartTrial dedupes.
+          if (acctRow?.ownerId === updated.id) {
+            const rawMetaEventId = req.body?.metaEventId;
+            const metaEventId =
+              typeof rawMetaEventId === "string" && rawMetaEventId.length > 0 && rawMetaEventId.length <= 64
+                ? rawMetaEventId
+                : crypto.randomUUID();
+            sendMetaCapiEvent({
+              eventName: "StartTrial",
+              eventId: metaEventId,
+              email: updated.email,
+              firstName: updated.firstName,
+              lastName: updated.lastName,
+              phone: updated.phone,
+              clientIp: req.ip,
+              userAgent: req.headers?.["user-agent"],
+              fbp: req.cookies?._fbp ?? updated.signupFbp,
+              fbc: req.cookies?._fbc ?? updated.signupFbc,
+            });
+          }
         } catch (ghlErr) {
           console.error("[auth/me] GHL trial_started lookup failed (non-fatal):", ghlErr);
         }

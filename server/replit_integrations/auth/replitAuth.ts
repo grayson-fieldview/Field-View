@@ -31,6 +31,7 @@ import {
 import { Sentry } from "../../lib/sentry";
 import { sendSlackNotification, isCompAccount } from "../../lib/slack";
 import { sendGhlEvent } from "../../lib/ghl";
+import { sendMetaCapiEvent } from "../../lib/metaCapi";
 import { normalizeEmail } from "../../lib/normalizeEmail";
 import { csrfGuard } from "../../middleware/csrf";
 import { touchLastActive } from "../../middleware/touch-last-active";
@@ -508,6 +509,18 @@ export async function setupAuth(app: Express) {
                 utm_campaign: ghlAttr.utm_campaign ?? null,
                 signup_method: "google",
               });
+              // Meta CAPI Lead — same gate as partial_signup above.
+              sendMetaCapiEvent({
+                eventName: "Lead",
+                eventId: crypto.randomUUID(),
+                email: user.email!,
+                firstName: user.firstName,
+                lastName: user.lastName,
+                clientIp: req.ip,
+                userAgent: req.headers?.["user-agent"],
+                fbp: req.cookies?._fbp ?? user.signupFbp,
+                fbc: req.cookies?._fbc ?? user.signupFbc,
+              });
             }
             return done(null, user);
           } catch (err: any) {
@@ -574,6 +587,18 @@ export async function setupAuth(app: Express) {
                 utm_medium: ghlAttr.utm_medium ?? null,
                 utm_campaign: ghlAttr.utm_campaign ?? null,
                 signup_method: "microsoft",
+              });
+              // Meta CAPI Lead — same gate as partial_signup above.
+              sendMetaCapiEvent({
+                eventName: "Lead",
+                eventId: crypto.randomUUID(),
+                email: user.email!,
+                firstName: user.firstName,
+                lastName: user.lastName,
+                clientIp: req.ip,
+                userAgent: req.headers?.["user-agent"],
+                fbp: req.cookies?._fbp ?? user.signupFbp,
+                fbc: req.cookies?._fbc ?? user.signupFbc,
               });
             }
             return done(null, user);
@@ -803,6 +828,24 @@ export async function setupAuth(app: Express) {
           utm_medium: ghlAttr.utm_medium ?? null,
           utm_campaign: ghlAttr.utm_campaign ?? null,
           signup_method: "email",
+        });
+        // Meta CAPI Lead — same gate as partial_signup above. eventId comes
+        // from the client (metaEventId in the POST body) so the browser
+        // pixel's Lead and this server event dedupe in Meta; falls back to a
+        // fresh UUID when the client didn't send one.
+        const rawMetaEventId = req.body?.metaEventId;
+        const metaEventId =
+          typeof rawMetaEventId === "string" && rawMetaEventId.length > 0 && rawMetaEventId.length <= 64
+            ? rawMetaEventId
+            : crypto.randomUUID();
+        sendMetaCapiEvent({
+          eventName: "Lead",
+          eventId: metaEventId,
+          email: user.email!,
+          clientIp: req.ip,
+          userAgent: req.headers?.["user-agent"],
+          fbp: req.cookies?._fbp ?? user.signupFbp,
+          fbc: req.cookies?._fbc ?? user.signupFbc,
         });
       }
 

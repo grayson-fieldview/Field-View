@@ -25,6 +25,7 @@ import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, dele
 import archiver from "archiver";
 import { sendInvitationEmail, sendAccountDeletionEmail } from "./services/email";
 import { sendGhlEvent, syncUsageToGhl } from "./lib/ghl";
+import { sendMetaCapiEvent } from "./lib/metaCapi";
 import { isCompAccount } from "./lib/slack";
 import { toCsv } from "./lib/csv";
 import bcrypt from "bcryptjs";
@@ -172,6 +173,18 @@ async function checkActivationMilestone(accountId: string | null): Promise<void>
     activation_date: flipped[0].activatedAt?.toISOString() ?? new Date().toISOString(),
     projects_created: projectsCreated,
     photos_uploaded: photosUploaded,
+  });
+
+  // Meta CAPI "Activated" (custom event) — same win-the-atomic-UPDATE +
+  // owner + isCompAccount gates as the GHL event above. No browser context
+  // here (fire-and-forget helper, uploader ≠ owner), so no IP/UA; fbp/fbc
+  // recovered from the owner row's signup attribution columns.
+  sendMetaCapiEvent({
+    eventName: "Activated",
+    eventId: crypto.randomUUID(),
+    email: owner.email,
+    fbp: owner.signupFbp,
+    fbc: owner.signupFbc,
   });
 }
 
