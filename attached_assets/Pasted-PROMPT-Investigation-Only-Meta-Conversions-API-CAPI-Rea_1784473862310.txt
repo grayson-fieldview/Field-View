@@ -1,0 +1,32 @@
+PROMPT — Investigation Only: Meta Conversions API (CAPI) Readiness Audit
+Context: We are adding Meta Conversions API server-side event tracking before launching Meta ads. Events will fire from the same backend call sites that currently fire GoHighLevel events. This is a READ-ONLY investigation. Do NOT modify, create, or delete any files. Do NOT run any migrations or write any code. Produce an investigation report and stop.
+Part 1 — Locate and document the existing GHL event call sites
+Using rg (not grep), find every call site of sendGhlEvent() from server/lib/ghl.ts. For each of the four event types below, report the exact file and line, and list every piece of user/account data available in scope at that moment (email, phone, first name, last name, user ID, account ID, company size, seat count, etc.):
+
+partial_signup — signup step 1 completion
+trial_started — the NULL→set transition of profileCompletedAt
+activation_milestone — the conditional UPDATE path
+billing_event — inside the Stripe webhook handler (server/lib/stripeWebhook.ts)
+
+Part 2 — Request context availability
+For each call site above, answer: does a live Express req object exist in scope? Specifically:
+
+Can we read client IP (req.ip / x-forwarded-for) and user-agent header at that point?
+Can we read cookies at that point? Report which cookie-parsing middleware is active (cookie-parser? express-session only?) and how cookies are currently accessed anywhere in the codebase.
+For the Stripe webhook specifically: confirm there is NO end-user browser context (the request comes from Stripe's servers), and report what user/account identifiers the handler resolves before firing the GHL event.
+
+Part 3 — Signup flow and attribution capture points
+
+Document the signup step 1 and step 2 route handlers: exact routes, what fields each accepts, and where in the flow phone number first becomes available.
+Search the entire codebase (client and server) for any existing references to fbclid, _fbp, _fbc, utm_, or any UTM/click-ID capture logic. Report whether any attribution parameters are currently captured, persisted, or passed to the backend at signup.
+Report the current users and accounts table schemas from shared/schema.ts — list existing columns only. We are evaluating where to add columns for storing fbp, fbc, and landing-page attribution; do NOT add them.
+
+Part 4 — Fire-and-forget infrastructure
+
+Document exactly how ghl.ts implements the fire-and-forget pattern: the try/catch wrapping, and how waitUntil/deferred execution is invoked on Vercel. Quote the relevant helper.
+Confirm whether this pattern is reusable as-is for a new server/lib/metaCapi.ts module, or whether anything about it is GHL-specific.
+Report how environment variables are accessed in ghl.ts and stripeWebhook.ts (direct process.env vs. a config module) so new META_PIXEL_ID / META_CAPI_ACCESS_TOKEN vars follow the same convention.
+List any existing hashing utilities in the codebase (crypto imports, SHA-256 usage) we could reuse for hashing email/phone.
+
+Part 5 — Report format
+Deliver a single investigation report with: findings organized by the five parts above, exact file paths and line numbers for every claim, and a "Risks/Unknowns" section flagging anything ambiguous. Then STOP. Do not propose diffs, do not implement anything, do not commit.
