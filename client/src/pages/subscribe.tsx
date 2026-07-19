@@ -45,14 +45,6 @@ export default function SubscribePage() {
         })
         .then(() => {
           qc.invalidateQueries({ queryKey: ["/api/auth/user"] });
-          // PR 3: Meta Pixel Subscribe event. Stripe amount isn't surfaced
-          // in the confirm-checkout response yet, so we fire without
-          // value/currency — the event itself still attributes the
-          // conversion in Ads Manager. Guarded so pixel-blocked browsers
-          // never break the success flow.
-          if (typeof window !== "undefined" && window.fbq) {
-            window.fbq("track", "Subscribe");
-          }
           // Rewardful client-side conversion ping — defense in depth
           // alongside Stripe's client_reference_id attribution.
           try {

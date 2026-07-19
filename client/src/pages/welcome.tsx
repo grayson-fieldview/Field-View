@@ -86,9 +86,19 @@ export default function WelcomePage() {
         emailVerified: data?.emailVerified,
       });
       // Meta Pixel StartTrial with the same eventID the server received, so
-      // Meta dedupes it against the server-side CAPI StartTrial. Guarded so
-      // SSR/test contexts and pixel-blocked browsers don't throw.
-      if (typeof window !== "undefined" && (window as any).fbq) {
+      // Meta dedupes it against the server-side CAPI StartTrial. Gated on the
+      // PREVIOUSLY cached user's profileCompletedAt being null/undefined —
+      // mirroring the server's NULL→set gate — so a profile re-save can never
+      // emit an un-deduped browser-only StartTrial. Read BEFORE setQueryData
+      // overwrites the cache. Guarded so SSR/test contexts and pixel-blocked
+      // browsers don't throw.
+      const prev = qc.getQueryData<any>(["/api/auth/user"]);
+      if (
+        prev &&
+        prev.profileCompletedAt == null &&
+        typeof window !== "undefined" &&
+        (window as any).fbq
+      ) {
         (window as any).fbq("track", "StartTrial", {}, { eventID: metaEventIdRef.current });
       }
       qc.setQueryData(["/api/auth/user"], data);
