@@ -182,6 +182,9 @@ export function registerAuthRoutes(app: Express): void {
             crew_size: acctCompanySize,
             trial_ends_at: updated.trialEndsAt,
             estimated_mrr: estimatedMrrFromCompanySize(acctCompanySize),
+            signup_source: updated.signupUtmSource ?? "direct",
+            utm_medium: updated.signupUtmMedium ?? null,
+            utm_campaign: updated.signupUtmCampaign ?? null,
           });
           // Meta CAPI StartTrial — same first-completion + owner gate as
           // trial_started above. eventId from the client's metaEventId (PATCH
