@@ -170,9 +170,9 @@ export function AppInstallPrompt() {
           </DialogHeader>
           <div className="py-2">
             {detectDeviceOS() === "desktop" ? (
-              /* Desktop: QR instead of store buttons — points at /get-app,
-                 which routes the phone to the right store by UA. Static SVG
-                 in client/public (no QR library, per constraints). */
+              /* Desktop: QR instead of store buttons — encodes
+                 https://field-view.com/app (the marketing download page).
+                 Static SVG in client/public (no QR library, per constraints). */
               <div className="flex flex-col items-center gap-2">
                 <img
                   src="/get-app-qr.svg"
