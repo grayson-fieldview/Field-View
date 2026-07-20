@@ -1,0 +1,33 @@
+INVESTIGATION ONLY — NO CODE CHANGES
+Do not modify, create, or delete any files. Do not commit. Deliverable is a written report. Use rg (not grep) for all searches.
+Context: Every signup is showing "direct" as lead source despite active Meta ad traffic landing on field-view.com with UTM parameters. We already know the marketing site's CTA links to app.field-view.com/signup without forwarding query params (confirmed externally — not in this codebase's scope). This investigation maps the app side: what attribution data the signup flow captures today, where it could be stored, and how "lead source" gets populated downstream.
+Report on the following:
+1. Current attribution capture at signup
+
+In the registration flow (client/src/pages/register.tsx, POST /api/register, and signup step 2 /welcome → PATCH /api/auth/me): is there ANY reading of URL query params, document.referrer, or cookies for attribution? Search rg -in "utm|fbclid|gclid|referrer|attribution|lead.?source" client/src server/ and report every hit with file:line.
+Does the register endpoint accept/persist any fields beyond email/password/company name? List its request schema.
+
+2. Schema — where attribution could live
+
+Do users or accounts have ANY columns for source/campaign/attribution/referrer? Quote the relevant portions of shared/models/auth.ts.
+Is there any signup-metadata or marketing-related table anywhere in shared/schema.ts?
+
+3. Lead source downstream — GHL
+
+In server/lib/ghl.ts: what fields does sendGhlEvent() send for partial_signup and trial_started? Quote the payload construction. Is there any source/campaign/attribution field in the payload, or anything GHL could derive lead source from?
+Where are the call sites for partial_signup and trial_started (file:line), and what data is in scope at each call site (i.e., would UTMs be available there if the route captured them)?
+
+4. Lead source downstream — HubSpot
+
+Same questions for the HubSpot Phase 1 integration: what's sent at trial signup, and is any source field included?
+
+5. Session/cookie infrastructure
+
+What session middleware and cookie settings exist (server/index.ts or wherever session config lives)? Specifically: could a first-party cookie set on .field-view.com (parent domain) be read by the app at app.field-view.com? Report the current cookie domain setting if any.
+Is there any existing pattern for reading a client-side cookie or localStorage value and sending it with an API request (e.g., how Rewardful referral tracking works, if integrated in the app — search rg -in "rewardful|referral" client/src server/)?
+
+6. Rewardful specifics
+
+The Rewardful script is in client/index.html. Does the signup flow pass a Rewardful referral ID to the server anywhere? If yes, show how — that's the exact pattern UTM forwarding would follow.
+
+Output format: numbered sections, file:line for every claim, quoted code snippets. Flag ambiguity rather than guessing. No implementation proposals — report only.
