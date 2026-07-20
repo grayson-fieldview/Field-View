@@ -224,6 +224,48 @@ async function findOrCreateOAuthUser(opts: {
   return { user: created, isNewSignup: true, isNewAccount, newAccountName };
 }
 
+// S46 — resolve first-touch attribution for a signup request: session first
+// (populated by the attributionCapture middleware in dev / any Express-served
+// page hit), falling back to the client-written fv_attr cookie
+// (client/src/lib/attribution.ts). On Vercel, non-/api/* requests are served
+// statically and never reach the middleware, so the cookie is the only
+// source in prod. Session values win when both exist. Cookie values are
+// client-controlled, so they are re-sanitized here: allowlisted keys,
+// string-only, trimmed, capped at 500 chars. Never throws; returns {} when
+// neither source has data. Shared by persistSignupAttribution() and the
+// GHL partial_signup payload construction (email + Google + Microsoft).
+function resolveSignupAttribution(req: any): Record<string, string | undefined> {
+  const sessionAttr = (req.session?.attribution ?? {}) as Record<string, string | undefined>;
+  if (Object.keys(sessionAttr).length > 0) return sessionAttr;
+  if (!req.cookies?.fv_attr) return sessionAttr;
+  try {
+    const parsed = JSON.parse(req.cookies.fv_attr);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const ALLOWED = [
+        "utm_source",
+        "utm_medium",
+        "utm_campaign",
+        "utm_content",
+        "utm_term",
+        "fbclid",
+        "referrer",
+      ] as const;
+      const sanitized: Record<string, string> = {};
+      for (const key of ALLOWED) {
+        const raw = (parsed as Record<string, unknown>)[key];
+        if (typeof raw !== "string") continue;
+        const trimmed = raw.trim();
+        if (!trimmed) continue;
+        sanitized[key] = trimmed.slice(0, 500);
+      }
+      return sanitized;
+    }
+  } catch {
+    // Malformed cookie — ignore, fall through with empty attribution.
+  }
+  return sessionAttr;
+}
+
 // S46 — persist first-touch marketing attribution onto a freshly-created user
 // row. Shared by /api/register and the Google/Microsoft OAuth callbacks (the
 // session survives the OAuth redirect round-trip — same mechanism as
@@ -231,42 +273,7 @@ async function findOrCreateOAuthUser(opts: {
 // never block signup.
 async function persistSignupAttribution(req: any, userId: string): Promise<void> {
   try {
-    let attr = (req.session?.attribution ?? {}) as Record<string, string | undefined>;
-    // S46 client-capture fallback: on Vercel, non-/api/* requests are served
-    // statically and never reach the attributionCapture middleware, so the
-    // session attribution is empty in prod. The client writes first-touch
-    // attribution to the fv_attr cookie (client/src/lib/attribution.ts);
-    // read it here when the session has nothing. Session values win.
-    if (Object.keys(attr).length === 0 && req.cookies?.fv_attr) {
-      try {
-        const parsed = JSON.parse(req.cookies.fv_attr);
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          // Re-sanitize server-side: the client caps values at 500 chars and
-          // only writes known fields, but the cookie is client-controlled —
-          // allowlist keys and re-apply trim + 500-char cap before DB write.
-          const ALLOWED = [
-            "utm_source",
-            "utm_medium",
-            "utm_campaign",
-            "utm_content",
-            "utm_term",
-            "fbclid",
-            "referrer",
-          ] as const;
-          const sanitized: Record<string, string> = {};
-          for (const key of ALLOWED) {
-            const raw = (parsed as Record<string, unknown>)[key];
-            if (typeof raw !== "string") continue;
-            const trimmed = raw.trim();
-            if (!trimmed) continue;
-            sanitized[key] = trimmed.slice(0, 500);
-          }
-          attr = sanitized;
-        }
-      } catch {
-        // Malformed cookie — ignore, fall through with empty attribution.
-      }
-    }
+    const attr = resolveSignupAttribution(req);
     const fbp = req.cookies?._fbp ?? null;
     const fbc = req.cookies?._fbc ?? null;
     await db.update(users).set({
@@ -532,7 +539,7 @@ export async function setupAuth(app: Express) {
             // S46 GHL partial_signup — only on first-time ACCOUNT creation
             // (isNewAccount), never on sign-ins or OAuth invite acceptances.
             if (isNewAccount && !isCompAccount(user.email)) {
-              const ghlAttr = (req.session?.attribution ?? {}) as Record<string, string | undefined>;
+              const ghlAttr = resolveSignupAttribution(req);
               sendGhlEvent("partial_signup", {
                 email: user.email,
                 app_user_id: user.id,
@@ -611,7 +618,7 @@ export async function setupAuth(app: Express) {
             // S46 GHL partial_signup — only on first-time ACCOUNT creation
             // (isNewAccount), never on sign-ins or OAuth invite acceptances.
             if (isNewAccount && !isCompAccount(user.email)) {
-              const ghlAttr = (req.session?.attribution ?? {}) as Record<string, string | undefined>;
+              const ghlAttr = resolveSignupAttribution(req);
               sendGhlEvent("partial_signup", {
                 email: user.email,
                 app_user_id: user.id,
@@ -852,7 +859,7 @@ export async function setupAuth(app: Express) {
       // join an existing account, so no lifecycle event). Attribution comes
       // from the same session store the attribution UPDATE above used.
       if (!inviteToken && !isCompAccount(user.email)) {
-        const ghlAttr = ((req.session as any)?.attribution ?? {}) as Record<string, string | undefined>;
+        const ghlAttr = resolveSignupAttribution(req);
         sendGhlEvent("partial_signup", {
           email: user.email,
           app_user_id: user.id,
