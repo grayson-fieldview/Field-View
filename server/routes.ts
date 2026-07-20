@@ -408,11 +408,6 @@ function isAllowedUpload(originalName: string, mimeType: string): boolean {
 const MAX_IMAGE_SIZE = 50 * 1024 * 1024;  // 50 MB — covers 4K iPhone photos with headroom
 const MAX_VIDEO_SIZE = 500 * 1024 * 1024; // 500 MB — covers ~30s of 4K video, ~2 min of 1080p
 
-// Mobile app store destinations for the public /get-app redirect. Kept in
-// sync with client/src/lib/appLinks.ts (client can't be imported here).
-const APP_STORE_URL = "https://apps.apple.com/app/id6766534406";
-const PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=com.fieldview.mobile";
-
 const APP_PROMPT_SURFACES = ["modal", "banner"];
 const APP_PROMPT_ACTIONS = ["shown", "clicked_ios", "clicked_android", "dismissed"];
 
@@ -435,16 +430,6 @@ export async function registerRoutes(
   await setupAuth(app);
   registerAuthRoutes(app);
   registerShowcaseRoutes(app);
-
-  // Public, unauthenticated device-aware store redirect. Registered here in
-  // registerRoutes (which runs BEFORE the Vite/static catch-all in
-  // server/index.ts), so it wins over the SPA fallback. Android UAs go to
-  // Play; iOS and unknown/missing UAs default to the App Store.
-  app.get("/get-app", (req, res) => {
-    const ua = String(req.headers["user-agent"] || "");
-    const target = /android/i.test(ua) ? PLAY_STORE_URL : APP_STORE_URL;
-    res.redirect(302, target);
-  });
 
   // Install-prompt telemetry (modal/banner shown/clicked/dismissed).
   // Append-only, returns 204 immediately after a single insert.

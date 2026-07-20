@@ -10,7 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Smartphone, X } from "lucide-react";
-import { APP_STORE_URL, PLAY_STORE_URL } from "@/lib/appLinks";
+import { APP_STORE_URL, PLAY_STORE_URL, APP_DOWNLOAD_PAGE_URL } from "@/lib/appLinks";
 import { detectDeviceOS } from "@/lib/device";
 
 const MODAL_SEEN_KEY = "fv_app_prompt_seen";
@@ -144,7 +144,8 @@ export function AppInstallPrompt() {
   if (!user) return null;
 
   const os = detectDeviceOS();
-  const bannerHref = os === "ios" ? APP_STORE_URL : os === "android" ? PLAY_STORE_URL : "/get-app";
+  // Banner always links to the marketing download page (device-agnostic);
+  // the click action keeps its device attribution for telemetry.
   const bannerClickAction: Action = os === "android" ? "clicked_android" : "clicked_ios";
 
   return (
@@ -174,14 +175,21 @@ export function AppInstallPrompt() {
                  https://field-view.com/app (the marketing download page).
                  Static SVG in client/public (no QR library, per constraints). */
               <div className="flex flex-col items-center gap-2">
-                <img
-                  src="/get-app-qr.svg"
-                  alt="QR code linking to the Field View mobile app"
-                  width={160}
-                  height={160}
-                  className="rounded"
-                  data-testid="img-app-install-qr"
-                />
+                <a
+                  href={APP_DOWNLOAD_PAGE_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-testid="link-app-install-qr"
+                >
+                  <img
+                    src="/get-app-qr.svg"
+                    alt="QR code linking to the Field View mobile app"
+                    width={160}
+                    height={160}
+                    className="rounded"
+                    data-testid="img-app-install-qr"
+                  />
+                </a>
                 <p className="text-sm text-muted-foreground" data-testid="text-app-install-qr-caption">
                   Scan with your phone camera to get the app
                 </p>
@@ -204,16 +212,19 @@ export function AppInstallPrompt() {
         </DialogContent>
       </Dialog>
 
+      {/* Floating card: fixed bottom-right on desktop (~360px), full-width
+          with side margins on mobile. z-40 sits above page content but below
+          shadcn Dialog overlays (z-50), so the modal always covers it. */}
       {showBanner && (
         <div
-          className="flex items-center gap-2 px-3 py-1.5 text-sm bg-[#1E1E1E] text-white"
+          className="fixed bottom-4 inset-x-4 sm:inset-x-auto sm:right-4 sm:w-[360px] z-40 flex items-start gap-3 rounded-xl border border-border bg-[#1E1E1E] text-white p-4 shadow-lg"
           data-testid="banner-app-install"
         >
-          <Smartphone className="h-4 w-4 shrink-0 text-[#F09000]" />
-          <span className="truncate">
+          <Smartphone className="h-5 w-5 shrink-0 mt-0.5 text-[#F09000]" />
+          <div className="min-w-0 text-sm">
             Get the mobile app — photos auto-file from the field.{" "}
             <a
-              href={bannerHref}
+              href={APP_DOWNLOAD_PAGE_URL}
               target="_blank"
               rel="noopener noreferrer"
               className="underline font-medium text-[#F09000] hover:text-[#ffb340]"
@@ -222,10 +233,10 @@ export function AppInstallPrompt() {
             >
               Download it here
             </a>
-          </span>
+          </div>
           <button
             type="button"
-            className="ml-auto p-1 rounded hover:bg-white/10"
+            className="ml-auto -mr-1 -mt-1 p-1 rounded hover:bg-white/10"
             aria-label="Dismiss"
             onClick={() => {
               safeSetStorage(window.sessionStorage, BANNER_DISMISSED_KEY, "1");
