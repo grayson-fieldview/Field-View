@@ -57,7 +57,10 @@ export function AddressAutocomplete({
 
   useEffect(() => {
     if (!config?.apiKey || scriptLoaded || scriptLoading) return;
-    if ((window as any).google?.maps?.places) {
+    // Fast path: the places library (including the AutocompleteSuggestion
+    // class we actually use) is already available — e.g. the dialogs, which
+    // usually mount long after another page loaded the Maps script.
+    if ((window as any).google?.maps?.places?.AutocompleteSuggestion) {
       setScriptLoaded(true);
       return;
     }
@@ -66,8 +69,28 @@ export function AddressAutocomplete({
       try {
         const { loadGoogleMaps } = await import("@/lib/google-maps");
         await loadGoogleMaps(config.apiKey);
+        // loadGoogleMaps resolves on the script's load event (or immediately
+        // if window.google.maps already exists), which does NOT guarantee the
+        // places library is ready — a component that mounts at page load
+        // (first-run setup) can get here before places is attached. Wait for
+        // it explicitly before declaring ourselves ready.
+        const g: any = (window as any).google;
+        if (!g?.maps?.places?.AutocompleteSuggestion) {
+          if (g?.maps?.importLibrary) {
+            await g.maps.importLibrary("places");
+          } else {
+            const deadline = Date.now() + 5000;
+            while (!(window as any).google?.maps?.places?.AutocompleteSuggestion) {
+              if (Date.now() > deadline) {
+                throw new Error("Google Maps places library not available after load");
+              }
+              await new Promise((r) => setTimeout(r, 100));
+            }
+          }
+        }
         setScriptLoaded(true);
-      } catch {
+      } catch (err) {
+        console.error("[ADDR] Google Maps places init failed", err);
         setScriptError(true);
       } finally {
         setScriptLoading(false);
