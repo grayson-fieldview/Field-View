@@ -34,8 +34,7 @@ import {
   Image as ImageIcon,
 } from "lucide-react";
 import type { Project } from "@shared/schema";
-import { insertProjectSchema } from "@shared/schema";
-import { z } from "zod";
+import { useCreateProject, createProjectSchema } from "@/hooks/use-create-project";
 import { AddressAutocomplete } from "@/components/address-autocomplete";
 
 interface ProjectWithDetails extends Project {
@@ -43,10 +42,6 @@ interface ProjectWithDetails extends Project {
   recentPhotos: { id: number; url: string }[];
   recentUsers: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }[];
 }
-
-const createProjectSchema = insertProjectSchema.extend({
-  name: z.string().min(1, "Project name is required"),
-});
 
 type FilterTab = "all" | "active" | "completed" | "archived";
 
@@ -88,26 +83,11 @@ export default function ProjectsPage() {
     form.setValue("longitude", null);
   }, [form]);
 
-  const createProject = useMutation({
-    mutationFn: async (data: z.infer<typeof createProjectSchema>) => {
-      console.log("[SUBMIT] outgoing payload", data);
-      const res = await apiRequest("POST", "/api/projects", data);
-      return res.json();
-    },
-    onSuccess: (data: { id: number }) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
+  const createProject = useCreateProject({
+    onSuccess: (data) => {
       setDialogOpen(false);
       form.reset();
-      toast({ title: "Project created", description: "Your new project is ready." });
       navigate(`/projects/${data.id}`);
-    },
-    onError: (error: Error) => {
-      if (isUnauthorizedError(error)) {
-        toast({ title: "Unauthorized", description: "Logging in again...", variant: "destructive" });
-        setTimeout(() => { window.location.href = "/login"; }, 500);
-        return;
-      }
-      toast({ title: "Error", description: error.message, variant: "destructive" });
     },
   });
 

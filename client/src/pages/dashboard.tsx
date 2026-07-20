@@ -43,8 +43,9 @@ import {
   Clock,
 } from "lucide-react";
 import type { Project } from "@shared/schema";
-import { insertProjectSchema } from "@shared/schema";
-import { z } from "zod";
+import { useCreateProject, createProjectSchema } from "@/hooks/use-create-project";
+import { FirstRunSetup } from "@/components/first-run-setup";
+import { SetupChecklist } from "@/components/setup-checklist";
 import { AddressAutocomplete } from "@/components/address-autocomplete";
 import { loadGoogleMaps } from "@/lib/google-maps";
 
@@ -75,10 +76,6 @@ interface ProjectWithDetails extends Project {
   recentPhotos: { id: number; url: string }[];
   recentUsers: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }[];
 }
-
-const createProjectSchema = insertProjectSchema.extend({
-  name: z.string().min(1, "Project name is required"),
-});
 
 function relativeTime(dateStr: string): string {
   const now = Date.now();
@@ -274,28 +271,23 @@ export default function DashboardPage() {
     form.setValue("longitude", null);
   }, [form]);
 
-  const createProject = useMutation({
-    mutationFn: async (data: z.infer<typeof createProjectSchema>) => {
-      const res = await apiRequest("POST", "/api/projects", data);
-      return res.json();
-    },
-    onSuccess: (data: { id: number }) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/activity"] });
+  const createProject = useCreateProject({
+    onSuccess: (data) => {
       setDialogOpen(false);
       form.reset();
-      toast({ title: "Project created", description: "Your new project is ready." });
       navigate(`/projects/${data.id}`);
     },
-    onError: (error: Error) => {
-      if (isUnauthorizedError(error)) {
-        toast({ title: "Unauthorized", description: "Logging in again...", variant: "destructive" });
-        setTimeout(() => { window.location.href = "/login"; }, 500);
-        return;
-      }
-      toast({ title: "Error", description: error.message, variant: "destructive" });
-    },
   });
+
+  // First-run guided flow (admins/owners with zero projects). The sticky
+  // flag keeps step 2 mounted after the first project is created — the
+  // projects refetch means the zero-project condition no longer holds.
+  const [firstRunSticky, setFirstRunSticky] = useState(false);
+  const isOwnerAdmin = user?.role === "admin" || (user as any)?.isOwner === true;
+  const showFirstRun =
+    isOwnerAdmin &&
+    !projectsLoading &&
+    ((projects?.length ?? 0) === 0 || firstRunSticky);
 
   const stats = activityData?.stats;
   const activities = activityData?.activities || [];
@@ -307,8 +299,20 @@ export default function DashboardPage() {
     { label: "Open Tasks", value: stats?.openTasks, icon: ClipboardList, href: "/tasks" },
   ];
 
+  if (showFirstRun) {
+    return (
+      <FirstRunSetup
+        onProjectCreated={() => setFirstRunSticky(true)}
+        onSkip={() => setFirstRunSticky(false)}
+      />
+    );
+  }
+
   return (
     <div className="p-4 sm:p-6 space-y-4 max-w-7xl mx-auto h-screen flex flex-col">
+      {!projectsLoading && !activityLoading && projects && stats && (
+        <SetupChecklist projectCount={projects.length} totalPhotos={stats.totalPhotos} />
+      )}
       <div className="flex flex-wrap items-center justify-between gap-4 shrink-0">
         <div>
           <h1 className="text-2xl font-bold tracking-tight" data-testid="text-dashboard-title">
