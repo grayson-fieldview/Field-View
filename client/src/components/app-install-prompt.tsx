@@ -169,7 +169,26 @@ export function AppInstallPrompt() {
             </DialogDescription>
           </DialogHeader>
           <div className="py-2">
-            <StoreButtons surface="modal" />
+            {detectDeviceOS() === "desktop" ? (
+              /* Desktop: QR instead of store buttons — points at /get-app,
+                 which routes the phone to the right store by UA. Static SVG
+                 in client/public (no QR library, per constraints). */
+              <div className="flex flex-col items-center gap-2">
+                <img
+                  src="/get-app-qr.svg"
+                  alt="QR code linking to the Field View mobile app"
+                  width={160}
+                  height={160}
+                  className="rounded"
+                  data-testid="img-app-install-qr"
+                />
+                <p className="text-sm text-muted-foreground" data-testid="text-app-install-qr-caption">
+                  Scan with your phone camera to get the app
+                </p>
+              </div>
+            ) : (
+              <StoreButtons surface="modal" />
+            )}
           </div>
           <DialogFooter>
             {/* Dismiss telemetry fires only in onOpenChange to avoid
