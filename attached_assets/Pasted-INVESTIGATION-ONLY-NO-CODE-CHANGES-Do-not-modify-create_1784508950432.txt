@@ -1,0 +1,39 @@
+INVESTIGATION ONLY — NO CODE CHANGES
+Do not modify, create, or delete any files. Do not commit. Your deliverable is a written report answering the questions below. Use rg (not grep) for all code searches.
+Context: We're planning a mobile-app-install prompt shown to new users after signup, plus a persistent banner until the account uploads a photo from the mobile app. Before implementation, I need a map of the current post-signup flow and the components/data available to build on.
+Report on the following:
+1. Post-signup/verification flow
+
+Trace the exact route sequence a brand-new owner follows after completing signup step 2 and entering their email verification code. What route do they land on first? (e.g., dashboard, empty projects list, onboarding screen?)
+Is there ANY existing onboarding UI on first login — welcome modal, checklist, tour, empty-state prompts? List each with file paths.
+Is there any existing prompt, link, badge, or mention of the mobile app anywhere in the post-login web UI? Search for App Store / Play Store / "download the app" references (rg -i "app store|play store|download the app|apps.apple|play.google").
+
+2. Modal/banner infrastructure
+
+What modal or dialog components already exist in the component library? List the most reused one with its file path and props.
+Is there an existing banner/announcement bar pattern anywhere in the app shell/layout?
+Where is the authenticated app's root layout component (the wrapper all logged-in pages render inside)? That's the likely mount point for a persistent banner.
+
+3. Device detection
+
+Is there any existing user-agent or device detection (mobile vs desktop, iOS vs Android) in the web codebase? Client-side or server-side?
+
+4. Photo source attribution (banner suppression signal)
+
+Show the photos table schema from shared/schema.ts. Is there any column indicating upload source/client (mobile app vs web upload) — e.g., source, client, platform, uploadedVia?
+If no source column: what does the photo upload endpoint receive that could distinguish app uploads (distinct API route, header like X-FieldView-Client, user-agent)? Show the upload route handler path(s).
+
+5. First-run state tracking
+
+Is there anything on the users or accounts table tracking first-login/onboarding state (e.g., onboardingCompletedAt, firstLoginAt, flags)? List relevant columns.
+Where does activated_at get set (the conditional UPDATE) — file path only, for reference.
+
+6. Event logging
+
+Is there an existing table or pattern for logging in-app UI events (impressions/clicks)? If not, note the closest analog (e.g., how other user actions get recorded) so we can follow the same pattern for popup shown/clicked/dismissed events.
+
+7. Smart App Banner readiness
+
+Show the <head> section of the app's HTML template (file path + relevant lines). Confirm whether an apple-itunes-app meta tag exists.
+
+Output format: numbered sections matching the above, file paths for every claim, relevant code snippets quoted directly. Flag anything ambiguous rather than guessing. Do not propose implementation yet — report only.
