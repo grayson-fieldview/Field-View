@@ -483,9 +483,18 @@ export async function registerRoutes(
     }
   });
 
+  // Stub for pre-v1.1.0 mobile builds polling removed geofence feature.
+  // Returns empty so old clients no-op. Remove after mobile install base
+  // fully migrates. MUST be registered BEFORE /api/projects/:id or the :id
+  // route captures "geofence-eligible" as a project ID (NaN -> 500).
+  app.get("/api/projects/geofence-eligible", requireReadAccess, async (_req: any, res) => {
+    res.json([]);
+  });
+
   app.get("/api/projects/:id", requireReadAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
+      if (Number.isNaN(id)) return res.status(404).json({ message: "Project not found" });
       const project = await storage.getProject(id);
       if (!project) return res.status(404).json({ message: "Project not found" });
       if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
@@ -504,6 +513,7 @@ export async function registerRoutes(
 
       res.json({ project, media: mediaItems, tasks: taskItems, checklists: checklistItems, reports: reportItems });
     } catch (error) {
+      console.error("[API] GET /api/projects/:id failed:", error);
       res.status(500).json({ message: "Failed to fetch project" });
     }
   });
@@ -531,6 +541,7 @@ export async function registerRoutes(
   app.patch("/api/projects/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
+      if (Number.isNaN(id)) return res.status(404).json({ message: "Project not found" });
       const project = await storage.getProject(id);
       if (!project) return res.status(404).json({ message: "Project not found" });
       if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
@@ -550,6 +561,7 @@ export async function registerRoutes(
       if (!updated) return res.status(404).json({ message: "Project not found" });
       res.json(updated);
     } catch (error) {
+      console.error("[API] PATCH /api/projects/:id failed:", error);
       res.status(500).json({ message: "Failed to update project" });
     }
   });
@@ -557,6 +569,7 @@ export async function registerRoutes(
   app.delete("/api/projects/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
+      if (Number.isNaN(id)) return res.status(404).json({ message: "Project not found" });
       const project = await storage.getProject(id);
       if (!project) return res.status(404).json({ message: "Project not found" });
       if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
@@ -579,6 +592,7 @@ export async function registerRoutes(
       await storage.deleteProject(id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error("[API] DELETE /api/projects/:id failed:", error);
       res.status(500).json({ message: "Failed to delete project" });
     }
   });
@@ -620,6 +634,7 @@ export async function registerRoutes(
   app.post("/api/projects/:id/media", requireWriteAccess, async (req: any, res) => {
     try {
       const projectId = parseInt(req.params.id as string);
+      if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
       const project = await storage.getProject(projectId);
       if (!project) return res.status(404).json({ message: "Project not found" });
       if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
@@ -705,6 +720,7 @@ export async function registerRoutes(
   app.post("/api/projects/:id/media/download", requireReadAccess, async (req: any, res) => {
     try {
       const projectId = parseInt(req.params.id as string);
+      if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
       const project = await storage.getProject(projectId);
       if (!project) return res.status(404).json({ message: "Project not found" });
       if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
@@ -775,6 +791,7 @@ export async function registerRoutes(
           const stream = await getObjectStream(key);
           archive.append(stream, { name: entryName });
         } catch (err: any) {
+          console.error("[API] POST /api/projects/:id/media/download failed:", err);
           errors.push({ name: entryName, error: err?.message || "S3 fetch failed" });
         }
       }
@@ -1255,6 +1272,7 @@ export async function registerRoutes(
       const annotations = await storage.getAnnotationsByProject(projectId);
       res.json(annotations);
     } catch (error) {
+      console.error("[API] GET /api/projects/:projectId/annotations failed:", error);
       res.status(500).json({ message: "Failed to fetch annotations" });
     }
   });
@@ -1326,6 +1344,7 @@ export async function registerRoutes(
   app.post("/api/projects/:id/tasks", requireWriteAccess, async (req: any, res) => {
     try {
       const projectId = parseInt(req.params.id as string);
+      if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
       const project = await storage.getProject(projectId);
       if (!project) return res.status(404).json({ message: "Project not found" });
       if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
@@ -1344,6 +1363,7 @@ export async function registerRoutes(
       const task = await storage.createTask(parsed.data);
       res.status(201).json(task);
     } catch (error) {
+      console.error("[API] POST /api/projects/:id/tasks failed:", error);
       res.status(500).json({ message: "Failed to create task" });
     }
   });
@@ -1427,6 +1447,7 @@ export async function registerRoutes(
   app.post("/api/projects/:id/checklists", requireWriteAccess, async (req: any, res) => {
     try {
       const projectId = parseInt(req.params.id as string);
+      if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
       if (!(await verifyProjectAccess(projectId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
 
       // Stage 3 — server-driven template instantiation. Single POST with a
@@ -1449,6 +1470,7 @@ export async function registerRoutes(
           const created = await storage.getChecklist(newId);
           return res.status(201).json(created);
         } catch (e: any) {
+          console.error("[API] POST /api/projects/:id/checklists failed:", e);
           const msg = String(e?.message ?? "");
           if (msg === "Template not found") return res.status(404).json({ message: msg });
           if (msg === "Template not in this account") return res.status(403).json({ message: "Access denied" });
@@ -1494,6 +1516,7 @@ export async function registerRoutes(
 
       res.status(201).json(checklist);
     } catch (error) {
+      console.error("[API] POST /api/projects/:id/checklists failed:", error);
       res.status(500).json({ message: "Failed to create checklist" });
     }
   });
@@ -1929,9 +1952,11 @@ export async function registerRoutes(
   app.get("/api/projects/:id/reports", requireReadAccess, async (req: any, res) => {
     try {
       const projectId = parseInt(req.params.id as string);
+      if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
       if (!(await userCanAccessProject(req, projectId))) return res.status(403).json({ message: "Access denied" });
       res.json(await storage.getReportsByProject(projectId));
     } catch (error) {
+      console.error("[API] GET /api/projects/:id/reports failed:", error);
       res.status(500).json({ message: "Failed to fetch project reports" });
     }
   });
@@ -1974,6 +1999,7 @@ export async function registerRoutes(
   app.post("/api/projects/:id/reports", requireWriteAccess, async (req: any, res) => {
     try {
       const projectId = parseInt(req.params.id as string);
+      if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
       if (!(await userCanAccessProject(req, projectId))) return res.status(403).json({ message: "Access denied" });
       const parsed = createReportBodySchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
@@ -3662,6 +3688,7 @@ export async function registerRoutes(
   app.get("/api/projects/:id/assignments", requireReadAccess, async (req: any, res) => {
     try {
       const projectId = parseInt(req.params.id);
+      if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
       if (!(await verifyProjectAccess(projectId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
       const assignments = await db.select({
         id: projectAssignments.id,
@@ -3676,6 +3703,7 @@ export async function registerRoutes(
         .where(eq(projectAssignments.projectId, projectId));
       res.json(assignments);
     } catch (error) {
+      console.error("[API] GET /api/projects/:id/assignments failed:", error);
       res.status(500).json({ message: "Failed to fetch assignments" });
     }
   });
@@ -3684,6 +3712,7 @@ export async function registerRoutes(
     try {
       const currentUser = req.user;
       const projectId = parseInt(req.params.id);
+      if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
       if (!(await verifyProjectAccess(projectId, currentUser.accountId))) return res.status(403).json({ message: "Access denied" });
       const { userId } = req.body;
       if (!userId) return res.status(400).json({ message: "userId is required" });
@@ -3700,6 +3729,7 @@ export async function registerRoutes(
       }).returning();
       res.status(201).json(assignment);
     } catch (error) {
+      console.error("[API] POST /api/projects/:id/assignments failed:", error);
       res.status(500).json({ message: "Failed to assign user" });
     }
   });
@@ -3708,12 +3738,14 @@ export async function registerRoutes(
     try {
       const currentUser = req.user;
       const projectId = parseInt(req.params.id);
+      if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
       if (!(await verifyProjectAccess(projectId, currentUser.accountId))) return res.status(403).json({ message: "Access denied" });
       await db.delete(projectAssignments).where(
         and(eq(projectAssignments.projectId, projectId), eq(projectAssignments.userId, req.params.userId))
       );
       res.json({ message: "Assignment removed" });
     } catch (error) {
+      console.error("[API] DELETE /api/projects/:id/assignments/:userId failed:", error);
       res.status(500).json({ message: "Failed to remove assignment" });
     }
   });
@@ -5234,6 +5266,7 @@ export async function registerRoutes(
   app.get("/api/projects/:id/daily-log", requireReadAccess, async (req: any, res) => {
     try {
       const projectId = parseInt(req.params.id);
+      if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
       const dateStr = (req.query.date as string) || new Date().toISOString().split("T")[0];
       const dayStart = new Date(dateStr + "T00:00:00.000Z");
       const dayEnd = new Date(dateStr + "T23:59:59.999Z");
