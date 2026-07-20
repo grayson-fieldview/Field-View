@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -18,6 +18,12 @@ import { useTheme } from "@/components/theme-provider";
 import { BrandingCard } from "@/components/branding-card";
 import { AccountSettingsCard } from "@/components/account-settings-card";
 import { useToast } from "@/hooks/use-toast";
+import {
+  fetchExportManifest,
+  runExport,
+  supportsStreamingSave,
+  FALLBACK_LARGE_EXPORT_THRESHOLD,
+} from "@/lib/exportZip";
 import { SiGoogle, SiGooglecalendar, SiApple } from "react-icons/si";
 import {
   Settings as SettingsIcon,
@@ -37,6 +43,7 @@ import {
   Plus,
   X,
   Camera,
+  Download,
   FolderKanban,
   Trash2,
   Users,
@@ -994,6 +1001,114 @@ function ApiKeysCard() {
   );
 }
 
+function ExportDataCard() {
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const [exporting, setExporting] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const { data: seatStatus } = useQuery<{ ownerId: string | null }>({
+    queryKey: ["/api/account/seats"],
+    enabled: !!user?.id && user?.role === "admin",
+  });
+
+  const isOwner =
+    !!user?.id && !!seatStatus?.ownerId && user.id === seatStatus.ownerId;
+
+  if (!isOwner) return null;
+
+  const startExport = async () => {
+    setExporting(true);
+    setProgress(null);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      const manifest = await fetchExportManifest();
+      const totalFiles = manifest.projects.reduce((n, p) => n + p.files.length, 0);
+
+      if (!supportsStreamingSave() && totalFiles > FALLBACK_LARGE_EXPORT_THRESHOLD) {
+        const proceed = window.confirm(
+          `This is a very large export (${totalFiles.toLocaleString()} files). ` +
+            "Your browser will build the ZIP in memory, which may fail — Chrome is recommended. Continue anyway?",
+        );
+        if (!proceed) return;
+      }
+
+      const result = await runExport({
+        manifest,
+        signal: controller.signal,
+        onProgress: (done, total) => setProgress({ done, total }),
+      });
+
+      if (result.cancelled) {
+        toast({ title: "Export cancelled" });
+      } else if (result.failures.length > 0) {
+        toast({
+          title: "Export finished with skipped files",
+          description: `${result.downloadedFiles} of ${result.totalFiles} files downloaded. ${result.failures.length} file(s) could not be fetched — see failures.txt in the ZIP.`,
+        });
+      } else {
+        toast({
+          title: "Export complete",
+          description: `${result.downloadedFiles} file(s) downloaded across ${manifest.projects.length} project(s).`,
+        });
+      }
+    } catch (err: any) {
+      toast({
+        title: "Export failed",
+        description: err?.message ?? "Something went wrong building the export.",
+        variant: "destructive",
+      });
+    } finally {
+      abortRef.current = null;
+      setExporting(false);
+      setProgress(null);
+    }
+  };
+
+  return (
+    <Card className="p-6" data-testid="card-export-data">
+      <div className="flex items-center gap-2 mb-4">
+        <Download className="h-5 w-5 text-primary" />
+        <h2 className="text-lg font-semibold">Export Data</h2>
+      </div>
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <p className="text-sm font-medium">Download all projects &amp; photos</p>
+          <p className="text-xs text-muted-foreground">
+            Download a ZIP of all your projects and photos. Large accounts may take several minutes — keep this tab open.
+          </p>
+          {exporting && progress && (
+            <p className="text-xs text-muted-foreground mt-2" data-testid="text-export-progress">
+              {progress.done} of {progress.total} files
+            </p>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {exporting && (
+            <Button
+              variant="outline"
+              onClick={() => abortRef.current?.abort()}
+              data-testid="button-export-cancel"
+            >
+              Cancel
+            </Button>
+          )}
+          <Button onClick={startExport} disabled={exporting} data-testid="button-export-data">
+            {exporting ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <Download className="h-4 w-4 mr-2" />
+            )}
+            {exporting ? "Exporting…" : "Download all projects & photos"}
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 function AccountOwnershipCard() {
   const { user } = useAuth();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -1261,6 +1376,8 @@ export default function SettingsPage() {
       <AccountOwnershipCard />
 
       <ApiKeysCard />
+
+      <ExportDataCard />
 
       <Card className="p-6" data-testid="card-account">
         <div className="flex items-center gap-2 mb-4">

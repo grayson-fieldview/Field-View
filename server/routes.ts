@@ -21,7 +21,7 @@ import { db } from "./db";
 import { eq, sql, and, or, inArray, count, isNull, desc } from "drizzle-orm";
 import { sanitizeUserForViewer, sanitizeTimeEntryForViewer, isManagerRole } from "./lib/userVisibility";
 import { z } from "zod";
-import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, deleteFromS3, getObjectStream } from "./s3";
+import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, deleteFromS3, getObjectStream, getS3Url } from "./s3";
 import archiver from "archiver";
 import { sendInvitationEmail, sendAccountDeletionEmail } from "./services/email";
 import { sendGhlEvent, syncUsageToGhl } from "./lib/ghl";
@@ -2885,6 +2885,96 @@ export async function registerRoutes(
   // requests are admitted by csrfGuard's Authorization-header branch, then
   // authenticated by requireApiKey at the router level (no session fallback).
   app.use("/api/v1", apiV1Router);
+
+  // ── Export manifest — owner/admin-only, JSON only (never file bytes) ──
+  // Lists every project in the account with its media, URLs normalized to
+  // the permanent CloudFront form. The client builds the ZIP itself by
+  // fetching each CloudFront URL directly (client/src/lib/exportZip.ts).
+  app.get("/api/export/manifest", requireOwnerAdmin, async (req: any, res) => {
+    try {
+      const accountId = req.user.accountId;
+
+      const [acctRow] = await db
+        .select({ name: accounts.name })
+        .from(accounts)
+        .where(eq(accounts.id, accountId))
+        .limit(1);
+
+      const projectRows = await db
+        .select({
+          id: projects.id,
+          name: projects.name,
+          address: projects.address,
+          status: projects.status,
+          createdAt: projects.createdAt,
+        })
+        .from(projects)
+        .where(eq(projects.accountId, accountId))
+        .orderBy(projects.name);
+
+      // media has no accountId — scope through the projects join.
+      const mediaRows = await db
+        .select({
+          id: media.id,
+          projectId: media.projectId,
+          url: media.url,
+          originalName: media.originalName,
+          mimeType: media.mimeType,
+          createdAt: media.createdAt,
+        })
+        .from(media)
+        .innerJoin(projects, eq(media.projectId, projects.id))
+        .where(eq(projects.accountId, accountId))
+        .orderBy(media.id);
+
+      // Same normalization as apiV1's permanentUrl().
+      const toPermanentUrl = (url: string): string => {
+        if (isS3Url(url)) {
+          const key = extractS3KeyFromUrl(url);
+          if (key) return getS3Url(key);
+        }
+        return url;
+      };
+
+      const filesByProject = new Map<number, Array<{
+        id: number;
+        url: string;
+        originalName: string;
+        mimeType: string;
+        createdAt: Date;
+      }>>();
+      for (const m of mediaRows) {
+        let list = filesByProject.get(m.projectId);
+        if (!list) {
+          list = [];
+          filesByProject.set(m.projectId, list);
+        }
+        list.push({
+          id: m.id,
+          url: toPermanentUrl(m.url),
+          originalName: m.originalName,
+          mimeType: m.mimeType,
+          createdAt: m.createdAt,
+        });
+      }
+
+      res.json({
+        exportedAt: new Date().toISOString(),
+        accountName: acctRow?.name ?? "FieldView Account",
+        projects: projectRows.map((p) => ({
+          id: p.id,
+          name: p.name,
+          address: p.address,
+          status: p.status,
+          createdAt: p.createdAt,
+          files: filesByProject.get(p.id) ?? [],
+        })),
+      });
+    } catch (error) {
+      console.error("[API] GET /api/export/manifest failed:", error);
+      res.status(500).json({ message: "Failed to build export manifest" });
+    }
+  });
 
   // ── API keys — session-authed owner management for the settings UI ──
   // These endpoints are guarded by requireOwnerAdmin (session cookie), NOT by
