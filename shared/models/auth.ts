@@ -35,6 +35,10 @@ export const accounts = pgTable("accounts", {
   // (≥1 project AND ≥5 photos). Set exactly once via an atomic conditional
   // UPDATE ... WHERE activated_at IS NULL.
   activatedAt: timestamp("activated_at"),
+  // Set exactly once (atomic conditional UPDATE ... WHERE first_mobile_upload_at
+  // IS NULL) when any team member persists media with the mobile app's
+  // X-FieldView-Client header. Suppresses the "get the mobile app" prompt/banner.
+  firstMobileUploadAt: timestamp("first_mobile_upload_at"),
   companyLogoUrl: varchar("company_logo_url"),
   companyLegalName: text("company_legal_name"),
   companyAddress: text("company_address"),

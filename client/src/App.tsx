@@ -11,6 +11,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
+import { AppInstallPrompt } from "@/components/app-install-prompt";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -212,6 +213,10 @@ function AuthenticatedLayout() {
               chrome overlay it on smaller viewports, hiding the
               "Your trial ends in X days. Add a" prefix. */}
           <BillingBanner />
+          {/* Mobile-app install prompt (one-time modal + persistent banner).
+              Rendered as a sibling of BillingBanner INSIDE the main content
+              column for the same sidebar-overlap reason documented above. */}
+          <AppInstallPrompt />
           <main className="flex-1 overflow-auto">
             <Switch>
               <Route path="/" component={DashboardPage} />

@@ -10,7 +10,7 @@ import { normalizeEmail } from "./lib/normalizeEmail";
 import { apiV1Router } from "./apiV1";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
-import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistSectionSchema, insertChecklistItemOptionSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, checklistItems, checklistSections, checklistItemOptions, checklistItemPhotos, checklistTemplates, checklistTemplateSections, checklistTemplateItems, checklistTemplateItemOptions, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, templateConfigSchema, accountSettingsPatchSchema, apiKeys } from "@shared/schema";
+import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistSectionSchema, insertChecklistItemOptionSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, checklistItems, checklistSections, checklistItemOptions, checklistItemPhotos, checklistTemplates, checklistTemplateSections, checklistTemplateItems, checklistTemplateItemOptions, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, templateConfigSchema, accountSettingsPatchSchema, apiKeys, appInstallPromptEvents } from "@shared/schema";
 import { executeAutoClockOut } from "./lib/timesheets";
 import { formatLocalTime } from "./lib/geo";
 import { users, invitations, accounts, assignedProjectIdsSchema } from "@shared/models/auth";
@@ -408,6 +408,26 @@ function isAllowedUpload(originalName: string, mimeType: string): boolean {
 const MAX_IMAGE_SIZE = 50 * 1024 * 1024;  // 50 MB — covers 4K iPhone photos with headroom
 const MAX_VIDEO_SIZE = 500 * 1024 * 1024; // 500 MB — covers ~30s of 4K video, ~2 min of 1080p
 
+// Mobile app store destinations for the public /get-app redirect. Kept in
+// sync with client/src/lib/appLinks.ts (client can't be imported here).
+const APP_STORE_URL = "https://apps.apple.com/app/id6766534406";
+const PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=com.fieldview.mobile";
+
+const APP_PROMPT_SURFACES = ["modal", "banner"];
+const APP_PROMPT_ACTIONS = ["shown", "clicked_ios", "clicked_android", "dismissed"];
+
+// Set-once flag: first time ANY team member persists media from the mobile
+// app (detected via the X-FieldView-Client header the mobile fetch wrapper
+// sends on every non-GET request). Atomic conditional UPDATE — same
+// idempotency pattern as activatedAt in checkActivationMilestone(). Fire-and-
+// forget: must never fail or delay the upload response.
+async function markFirstMobileUpload(accountId: string): Promise<void> {
+  await db
+    .update(accounts)
+    .set({ firstMobileUploadAt: new Date() })
+    .where(and(eq(accounts.id, accountId), isNull(accounts.firstMobileUploadAt)));
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -415,6 +435,39 @@ export async function registerRoutes(
   await setupAuth(app);
   registerAuthRoutes(app);
   registerShowcaseRoutes(app);
+
+  // Public, unauthenticated device-aware store redirect. Registered here in
+  // registerRoutes (which runs BEFORE the Vite/static catch-all in
+  // server/index.ts), so it wins over the SPA fallback. Android UAs go to
+  // Play; iOS and unknown/missing UAs default to the App Store.
+  app.get("/get-app", (req, res) => {
+    const ua = String(req.headers["user-agent"] || "");
+    const target = /android/i.test(ua) ? PLAY_STORE_URL : APP_STORE_URL;
+    res.redirect(302, target);
+  });
+
+  // Install-prompt telemetry (modal/banner shown/clicked/dismissed).
+  // Append-only, returns 204 immediately after a single insert.
+  app.post("/api/app-install-prompt-events", isAuthenticated, async (req: any, res) => {
+    try {
+      const surface = req.body?.surface;
+      const action = req.body?.action;
+      if (!APP_PROMPT_SURFACES.includes(surface) || !APP_PROMPT_ACTIONS.includes(action)) {
+        return res.status(400).json({ message: "Invalid surface or action" });
+      }
+      if (!req.user?.accountId) return res.status(400).json({ message: "No account" });
+      await db.insert(appInstallPromptEvents).values({
+        accountId: req.user.accountId,
+        userId: req.user.id,
+        surface,
+        action,
+      });
+      res.status(204).end();
+    } catch (error: any) {
+      console.error("App install prompt event error:", error?.message || error);
+      res.status(500).json({ message: "Failed to record event" });
+    }
+  });
 
   app.get("/api/config/maps", requireReadAccess, (_req, res) => {
     const apiKey = process.env.GOOGLE_MAPS_API_KEY;
@@ -639,6 +692,19 @@ export async function registerRoutes(
       // partial_signup/trial_started), not the uploading team member.
       checkActivationMilestone(project.accountId).catch((err) =>
         console.error("[ghl] activation_milestone check failed (non-fatal):", err));
+
+      // Mobile-app source attribution: the mobile fetch wrapper sends
+      // X-FieldView-Client: mobile-1 on every non-GET request (see CSRF
+      // middleware). First mobile-sourced media persist flips the account's
+      // set-once first_mobile_upload_at, which suppresses the web app's
+      // install prompt/banner. Fire-and-forget — never fails the upload.
+      try {
+        const clientHeader = String(req.headers["x-fieldview-client"] || "");
+        if (clientHeader.startsWith("mobile")) {
+          markFirstMobileUpload(project.accountId!).catch((err) =>
+            console.error("[app-prompt] first_mobile_upload_at update failed (non-fatal):", err));
+        }
+      } catch {}
 
       res.status(201).json(await presignMediaUrls(created));
     } catch (error: any) {

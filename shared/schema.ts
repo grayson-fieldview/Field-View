@@ -969,6 +969,19 @@ export const showcaseSettings = pgTable("showcase_settings", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+// Mobile-app install prompt telemetry — append-only, modeled on
+// showcase_views. One row per modal/banner impression or interaction.
+export const appInstallPromptEvents = pgTable("app_install_prompt_events", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  accountId: varchar("account_id").references(() => accounts.id).notNull(),
+  userId: varchar("user_id").references(() => users.id).notNull(),
+  surface: text("surface").notNull(), // 'modal' | 'banner'
+  action: text("action").notNull(), // 'shown' | 'clicked_ios' | 'clicked_android' | 'dismissed'
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("app_install_prompt_events_account_created_idx").on(table.accountId, table.createdAt),
+]);
+
 export const showcaseViews = pgTable("showcase_views", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   accountId: varchar("account_id").references(() => accounts.id).notNull(),

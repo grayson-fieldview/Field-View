@@ -26,15 +26,29 @@ export function registerAuthRoutes(app: Express): void {
       // Account ownership flag for client gating (e.g. "Delete account" UI).
       // Defensive defaults: missing accountId or missing account row → false.
       let isOwner = false;
+      // App-install-prompt gating fields, exposed alongside the billing
+      // overlay fields (same "account state rides on the user payload"
+      // pattern as trialEndsAt/subscriptionStatus).
+      let accountFirstMobileUploadAt: Date | null = null;
+      let accountCreatedAt: Date | null = null;
       if (user.accountId) {
         const [account] = await db
-          .select({ ownerId: accounts.ownerId })
+          .select({
+            ownerId: accounts.ownerId,
+            firstMobileUploadAt: accounts.firstMobileUploadAt,
+            createdAt: accounts.createdAt,
+          })
           .from(accounts)
           .where(eq(accounts.id, user.accountId))
           .limit(1);
         isOwner = !!account && account.ownerId === user.id;
+        accountFirstMobileUploadAt = account?.firstMobileUploadAt ?? null;
+        accountCreatedAt = account?.createdAt ?? null;
       }
-      const sanitized = sanitizeUserForViewer({ ...safeUserWithBilling, isOwner }, user);
+      const sanitized = sanitizeUserForViewer(
+        { ...safeUserWithBilling, isOwner, accountFirstMobileUploadAt, accountCreatedAt },
+        user,
+      );
       res.json(sanitized);
     } catch (error) {
       console.error("Error fetching user:", error);

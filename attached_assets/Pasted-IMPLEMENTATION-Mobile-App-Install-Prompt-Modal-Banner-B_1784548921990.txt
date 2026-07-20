@@ -1,0 +1,38 @@
+IMPLEMENTATION — Mobile App Install Prompt (Modal + Banner)
+Based on the prior investigation report. Follow the diff-review gate: implement, then show the full git diff and STOP. No commits, no pushes.
+App link constants — create client/src/lib/appLinks.ts:
+
+APP_STORE_URL = "https://apps.apple.com/app/id6766534406"
+PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=com.fieldview.mobile"
+APP_STORE_ID = "6766534406"
+
+A. Schema + migration (write, do NOT run)
+
+Add to accounts in shared/models/auth.ts: firstMobileUploadAt: timestamp("first_mobile_upload_at") (nullable).
+New table app_install_prompt_events in shared/schema.ts, modeled on showcase_views (lines 972–982): id, accountId, userId, surface (text: 'modal' | 'banner'), action (text: 'shown' | 'clicked_ios' | 'clicked_android' | 'dismissed'), createdAt. Index on (accountId, createdAt).
+Write the migration script following scripts/migrations/migrate_session22_timesheets.ts exactly: db.transaction(), IF NOT EXISTS guards on all DDL, env guard requiring rds.amazonaws.com or neon.tech in the URL, ALLOW_PROD_MIGRATION=yes required for RDS, entry-point guard against auto-execution, log host (no password) and mode before any DB call. Do not execute against any database.
+
+B. Server
+
+In the media-persist handler (POST /api/projects/:id/media, server/routes.ts:582): when req.headers["x-fieldview-client"] starts with mobile, fire-and-forget a conditional UPDATE accounts SET first_mobile_upload_at = NOW() WHERE id = $accountId AND first_mobile_upload_at IS NULL — atomic set-once, same pattern as activatedAt in checkActivationMilestone(). Wrap in try/catch; must never fail the upload.
+New public route GET /get-app: reads user-agent, 302 → PLAY_STORE_URL for Android, APP_STORE_URL otherwise (iOS and unknown default to App Store). No auth.
+New authenticated route POST /api/app-install-prompt-events: validate surface/action against the allowed values, insert one row, return 204 fast.
+Include firstMobileUploadAt in the account payload the authenticated client already receives (follow how activatedAt/trial fields reach the client today).
+
+C. Client
+
+New util client/src/lib/device.ts: detect 'ios' | 'android' | 'desktop' from navigator.userAgent, including the iPadOS case (Mac UA + navigator.maxTouchPoints > 1 → ios).
+Modal — new component modeled on referral-modal.tsx, using @/components/ui/dialog. Mount in AppContent. Show when ALL true: account.firstMobileUploadAt is null, account createdAt within the last 14 days, and localStorage key fv_app_prompt_seen absent. On show: set the localStorage key, log shown. Content: headline "Field View works from the job site", subline "Get the app so photos file themselves to the right project — automatically tagged with GPS, time, and who took them." Device-aware CTA: iOS → App Store button only (log clicked_ios); Android → Play Store button only (log clicked_android); desktop → QR code encoding https://app.field-view.com/get-app (use qrcode.react, the only new dependency allowed) with both store badge links below it. Quiet text link "I'll do this later" → log dismissed, close.
+Banner — new component rendered as a sibling immediately adjacent to <BillingBanner /> in the main content column (App.tsx line 214), respecting the sidebar-overlap comment at lines 206–211. Slim bar: "📱 Get the mobile app — photos auto-file from the field" with a device-aware link (iOS/Android → respective store; desktop → /get-app). Show when firstMobileUploadAt is null AND the modal isn't currently open. Dismissible per-session via sessionStorage (returns next session). Log shown once per session (sessionStorage throttle, same pattern as showcase_views) and clicked_*/dismissed on interaction. Permanently gone for the whole account once firstMobileUploadAt is set.
+Event logging helper: single fire-and-forget logAppInstallPromptEvent(surface, action) wrapping the POST; failures silent.
+
+D. Smart App Banner
+Add <meta name="apple-itunes-app" content="app-id=6766534406"> to client/index.html. Known tradeoff: the single shared template means it appears on public /p/* pages too — accepted, do not build conditional injection.
+E. Testing notes to include with the diff
+
+Simulated mobile-header media POST flips first_mobile_upload_at exactly once (second POST is a no-op).
+Modal shows for a fresh account; not after localStorage key set; not when firstMobileUploadAt populated.
+/get-app redirects correctly for iOS UA, Android UA, and missing UA.
+Banner suppressed after account-level mobile upload; per-session dismissal works.
+
+Show the full diff and stop. Do not run the migration, do not commit.
