@@ -231,7 +231,42 @@ async function findOrCreateOAuthUser(opts: {
 // never block signup.
 async function persistSignupAttribution(req: any, userId: string): Promise<void> {
   try {
-    const attr = (req.session?.attribution ?? {}) as Record<string, string | undefined>;
+    let attr = (req.session?.attribution ?? {}) as Record<string, string | undefined>;
+    // S46 client-capture fallback: on Vercel, non-/api/* requests are served
+    // statically and never reach the attributionCapture middleware, so the
+    // session attribution is empty in prod. The client writes first-touch
+    // attribution to the fv_attr cookie (client/src/lib/attribution.ts);
+    // read it here when the session has nothing. Session values win.
+    if (Object.keys(attr).length === 0 && req.cookies?.fv_attr) {
+      try {
+        const parsed = JSON.parse(req.cookies.fv_attr);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          // Re-sanitize server-side: the client caps values at 500 chars and
+          // only writes known fields, but the cookie is client-controlled —
+          // allowlist keys and re-apply trim + 500-char cap before DB write.
+          const ALLOWED = [
+            "utm_source",
+            "utm_medium",
+            "utm_campaign",
+            "utm_content",
+            "utm_term",
+            "fbclid",
+            "referrer",
+          ] as const;
+          const sanitized: Record<string, string> = {};
+          for (const key of ALLOWED) {
+            const raw = (parsed as Record<string, unknown>)[key];
+            if (typeof raw !== "string") continue;
+            const trimmed = raw.trim();
+            if (!trimmed) continue;
+            sanitized[key] = trimmed.slice(0, 500);
+          }
+          attr = sanitized;
+        }
+      } catch {
+        // Malformed cookie — ignore, fall through with empty attribution.
+      }
+    }
     const fbp = req.cookies?._fbp ?? null;
     const fbc = req.cookies?._fbc ?? null;
     await db.update(users).set({

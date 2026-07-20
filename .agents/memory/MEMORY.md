@@ -6,3 +6,4 @@
 - [Billing flag user fallback](billing-flag-user-fallback.md) — getAccountBilling honors accounts.subscription_status only when ACCOUNT_BILLING_ENABLED is on; otherwise the USER row's status (default 'none') decides → 402 locked.
 - [Dev DB schema drift](dev-db-schema-drift.md) — dev Neon DB lags shared/schema.ts (missing tables/columns); repair dev with ALTER/CREATE IF NOT EXISTS, never bend code to the stale dev DB.
 - [Drizzle db:push drift](drizzle-push-drift.md) — db:push is unusable (interactive prompt on legacy report_templates columns); apply new DDL via raw psql instead.
+- [Vercel static paths bypass Express](vercel-static-vs-express.md) — non-/api/* requests never reach Express middleware in prod; landing-page capture (e.g. attribution) must be client-side.

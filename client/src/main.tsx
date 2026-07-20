@@ -4,10 +4,12 @@ import "./index.css";
 import { initSentry, Sentry } from "./lib/sentry";
 import { initMetaPixel } from "./lib/meta-pixel";
 import { initGoogleAnalytics } from "./lib/google-analytics";
+import { captureAttribution } from "./lib/attribution";
 
 initSentry();
 initMetaPixel();
 initGoogleAnalytics();
+captureAttribution();
 
 createRoot(document.getElementById("root")!).render(
   <Sentry.ErrorBoundary
