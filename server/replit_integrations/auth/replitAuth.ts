@@ -858,6 +858,7 @@ export async function setupAuth(app: Express) {
       // S46 GHL partial_signup — self-serve account creations only (invitees
       // join an existing account, so no lifecycle event). Attribution comes
       // from the same session store the attribution UPDATE above used.
+      let metaLeadFired = false;
       if (!inviteToken && !isCompAccount(user.email)) {
         const ghlAttr = resolveSignupAttribution(req);
         sendGhlEvent("partial_signup", {
@@ -889,6 +890,7 @@ export async function setupAuth(app: Express) {
           fbp: req.cookies?._fbp ?? user.signupFbp,
           fbc: req.cookies?._fbc ?? user.signupFbc,
         });
+        metaLeadFired = true;
       }
 
       if (inviteToken) {
@@ -937,7 +939,12 @@ export async function setupAuth(app: Express) {
           }
           const { password: _pw, ...safeUser } = user as any;
           const safeUserWithBilling = await overlayAccountBillingOnUser(safeUser, req);
-          return res.status(201).json(safeUserWithBilling);
+          // Meta dedup pairing: tell the client whether the server-side CAPI
+          // Lead actually fired (self-serve, non-comp), so the browser pixel
+          // fires ONLY when it has a server twin with the same event_id.
+          return res.status(201).json(
+            metaLeadFired ? { ...safeUserWithBilling, metaLeadFired: true } : safeUserWithBilling,
+          );
         });
       });
     } catch (error) {

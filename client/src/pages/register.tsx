@@ -101,11 +101,12 @@ export default function RegisterPage() {
     },
     onSuccess: (data) => {
       // Meta Pixel Lead — replaces the previous StartFreeSignup /
-      // CompleteRegistration events. Fires only for the trial branch (the
-      // server-side CAPI Lead only fires for self-serve account creations)
-      // with the same eventID the server received, so Meta dedupes the pair.
+      // CompleteRegistration events. Gated on the server's own signal
+      // (metaLeadFired in the 201 response): the server only sets it when it
+      // actually sent the CAPI Lead (self-serve, non-comp account), so every
+      // browser Lead has an ID-matched server twin and Meta dedupes the pair.
       // Guarded so SSR/test contexts and pixel-blocked browsers don't throw.
-      if (!inviteToken && typeof window !== "undefined" && window.fbq) {
+      if (data?.metaLeadFired === true && typeof window !== "undefined" && window.fbq) {
         window.fbq("track", "Lead", {}, { eventID: metaEventIdRef.current });
       }
       // [DIAG] Session 3 BUG 2 instrumentation
@@ -142,7 +143,9 @@ export default function RegisterPage() {
       // verification email will fire from PATCH /api/auth/me on welcome
       // submit — they haven't filled their profile yet so no verification
       // email (no email exists yet to "check").
-      queryClient.setQueryData(["/api/auth/user"], data);
+      // Strip the transport-only Meta pairing flag before seeding the cache.
+      const { metaLeadFired: _metaLeadFired, ...userData } = (data ?? {}) as any;
+      queryClient.setQueryData(["/api/auth/user"], userData);
       console.log("[register] trial branch → setQueryData + navigate /welcome");
       setLocation("/welcome");
     },

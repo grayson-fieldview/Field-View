@@ -158,6 +158,7 @@ export function registerAuthRoutes(app: Express): void {
       // the OAuth path leave it untouched for invitees), so this is exactly
       // the user who fired partial_signup. An invited manager/admin finishing
       // page 2 sends nothing. Fire-and-forget; lookup wrapped, non-fatal.
+      let metaStartTrialFired = false;
       if (isFirstCompletion && updated.email && updated.accountId && !isCompAccount(updated.email)) {
         try {
           const [acctRow] = await db
@@ -207,6 +208,7 @@ export function registerAuthRoutes(app: Express): void {
               fbp: req.cookies?._fbp ?? updated.signupFbp,
               fbc: req.cookies?._fbc ?? updated.signupFbc,
             });
+            metaStartTrialFired = true;
           }
         } catch (ghlErr) {
           console.error("[auth/me] GHL trial_started lookup failed (non-fatal):", ghlErr);
@@ -236,7 +238,13 @@ export function registerAuthRoutes(app: Express): void {
 
       const { password: _, ...safeUser } = updated;
       const safeUserWithBilling = await overlayAccountBillingOnUser(safeUser, req);
-      res.json(sanitizeUserForViewer(safeUserWithBilling, req.user));
+      const responseUser = sanitizeUserForViewer(safeUserWithBilling, req.user);
+      // Meta dedup pairing: tell the client whether the server-side CAPI
+      // StartTrial actually fired (owner-only, first-completion, non-comp),
+      // so the browser pixel fires ONLY when it has a server twin with the
+      // same event_id. Prevents unpaired browser-only StartTrial events
+      // (invitees completing their profile) that skew Meta's coverage stats.
+      res.json(metaStartTrialFired ? { ...responseUser, metaStartTrialFired: true } : responseUser);
     } catch (error) {
       console.error("Error updating user profile:", error);
       res.status(500).json({ message: "Failed to update profile" });
