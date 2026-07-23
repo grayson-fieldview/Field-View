@@ -1,0 +1,19 @@
+GOAL: Two-part task on photo comments. Part 1 is diagnosis, Part 2 is a small implementation ONLY if the diagnosis clears it.
+
+CONTEXT: Photo comments already work on web (photo detail viewer, right panel: Comments section, "Add a comment..." input, Post button). Each comment currently displays author name + text but NO timestamp. We want date + time shown on each comment. We also need the exact API contract so mobile can add the same read/write comment feature.
+
+PART 1 — DIAGNOSE (use rg):
+1. Find the comments table in shared/schema.ts. Paste its full schema. Answer specifically: does it have a createdAt (or equivalent timestamp) column?
+2. Find the comment endpoints: list (GET), create (POST), and delete if it exists. For each: exact method, path, request payload shape, response shape, and auth middleware. This is the contract mobile will consume — be precise about field names.
+3. Confirm whether the GET/list response already includes the timestamp field, or whether the serializer strips it.
+4. Find the web component rendering the Comments section in the photo viewer (the one showing author + text).
+
+PART 2 — IMPLEMENT, ONLY IF createdAt EXISTS in the table:
+- If the list response omits the timestamp: include it in the response (additive field only — do not rename or remove anything existing; mobile and web clients must not break).
+- Web photo viewer: render date + time under or beside the author name on each comment (e.g. "Jul 23, 2026, 5:05 PM"), formatted in the viewer's local timezone, matching the existing panel typography (same muted style as the photo timestamp above it).
+- No schema changes, no migrations, nothing else.
+- Produce a diff and STOP — no commit, no push.
+
+IF createdAt DOES NOT EXIST: stop after Part 1 and report. A schema change requires the prod migration protocol and will be handled separately — do not add the column.
+
+OUTPUT: Part 1 findings (schema + full endpoint contract for mobile), then either the Part 2 diff or the stop-report. TS error count before/after if code changed.

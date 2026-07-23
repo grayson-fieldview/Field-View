@@ -1608,6 +1608,19 @@ export default function PhotoViewer({
                       <span className="font-medium text-xs">
                         {comment.user?.firstName} {comment.user?.lastName}
                       </span>
+                      <span
+                        className="text-muted-foreground text-[10px] ml-1.5"
+                        data-testid={`text-comment-timestamp-${comment.id}`}
+                      >
+                        {new Date(comment.createdAt).toLocaleString(undefined, {
+                          month: "short",
+                          day: "numeric",
+                          year: "numeric",
+                          hour: "numeric",
+                          minute: "2-digit",
+                          hour12: true,
+                        })}
+                      </span>
                       <p className="text-muted-foreground text-xs mt-0.5">{comment.content}</p>
                     </div>
                   </div>
