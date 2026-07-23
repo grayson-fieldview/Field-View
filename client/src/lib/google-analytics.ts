@@ -1,18 +1,11 @@
-// Google Analytics 4 (gtag.js) — loaded ONLY on the pre-auth signup funnel.
-// On any other path, no gtag script is injected and no request to
-// googletagmanager.com is made. Moved here from a static tag in
-// client/index.html so loading can be conditional on the URL.
-//
-// SPA caveat (accepted): if a user lands on an allowlisted page and then
-// client-side-navigates into the app (signup → /welcome → dashboard), the
-// already-loaded script stays for that session. No teardown by design.
+// Google Analytics 4 (gtag.js) — loaded app-wide from main.tsx.
+// Automatic page_view is disabled (send_page_view: false); SPA page tracking
+// is handled by trackPageView() from the router root in App.tsx, and
+// conversion events fire via trackEvent() adjacent to the existing Meta
+// Pixel milestones. All helpers no-op safely (never throw) when gtag is
+// unavailable — e.g. ad blockers preventing the script from loading.
 
 const GA_MEASUREMENT_ID = "G-0NJ8BV5VP2";
-
-// Signup funnel: step 1 (/signup, alias /register), step 2 (/welcome),
-// email verification code page (/verify-email). Prefix matching so any
-// sub-paths or query strings still count.
-const ALLOWED_PATH_PREFIXES = ["/signup", "/register", "/welcome", "/verify-email"];
 
 declare global {
   interface Window {
@@ -21,25 +14,45 @@ declare global {
   }
 }
 
-export function isSignupFunnelPath(pathname: string): boolean {
-  return ALLOWED_PATH_PREFIXES.some((p) => pathname === p || pathname.startsWith(p + "/"));
+export function initGoogleAnalytics(): void {
+  try {
+    if (typeof window === "undefined") return;
+    if (window.gtag) return; // already initialized
+
+    window.dataLayer = window.dataLayer || [];
+    const gtag = (...args: unknown[]) => {
+      window.dataLayer!.push(args);
+    };
+    window.gtag = gtag;
+    gtag("js", new Date());
+    // send_page_view: false — the SPA route tracker owns ALL page_view
+    // events (including the initial load) so full loads and client-side
+    // navigations are counted identically, with no double-count on boot.
+    gtag("config", GA_MEASUREMENT_ID, { send_page_view: false });
+
+    const script = document.createElement("script");
+    script.async = true;
+    script.src = `https://www.googletagmanager.com/gtag/js?id=${GA_MEASUREMENT_ID}`;
+    document.head.appendChild(script);
+  } catch {
+    // Analytics must never break the app.
+  }
 }
 
-export function initGoogleAnalytics(): void {
-  if (typeof window === "undefined") return;
-  if (!isSignupFunnelPath(window.location.pathname)) return;
-  if (window.gtag) return; // already initialized
-
-  window.dataLayer = window.dataLayer || [];
-  function gtag(...args: unknown[]) {
-    window.dataLayer!.push(args);
+export function trackPageView(path: string): void {
+  try {
+    if (typeof window === "undefined" || !window.gtag) return;
+    window.gtag("event", "page_view", { page_path: path });
+  } catch {
+    // never throw from analytics
   }
-  window.gtag = gtag;
-  gtag("js", new Date());
-  gtag("config", GA_MEASUREMENT_ID);
+}
 
-  const script = document.createElement("script");
-  script.async = true;
-  script.src = `https://www.googletagmanager.com/gtag/js?id=${GA_MEASUREMENT_ID}`;
-  document.head.appendChild(script);
+export function trackEvent(name: string, params?: Record<string, unknown>): void {
+  try {
+    if (typeof window === "undefined" || !window.gtag) return;
+    window.gtag("event", name, params);
+  } catch {
+    // never throw from analytics
+  }
 }

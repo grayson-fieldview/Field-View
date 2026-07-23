@@ -9,6 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Eye, EyeOff, Loader2, Users, Star } from "lucide-react";
 import { useGoogleReCaptcha } from "react-google-recaptcha-v3";
 import faviconImg from "@assets/Favicon-01-brand_1778259672.png";
+import { trackEvent } from "@/lib/google-analytics";
 
 export default function RegisterPage() {
   const [, setLocation] = useLocation();
@@ -108,6 +109,11 @@ export default function RegisterPage() {
       // Guarded so SSR/test contexts and pixel-blocked browsers don't throw.
       if (data?.metaLeadFired === true && typeof window !== "undefined" && window.fbq) {
         window.fbq("track", "Lead", {}, { eventID: metaEventIdRef.current });
+      }
+      // GA4 conversion — same milestone as the Meta Lead above (step 1
+      // account creation, trial branch only). No-ops if gtag is blocked.
+      if (!inviteToken) {
+        trackEvent("sign_up", { method: "email" });
       }
       // [DIAG] Session 3 BUG 2 instrumentation
       console.log("[register] success", {

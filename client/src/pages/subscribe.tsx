@@ -15,6 +15,7 @@ import {
   CreditCard,
 } from "lucide-react";
 import faviconImg from "@assets/Favicon-01-brand_1778259672.png";
+import { trackEvent } from "@/lib/google-analytics";
 
 export default function SubscribePage() {
   const { user, logout } = useAuth();
@@ -45,6 +46,11 @@ export default function SubscribePage() {
         })
         .then(() => {
           qc.invalidateQueries({ queryKey: ["/api/auth/user"] });
+          // GA4 conversion — same milestone as the Rewardful ping below
+          // (confirmed 2xx from /api/confirm-checkout). The purchased plan
+          // amount isn't available in this scope (state holds picker
+          // defaults, not what was bought), so no value/currency is sent.
+          trackEvent("purchase");
           // Rewardful client-side conversion ping — defense in depth
           // alongside Stripe's client_reference_id attribution.
           try {

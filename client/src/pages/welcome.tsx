@@ -17,6 +17,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Loader2, Star } from "lucide-react";
 import { INDUSTRIES, COMPANY_SIZES } from "@shared/constants";
 import faviconImg from "@assets/Favicon-01-brand_1778259672.png";
+import { trackEvent } from "@/lib/google-analytics";
 
 // Shared input styling: white background, grey-300 outline, brand-orange focus.
 // Override on each usage so we don't touch the global Input/SelectTrigger
@@ -101,6 +102,9 @@ export default function WelcomePage() {
       ) {
         (window as any).fbq("track", "StartTrial", {}, { eventID: metaEventIdRef.current });
       }
+      // GA4 conversion — same milestone as the Meta StartTrial above
+      // (step 2 profile completion). No-ops if gtag is blocked.
+      trackEvent("generate_lead");
       qc.setQueryData(["/api/auth/user"], userData);
       setLocation("/verify-email");
     },

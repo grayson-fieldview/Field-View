@@ -23,6 +23,7 @@ import { AlertTriangle, Clock, CreditCard } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { registerTrialExpiredHandler } from "@/lib/queryClient";
 import "@/lib/meta-pixel";
+import { trackPageView } from "@/lib/google-analytics";
 import NotFound from "@/pages/not-found";
 import LoginPage from "@/pages/login";
 import RegisterPage from "@/pages/register";
@@ -301,6 +302,19 @@ function TrialExpiredToastBridge() {
   return null;
 }
 
+// GA4 SPA page tracker. gtag.js is bootstrapped app-wide from main.tsx with
+// send_page_view: false, so this tracker owns ALL page_view events — it
+// fires on the initial load AND every wouter location change (unlike the
+// Meta tracker below, which skips the first render because initMetaPixel()
+// already fires the initial PageView).
+function GoogleAnalyticsRouteTracker() {
+  const [location] = useLocation();
+  useEffect(() => {
+    trackPageView(location);
+  }, [location]);
+  return null;
+}
+
 // PR 3: Meta Pixel SPA PageView tracker. The base pixel + initial PageView
 // fire from initMetaPixel() in main.tsx. This effect fires an additional
 // PageView every time the wouter location changes — skipping the first
@@ -417,6 +431,7 @@ function App() {
         <TooltipProvider>
           <Toaster />
           <TrialExpiredToastBridge />
+          <GoogleAnalyticsRouteTracker />
           <MetaPixelRouteTracker />
           <ErrorBoundary>
             <Switch>
