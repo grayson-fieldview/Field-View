@@ -1,0 +1,19 @@
+GOAL: Two-part task. Part 1 diagnoses whether uploader identity can be added to the project media response; Part 2 implements it ONLY if it's additive (no schema changes).
+
+CONTEXT: The mobile app is adding a "filter photos by uploader" feature. The project detail response's media objects currently don't include who uploaded each photo. The comments feature already joins users (GET /api/media/:id/comments returns user: { firstName, lastName, profileImageUrl }), so a users relation exists.
+
+PART 1 — DIAGNOSE (use rg):
+1. In shared/schema.ts, confirm the media table has a user/uploader reference column (userId, uploadedBy, createdById, or similar). Paste the relevant columns. If NO such column exists, STOP after Part 1 and report — that's a schema change requiring the migration protocol.
+2. Find the endpoint the mobile app calls for project detail with media (mobile calls api.project(id) — locate the matching GET route and the storage method that assembles its media array). Paste the media serialization.
+3. Check whether the web client's photo viewer already displays uploader per photo (the right-panel header shows a name + avatar — find where that comes from; it may already do this join, in which case reuse that pattern).
+
+PART 2 — IMPLEMENT, only if the uploader column exists:
+- Add to each media object in the project detail response an ADDITIVE field:
+  uploader?: { id: string, firstName: string | null, lastName: string | null }
+  (omit or null when the uploading user was deleted — match the comments join's behavior)
+- ADDITIVE ONLY: no renames, no removals, no shape changes to existing fields. Existing mobile and web clients must be byte-compatible.
+- Use the same join pattern the comments list uses. Watch query cost: this endpoint returns ALL project media — join once, don't N+1. If the storage method already fetches media in one query, extend that query.
+- No schema changes, no migrations.
+- Diff and STOP — no commit, no push.
+
+OUTPUT: Part 1 findings (column name, endpoint, serialization site), then the diff or the stop-report. TS count before/after (baseline is 49 on this repo).

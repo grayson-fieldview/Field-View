@@ -138,7 +138,7 @@ export interface IStorage {
   updateProject(id: number, data: Partial<InsertProject>): Promise<Project | undefined>;
   deleteProject(id: number): Promise<void>;
 
-  getMediaByProject(projectId: number): Promise<(Media & { uploadedBy?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } })[]>;
+  getMediaByProject(projectId: number): Promise<(Media & { uploadedBy?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }; uploader?: { id: string; firstName: string | null; lastName: string | null } })[]>;
   getAllMedia(accountId: string): Promise<(Media & { project?: { name: string; color: string | null }; uploadedBy?: { firstName: string | null; lastName: string | null } })[]>;
   getMedia(id: number): Promise<Media | undefined>;
   createMedia(item: InsertMedia): Promise<Media>;
@@ -408,6 +408,15 @@ export class DatabaseStorage implements IStorage {
           lastName: users.lastName,
           profileImageUrl: users.profileImageUrl,
         },
+        // Additive `uploader` (with user id) for mobile's filter-by-uploader
+        // feature. Same single LEFT JOIN — no extra query cost. Kept separate
+        // from the legacy `uploadedBy` shape so existing clients are
+        // byte-compatible.
+        uploader: {
+          id: users.id,
+          firstName: users.firstName,
+          lastName: users.lastName,
+        },
       })
       .from(media)
       .leftJoin(users, eq(media.uploadedById, users.id))
@@ -417,6 +426,9 @@ export class DatabaseStorage implements IStorage {
     return rows.map((r) => ({
       ...r.media,
       uploadedBy: r.uploadedBy?.firstName ? r.uploadedBy : undefined,
+      // Omitted (undefined) when the uploading user was deleted — matches
+      // the comments join's behavior.
+      uploader: r.uploader?.id ? r.uploader : undefined,
     }));
   }
 
