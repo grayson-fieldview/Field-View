@@ -95,12 +95,18 @@ export default function WelcomePage() {
       // browser-only events from invitees or profile re-saves. Guarded so
       // SSR/test contexts and pixel-blocked browsers don't throw.
       const { metaStartTrialFired, ...userData } = (data ?? {}) as any;
-      if (
-        metaStartTrialFired === true &&
-        typeof window !== "undefined" &&
-        (window as any).fbq
-      ) {
-        (window as any).fbq("track", "StartTrial", {}, { eventID: metaEventIdRef.current });
+      // try/catch: no tracking failure may break profile completion.
+      // Dedup logic (server-gated metaStartTrialFired + eventID) unchanged.
+      try {
+        if (
+          metaStartTrialFired === true &&
+          typeof window !== "undefined" &&
+          (window as any).fbq
+        ) {
+          (window as any).fbq("track", "StartTrial", {}, { eventID: metaEventIdRef.current });
+        }
+      } catch {
+        // tracking must never block profile completion
       }
       // GA4 conversion — same milestone as the Meta StartTrial above
       // (step 2 profile completion). No-ops if gtag is blocked.

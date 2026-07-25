@@ -107,8 +107,14 @@ export default function RegisterPage() {
       // actually sent the CAPI Lead (self-serve, non-comp account), so every
       // browser Lead has an ID-matched server twin and Meta dedupes the pair.
       // Guarded so SSR/test contexts and pixel-blocked browsers don't throw.
-      if (data?.metaLeadFired === true && typeof window !== "undefined" && window.fbq) {
-        window.fbq("track", "Lead", {}, { eventID: metaEventIdRef.current });
+      // try/catch: no tracking failure may break the post-signup flow.
+      // Dedup logic (server-gated metaLeadFired + eventID) unchanged.
+      try {
+        if (data?.metaLeadFired === true && typeof window !== "undefined" && window.fbq) {
+          window.fbq("track", "Lead", {}, { eventID: metaEventIdRef.current });
+        }
+      } catch {
+        // tracking must never block signup
       }
       // GA4 conversion — same milestone as the Meta Lead above (step 1
       // account creation, trial branch only). No-ops if gtag is blocked.

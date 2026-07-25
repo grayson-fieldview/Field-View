@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import type { User } from "@shared/models/auth";
+import { Sentry } from "@/lib/sentry";
 
 // [DIAG] Session 3 BUG 2 instrumentation — see Commit "diagnostic only".
 async function fetchUser(): Promise<User | null> {
@@ -80,9 +81,29 @@ export function useAuth() {
     }
   }, [query.status, query.fetchStatus, isLoading, user, query.error]);
 
+  // Sentry user context — future errors show which real users are affected.
+  // Set when a user is present, cleared when they aren't (incl. logout).
+  // try/catch: Sentry must never break auth.
+  useEffect(() => {
+    try {
+      if (user) {
+        Sentry.setUser({ id: user.id, email: user.email ?? undefined });
+      } else {
+        Sentry.setUser(null);
+      }
+    } catch {
+      // non-fatal
+    }
+  }, [user]);
+
   const logoutMutation = useMutation({
     mutationFn: logoutFn,
     onSuccess: () => {
+      try {
+        Sentry.setUser(null);
+      } catch {
+        // non-fatal
+      }
       queryClient.setQueryData(["/api/auth/user"], null);
       window.location.href = "/";
     },

@@ -1,0 +1,89 @@
+Fix an unhandled TypeError on our signup page that may be blocking
+conversions. This is urgent — we start paid traffic August 1.
+
+ERROR (from Sentry, project FIELD-VIEW-WEB):
+  TypeError: undefined is not an object
+  (evaluating 'window.webkit.messageHandlers')
+  Route: /signup
+  Unhandled, 4 events over 6 days
+
+DIAGNOSIS I NEED YOU TO CONFIRM:
+Something in our code path calls the iOS WKWebView native bridge
+(window.webkit.messageHandlers) without checking it exists. In a normal
+desktop or mobile browser that object is undefined, so the call throws.
+This most likely fires when a user opens our site in the Instagram or
+Facebook in-app browser on iOS.
+
+TASKS:
+
+1. Search the entire web codebase for every reference to:
+   - window.webkit
+   - messageHandlers
+   - window.Android
+   - postMessage
+   Report back what you find and which files/components they live in,
+   including anything inside third-party scripts we load on /signup
+   (analytics, Meta pixel wrapper, chat widget, etc).
+
+2. Create a single safe helper — src/lib/nativeBridge.ts (or the
+   equivalent path for our structure):
+
+   export function callNative(handler: string, payload: unknown): boolean {
+     try {
+       const ios = (window as any).webkit?.messageHandlers?.[handler];
+       if (ios?.postMessage) {
+         ios.postMessage(payload);
+         return true;
+       }
+       const android = (window as any).Android;
+       if (android?.postMessage) {
+         android.postMessage(JSON.stringify(payload));
+         return true;
+       }
+       return false;
+     } catch {
+       return false;
+     }
+   }
+
+   The try/catch is required, not optional. On Android the bridge object
+   can exist when we check it and be garbage-collected before the call
+   lands — that produces a separate error we're also seeing ("Error
+   invoking postMessage: Java object is gone"). Optional chaining alone
+   does not prevent it.
+
+3. Replace every direct bridge call found in step 1 with callNative().
+   No component should ever touch window.webkit or window.Android
+   directly again.
+
+4. Audit the /signup page specifically: make sure NO error thrown by
+   analytics, tracking, or bridge code can prevent the signup form from
+   rendering, validating, or submitting. Wrap all non-essential
+   third-party init in try/catch. The form must work even if every
+   tracking script fails. This is the whole point of the fix.
+
+5. Add a top-level error boundary around the signup flow that logs to
+   Sentry but still renders the working form rather than a blank or
+   broken page.
+
+6. Add Sentry user context after authentication so future errors show
+   how many real users are affected:
+   Sentry.setUser({ id: user.id, email: user.email })
+   Clear it on logout with Sentry.setUser(null).
+
+VERIFY BEFORE YOU TELL ME IT'S DONE:
+- /signup loads and submits with zero console errors in desktop Chrome
+- /signup loads and submits in mobile Safari
+- Simulate the failure: in devtools console run
+  delete window.webkit  and reload /signup — the form must still fully
+  work
+- Temporarily throw an error inside a tracking init call and confirm the
+  signup form still renders and submits
+- Confirm the Meta pixel / CAPI Start-trial event still fires correctly
+  after your changes — do not break the deduplicated event_id logic
+
+DO NOT change signup form fields, validation rules, the trial creation
+flow, or pricing logic. This is an error-handling fix only.
+
+Report back with the files you changed and what the root cause turned
+out to be.

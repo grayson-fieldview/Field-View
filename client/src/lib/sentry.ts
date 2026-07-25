@@ -21,6 +21,15 @@ export function initSentry() {
         blockAllMedia: true,
       }),
     ],
+    // Known third-party noise. The webkit/Android bridge errors originate in
+    // code injected by iOS/Android in-app browsers (Instagram, Facebook) or
+    // remote vendor scripts — NOT first-party code (verified July 2026: zero
+    // references to window.webkit / window.Android in this codebase). They
+    // are unhandled in a context we don't control and cannot try/catch.
+    ignoreErrors: [
+      /window\.webkit\.messageHandlers/,
+      /Java object is gone/,
+    ],
     beforeSend(event) {
       if (event.exception?.values?.[0]?.value?.includes("ResizeObserver")) {
         return null;
