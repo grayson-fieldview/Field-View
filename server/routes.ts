@@ -1443,7 +1443,23 @@ export async function registerRoutes(
       // render "N of M photos" prompts. Already-done tasks are never
       // re-evaluated: adding a requirement or deleting photos later does NOT
       // reopen them (nothing recomputes status).
-      if (filtered.status === "done" && access.task.status !== "done") {
+      //
+      // ENFORCEMENT IS ALSO FLAG-GATED: accounts not on
+      // FEATURE_TASK_PHOTO_REQUIREMENT_ACCOUNTS never see the 422, even if
+      // required_photo_count is somehow non-zero. Removing an account from
+      // the flag is a complete kill switch — no data cleanup needed —
+      // because installed mobile builds have no 422 handling yet.
+      //
+      // Gate uses the PRE-UPDATE requirement (access.task, fetched before
+      // this PATCH's changes apply): a single PATCH sending both
+      // status:"done" and a new requiredPhotoCount is evaluated against the
+      // value that was on the task before this request. Locked in by
+      // scripts/tests/test_task_photo_requirement.ts.
+      if (
+        filtered.status === "done" &&
+        access.task.status !== "done" &&
+        isTaskPhotoRequirementEnabled(req.user.accountId)
+      ) {
         const required = access.task.requiredPhotoCount ?? 0;
         if (required > 0) {
           const attached = await storage.countTaskPhotos(id);
