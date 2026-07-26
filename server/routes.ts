@@ -331,19 +331,6 @@ async function getTaskWithAccess(taskId: number, accountId: string): Promise<
   return { ok: true, task };
 }
 
-// Feature flag: which accounts may SET a task photo requirement (admin-only
-// on top of this). Dogfooding gate — installed mobile builds have never seen
-// the 422 PHOTOS_REQUIRED contract, so the requirement input stays hidden
-// until mobile ships support. Comma-separated account IDs in
-// FEATURE_TASK_PHOTO_REQUIREMENT_ACCOUNTS. Enforcement of an already-set
-// requirement is NOT flag-gated (required_photo_count defaults to 0, so
-// nothing is enforced unless a flagged admin set it).
-function isTaskPhotoRequirementEnabled(accountId: string | null | undefined): boolean {
-  if (!accountId) return false;
-  const raw = process.env.FEATURE_TASK_PHOTO_REQUIREMENT_ACCOUNTS || "";
-  return raw.split(",").map((s) => s.trim()).filter(Boolean).includes(accountId);
-}
-
 async function verifyReportAccess(reportId: number, accountId: string): Promise<boolean> {
   const [row] = await db.select({ accountId: reports.accountId })
     .from(reports)
@@ -1384,10 +1371,9 @@ export async function registerRoutes(
       const project = await storage.getProject(projectId);
       if (!project) return res.status(404).json({ message: "Project not found" });
       if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
-      // requiredPhotoCount: admin + feature-flagged accounts only; silently
-      // ignored otherwise (defaults to 0 = no requirement).
-      const canSetRequirement =
-        req.user.role === "admin" && isTaskPhotoRequirementEnabled(req.user.accountId);
+      // requiredPhotoCount: admin-only; silently ignored otherwise
+      // (defaults to 0 = no requirement).
+      const canSetRequirement = req.user.role === "admin";
       const rpc = req.body.requiredPhotoCount;
       const requiredPhotoCount =
         canSetRequirement && Number.isInteger(rpc) && rpc >= 0 && rpc <= 100 ? rpc : 0;
@@ -1422,16 +1408,11 @@ export async function registerRoutes(
       for (const key of allowed) {
         if (key in req.body) filtered[key] = req.body[key];
       }
-      // requiredPhotoCount is settable only by admins on flag-enabled
-      // accounts. For everyone else the field is silently STRIPPED (not
-      // rejected) — a standard user PATCHing a full task object to change
-      // the title must not fail for a field they didn't touch. The existing
-      // value is preserved.
-      if (
-        "requiredPhotoCount" in req.body &&
-        req.user.role === "admin" &&
-        isTaskPhotoRequirementEnabled(req.user.accountId)
-      ) {
+      // requiredPhotoCount is settable only by admins. For everyone else the
+      // field is silently STRIPPED (not rejected) — a standard user PATCHing
+      // a full task object to change the title must not fail for a field
+      // they didn't touch. The existing value is preserved.
+      if ("requiredPhotoCount" in req.body && req.user.role === "admin") {
         const n = req.body.requiredPhotoCount;
         if (!Number.isInteger(n) || n < 0 || n > 100) {
           return res.status(400).json({ message: "requiredPhotoCount must be an integer between 0 and 100" });
@@ -1444,22 +1425,12 @@ export async function registerRoutes(
       // re-evaluated: adding a requirement or deleting photos later does NOT
       // reopen them (nothing recomputes status).
       //
-      // ENFORCEMENT IS ALSO FLAG-GATED: accounts not on
-      // FEATURE_TASK_PHOTO_REQUIREMENT_ACCOUNTS never see the 422, even if
-      // required_photo_count is somehow non-zero. Removing an account from
-      // the flag is a complete kill switch — no data cleanup needed —
-      // because installed mobile builds have no 422 handling yet.
-      //
       // Gate uses the PRE-UPDATE requirement (access.task, fetched before
       // this PATCH's changes apply): a single PATCH sending both
       // status:"done" and a new requiredPhotoCount is evaluated against the
       // value that was on the task before this request. Locked in by
       // scripts/tests/test_task_photo_requirement.ts.
-      if (
-        filtered.status === "done" &&
-        access.task.status !== "done" &&
-        isTaskPhotoRequirementEnabled(req.user.accountId)
-      ) {
+      if (filtered.status === "done" && access.task.status !== "done") {
         const required = access.task.requiredPhotoCount ?? 0;
         if (required > 0) {
           const attached = await storage.countTaskPhotos(id);

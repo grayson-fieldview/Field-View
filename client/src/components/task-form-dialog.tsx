@@ -46,11 +46,9 @@ export default function TaskFormDialog({ open, onOpenChange, projectId }: TaskFo
   const { toast } = useToast();
   const { user } = useAuth();
   const isGlobalMode = projectId === undefined;
-  // Dogfooding flag: the photo-requirement input renders ONLY for admins on
-  // accounts listed in FEATURE_TASK_PHOTO_REQUIREMENT_ACCOUNTS (surfaced via
-  // /api/auth/user). The server enforces the same gate; this is UI gating.
-  const canSetPhotoRequirement =
-    (user as any)?.role === "admin" && (user as any)?.taskPhotoRequirementEnabled === true;
+  // The photo-requirement input renders only for admins (server enforces
+  // the same admin-only gate; this is UI gating).
+  const canSetPhotoRequirement = (user as any)?.role === "admin";
 
   const [selectedProjectId, setSelectedProjectId] = useState<string>(PROJECT_UNSET);
   const [title, setTitle] = useState("");

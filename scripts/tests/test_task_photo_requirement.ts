@@ -2,11 +2,10 @@
  * Integration test — task photo requirement gate in PATCH /api/tasks/:id.
  *
  * Locks in three behaviors:
- *   1. KILL SWITCH: an account NOT on FEATURE_TASK_PHOTO_REQUIREMENT_ACCOUNTS
- *      never sees the 422, even with a non-zero required_photo_count already
- *      in the row (no data cleanup needed to disable).
- *   2. 422 SHAPE: a flagged account transitioning to done below the
- *      requirement gets 422 { code: "PHOTOS_REQUIRED", required, attached }.
+ *   1. NO-REQUIREMENT PASS-THROUGH: required_photo_count=0 (the default)
+ *      never blocks the done transition.
+ *   2. 422 SHAPE: transitioning to done below the requirement gets
+ *      422 { code: "PHOTOS_REQUIRED", required, attached }.
  *   3. PRE-UPDATE SEMANTICS: a single PATCH sending BOTH status:"done" and a
  *      new requiredPhotoCount is gated against the requirement that was on
  *      the task BEFORE the PATCH — the new value persists but does not block
@@ -36,9 +35,6 @@ if (process.env.NODE_ENV !== "development") {
   console.error("Refusing to run: NODE_ENV must be 'development' (recaptcha dev bypass required).");
   process.exit(1);
 }
-
-const FLAG = "FEATURE_TASK_PHOTO_REQUIREMENT_ACCOUNTS";
-const savedFlag = process.env[FLAG];
 
 let passed = 0;
 let failed = 0;
@@ -101,24 +97,20 @@ async function main() {
     if (proj.status !== 200 && proj.status !== 201) throw new Error(`project create failed: ${proj.status} ${JSON.stringify(proj.json)}`);
     projectId = proj.json.id;
 
-    // Flag OFF for creation so we can simulate "requirement already in the
-    // row" via direct SQL (the kill-switch scenario).
-    delete process.env[FLAG];
     const taskRes = await api("POST", `/api/projects/${projectId}/tasks`, { title: "PhotoReq task" });
     if (taskRes.status !== 200 && taskRes.status !== 201) throw new Error(`task create failed: ${taskRes.status} ${JSON.stringify(taskRes.json)}`);
     const taskId: number = taskRes.json.id;
-    await db.update(tasks).set({ requiredPhotoCount: 2 }).where(eq(tasks.id, taskId));
 
-    // ── 1. Kill switch: flag OFF ⇒ no enforcement despite requirement=2 ───
-    console.log("1. Kill switch (flag OFF, required_photo_count=2 in row):");
+    // ── 1. No requirement (default 0) ⇒ done transition passes ────────────
+    console.log("1. No requirement (required_photo_count=0 default):");
     const r1 = await api("PATCH", `/api/tasks/${taskId}`, { status: "done" });
     check("PATCH status:done succeeds (200)", r1.status === 200, r1);
     check("task is done", r1.json?.status === "done");
 
-    // ── 2. Flag ON ⇒ 422 with exact shape on the done transition ──────────
-    console.log("2. 422 shape (flag ON, 0 of 2 attached):");
+    // ── 2. Requirement set ⇒ 422 with exact shape on the done transition ──
+    console.log("2. 422 shape (requirement=2, 0 attached):");
     await api("PATCH", `/api/tasks/${taskId}`, { status: "todo" }); // reset
-    process.env[FLAG] = ` some-other-account , ${accountId} `; // whitespace + multiple entries
+    await db.update(tasks).set({ requiredPhotoCount: 2 }).where(eq(tasks.id, taskId));
     const r2 = await api("PATCH", `/api/tasks/${taskId}`, { status: "done" });
     check("returns 422", r2.status === 422, r2);
     check('code === "PHOTOS_REQUIRED"', r2.json?.code === "PHOTOS_REQUIRED", r2.json);
@@ -144,7 +136,6 @@ async function main() {
     check("blocked (422) — gated on pre-update value 2, not the incoming 0", r4.status === 422, r4);
   } finally {
     // ── Cleanup: remove everything this test created ───────────────────────
-    if (savedFlag === undefined) delete process.env[FLAG]; else process.env[FLAG] = savedFlag;
     try {
       if (projectId) await api("DELETE", `/api/projects/${projectId}`);
       if (userId) await db.delete(users).where(eq(users.id, userId));

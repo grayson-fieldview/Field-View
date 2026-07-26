@@ -105,8 +105,7 @@ export const tasks = pgTable("tasks", {
   // server-side in PATCH /api/tasks/:id (422 PHOTOS_REQUIRED). Checked ONLY
   // on the transition to done — never recomputed afterwards, so raising the
   // requirement or deleting attached photos does NOT reopen a completed task.
-  // Settable only by admins on flag-enabled accounts (see
-  // FEATURE_TASK_PHOTO_REQUIREMENT_ACCOUNTS in server/routes.ts).
+  // Settable only by admins (enforced in server/routes.ts).
   requiredPhotoCount: integer("required_photo_count").default(0).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),

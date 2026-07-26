@@ -45,13 +45,8 @@ export function registerAuthRoutes(app: Express): void {
         accountFirstMobileUploadAt = account?.firstMobileUploadAt ?? null;
         accountCreatedAt = account?.createdAt ?? null;
       }
-      // Dogfooding flag: whether this account may see the task photo
-      // requirement input (admin UI only; server-side field gate matches).
-      const taskPhotoRequirementEnabled = (process.env.FEATURE_TASK_PHOTO_REQUIREMENT_ACCOUNTS || "")
-        .split(",").map((s) => s.trim()).filter(Boolean)
-        .includes(user.accountId ?? "");
       const sanitized = sanitizeUserForViewer(
-        { ...safeUserWithBilling, isOwner, accountFirstMobileUploadAt, accountCreatedAt, taskPhotoRequirementEnabled },
+        { ...safeUserWithBilling, isOwner, accountFirstMobileUploadAt, accountCreatedAt },
         user,
       );
       res.json(sanitized);
