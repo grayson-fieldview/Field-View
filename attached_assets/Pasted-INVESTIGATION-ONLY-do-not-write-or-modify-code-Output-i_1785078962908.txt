@@ -1,0 +1,72 @@
+INVESTIGATION ONLY — do not write or modify code. Output is a report.
+
+Scoping a new feature: allow a task to REQUIRE one or more photos
+before it can be marked complete. Requested by a trial customer.
+
+Before any implementation I need to know whether photos can associate
+with tasks at all today.
+
+REPORT ON:
+
+1. Can media associate with a task?
+   Paste the schema for both `media` and `tasks`. Is there a taskId on
+   media, a join table, or any other association? If photos are scoped
+   only to projects, say so plainly — that is the answer that
+   determines this feature's size.
+
+2. Task completion path
+   Paste the endpoint(s) that mark a task complete. Is completion
+   validated server-side, or does the client just PATCH a status?
+   List every caller — web, mobile, anything else.
+
+3. Task schema headroom
+   Are task fields strict columns, or is there a JSON/JSONB column
+   that could hold a requirement without a migration? If a migration
+   is needed, say so — that triggers our prod RDS migration procedure
+   and I need to know up front.
+
+4. Checklists vs tasks
+   The project screen has both a Tasks tab and a Checklists tab. Are
+   they the same entity or different? Would checklist items need the
+   same photo requirement, or is that a separate feature?
+
+5. Offline completion
+   Does mobile queue task-status changes while offline? How does the
+   photo upload queue interact with task completion — can a task be
+   completed while its photos are still queued and unuploaded?
+
+6. Templates and recurrence
+   Do task templates or recurring tasks exist? Would a photo
+   requirement propagate to instances?
+
+7. Permissions
+   Production roles are admin / standard / restricted. Where is task
+   creation and editing gated today? Who would be allowed to SET a
+   requirement vs merely satisfy it?
+
+SPECIFIC QUESTIONS
+- If media has no taskId: what is the cheapest correct association —
+  a nullable taskId column on media, or a join table? Which fits the
+  existing query patterns and the accountId scoping better?
+- Where should enforcement live so it cannot be bypassed? Client-side
+  only is not acceptable; I want it on the completion endpoint.
+- A crew member in a basement with no signal takes the photo and marks
+  the task done. The photo is queued locally, not uploaded. Should
+  completion succeed? What does the current architecture make possible
+  here — this is the case that decides whether the feature is usable
+  in the field or infuriating.
+- Retroactive behavior: if a requirement is added to a task that is
+  already complete, does it reopen? (My answer is no — confirm nothing
+  in the current status logic would force otherwise.)
+- Should the requirement be a boolean or a minimum count? A
+  before-and-after job wants 2. Recommend one and say why.
+
+DELIVERABLE
+1. Answers to 1–7
+2. Answers to the specific questions
+3. A verdict: is this a small feature (flag + endpoint validation) or
+   does it require a new photo-to-task association and a migration?
+4. Proposed implementation plan, split into what lands in the web app
+   vs what mobile needs, only if the verdict is clear
+
+Do not implement. Wait for my approval.
