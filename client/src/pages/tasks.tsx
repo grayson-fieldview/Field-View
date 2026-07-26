@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select";
 import {
   Search,
+  Camera as CameraIcon,
   ClipboardList,
   FolderKanban,
   Calendar,
@@ -39,10 +40,12 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import type { Task, Project } from "@shared/schema";
 import TaskFormDialog from "@/components/task-form-dialog";
+import TaskPhotosDialog from "@/components/task-photos-dialog";
 
 type TaskWithDetails = Task & {
   project?: { name: string };
   assignedTo?: { firstName: string | null; lastName: string | null };
+  attachedPhotoCount?: number;
 };
 
 type FilterStatus = "all" | "todo" | "in_progress" | "done";
@@ -67,6 +70,7 @@ export default function TasksPage() {
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [isAddTaskOpen, setIsAddTaskOpen] = useState(false);
   const [confirmDeleteTask, setConfirmDeleteTask] = useState<number | null>(null);
+  const [photosTask, setPhotosTask] = useState<TaskWithDetails | null>(null);
   const [, navigate] = useLocation();
 
   const { data: allTasks, isLoading } = useQuery<TaskWithDetails[]>({
@@ -84,6 +88,30 @@ export default function TasksPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/activity"] });
+    },
+    onError: (e: Error, vars) => {
+      // 422 PHOTOS_REQUIRED — machine-readable body: { code, required, attached }.
+      // apiRequest throws Error("422: <json>"), so parse the payload back out.
+      const match = e.message.match(/^422:\s*(\{[\s\S]*\})$/);
+      if (match) {
+        try {
+          const body = JSON.parse(match[1]);
+          if (body.code === "PHOTOS_REQUIRED") {
+            const missing = body.required - body.attached;
+            toast({
+              title: "Photos required",
+              description: `Attach ${missing} more photo${missing === 1 ? "" : "s"} to complete this task (${body.attached} of ${body.required} attached).`,
+              variant: "destructive",
+            });
+            const t = (allTasks || []).find((x) => x.id === vars.id);
+            if (t) setPhotosTask(t);
+            return;
+          }
+        } catch {
+          // fall through to generic toast
+        }
+      }
+      toast({ title: "Failed to update task", description: e.message, variant: "destructive" });
     },
   });
 
@@ -133,6 +161,7 @@ export default function TasksPage() {
       </div>
 
       <TaskFormDialog open={isAddTaskOpen} onOpenChange={setIsAddTaskOpen} />
+      <TaskPhotosDialog task={photosTask} onOpenChange={() => setPhotosTask(null)} />
 
       <div className="flex flex-wrap items-center gap-3">
         <div className="relative flex-1 min-w-[200px] max-w-sm">
@@ -255,6 +284,21 @@ export default function TasksPage() {
                     )}
                   </div>
                 </div>
+
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="shrink-0 text-xs text-muted-foreground gap-1 px-2"
+                  onClick={(e) => { e.stopPropagation(); setPhotosTask(task); }}
+                  data-testid={`button-task-photos-${task.id}`}
+                >
+                  <CameraIcon className="h-3.5 w-3.5" />
+                  {(task.requiredPhotoCount ?? 0) > 0
+                    ? `${task.attachedPhotoCount ?? 0}/${task.requiredPhotoCount}`
+                    : (task.attachedPhotoCount ?? 0) > 0
+                      ? task.attachedPhotoCount
+                      : null}
+                </Button>
 
                 <Badge variant={config.badgeVariant} className="shrink-0 text-xs" data-testid={`badge-task-status-${task.id}`}>
                   {config.label}

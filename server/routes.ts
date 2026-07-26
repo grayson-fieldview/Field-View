@@ -10,7 +10,7 @@ import { normalizeEmail } from "./lib/normalizeEmail";
 import { apiV1Router } from "./apiV1";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
-import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistSectionSchema, insertChecklistItemOptionSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, checklistItems, checklistSections, checklistItemOptions, checklistItemPhotos, checklistTemplates, checklistTemplateSections, checklistTemplateItems, checklistTemplateItemOptions, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, templateConfigSchema, accountSettingsPatchSchema, apiKeys, appInstallPromptEvents } from "@shared/schema";
+import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistSectionSchema, insertChecklistItemOptionSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, checklistItems, checklistSections, checklistItemOptions, checklistItemPhotos, taskPhotos, checklistTemplates, checklistTemplateSections, checklistTemplateItems, checklistTemplateItemOptions, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, templateConfigSchema, accountSettingsPatchSchema, apiKeys, appInstallPromptEvents } from "@shared/schema";
 import { executeAutoClockOut } from "./lib/timesheets";
 import { formatLocalTime } from "./lib/geo";
 import { users, invitations, accounts, assignedProjectIdsSchema } from "@shared/models/auth";
@@ -307,6 +307,41 @@ async function verifyTaskAccess(taskId: number, accountId: string): Promise<bool
     .where(eq(tasks.id, taskId))
     .limit(1);
   return result.length > 0 && result[0].accountId === accountId;
+}
+
+// Like verifyTaskAccess but also returns the task row (projectId +
+// requiredPhotoCount) so callers that need the task don't query twice.
+// Scopes through projects.accountId, matching the media access pattern.
+async function getTaskWithAccess(taskId: number, accountId: string): Promise<
+  { ok: false } | { ok: true; task: { id: number; projectId: number; status: string; requiredPhotoCount: number } }
+> {
+  const result = await db.select({
+      accountId: projects.accountId,
+      id: tasks.id,
+      projectId: tasks.projectId,
+      status: tasks.status,
+      requiredPhotoCount: tasks.requiredPhotoCount,
+    })
+    .from(tasks)
+    .innerJoin(projects, eq(tasks.projectId, projects.id))
+    .where(eq(tasks.id, taskId))
+    .limit(1);
+  if (result.length === 0 || result[0].accountId !== accountId) return { ok: false };
+  const { accountId: _a, ...task } = result[0];
+  return { ok: true, task };
+}
+
+// Feature flag: which accounts may SET a task photo requirement (admin-only
+// on top of this). Dogfooding gate — installed mobile builds have never seen
+// the 422 PHOTOS_REQUIRED contract, so the requirement input stays hidden
+// until mobile ships support. Comma-separated account IDs in
+// FEATURE_TASK_PHOTO_REQUIREMENT_ACCOUNTS. Enforcement of an already-set
+// requirement is NOT flag-gated (required_photo_count defaults to 0, so
+// nothing is enforced unless a flagged admin set it).
+function isTaskPhotoRequirementEnabled(accountId: string | null | undefined): boolean {
+  if (!accountId) return false;
+  const raw = process.env.FEATURE_TASK_PHOTO_REQUIREMENT_ACCOUNTS || "";
+  return raw.split(",").map((s) => s.trim()).filter(Boolean).includes(accountId);
 }
 
 async function verifyReportAccess(reportId: number, accountId: string): Promise<boolean> {
@@ -620,6 +655,7 @@ export async function registerRoutes(
           }
           const folder = f.folder === "branding" ? "branding"
                        : f.folder === "checklists" ? "checklists"
+                       : f.folder === "tasks" ? "tasks"
                        : "photos";
           return getPresignedPutUrl(f.originalName, f.mimeType, folder, f.fileSize);
         })
@@ -1348,6 +1384,13 @@ export async function registerRoutes(
       const project = await storage.getProject(projectId);
       if (!project) return res.status(404).json({ message: "Project not found" });
       if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
+      // requiredPhotoCount: admin + feature-flagged accounts only; silently
+      // ignored otherwise (defaults to 0 = no requirement).
+      const canSetRequirement =
+        req.user.role === "admin" && isTaskPhotoRequirementEnabled(req.user.accountId);
+      const rpc = req.body.requiredPhotoCount;
+      const requiredPhotoCount =
+        canSetRequirement && Number.isInteger(rpc) && rpc >= 0 && rpc <= 100 ? rpc : 0;
       const parsed = insertTaskSchema.safeParse({
         projectId,
         title: req.body.title,
@@ -1356,6 +1399,7 @@ export async function registerRoutes(
         assignedToId: req.body.assignedToId || null,
         createdById: req.user.id,
         dueDate: req.body.dueDate ? new Date(req.body.dueDate) : null,
+        requiredPhotoCount,
       });
       if (!parsed.success) {
         return res.status(400).json({ message: parsed.error.message });
@@ -1371,11 +1415,47 @@ export async function registerRoutes(
   app.patch("/api/tasks/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
-      if (!(await verifyTaskAccess(id, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      const access = await getTaskWithAccess(id, req.user.accountId);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
       const allowed = ["title", "description", "status", "priority", "assignedToId", "dueDate"];
       const filtered: Record<string, any> = {};
       for (const key of allowed) {
         if (key in req.body) filtered[key] = req.body[key];
+      }
+      // requiredPhotoCount is settable only by admins on flag-enabled
+      // accounts. For everyone else the field is silently STRIPPED (not
+      // rejected) — a standard user PATCHing a full task object to change
+      // the title must not fail for a field they didn't touch. The existing
+      // value is preserved.
+      if (
+        "requiredPhotoCount" in req.body &&
+        req.user.role === "admin" &&
+        isTaskPhotoRequirementEnabled(req.user.accountId)
+      ) {
+        const n = req.body.requiredPhotoCount;
+        if (!Number.isInteger(n) || n < 0 || n > 100) {
+          return res.status(400).json({ message: "requiredPhotoCount must be an integer between 0 and 100" });
+        }
+        filtered.requiredPhotoCount = n;
+      }
+      // Photo requirement gate — enforced ONLY on the transition to done
+      // (task not already done). Machine-readable 422 so web and mobile can
+      // render "N of M photos" prompts. Already-done tasks are never
+      // re-evaluated: adding a requirement or deleting photos later does NOT
+      // reopen them (nothing recomputes status).
+      if (filtered.status === "done" && access.task.status !== "done") {
+        const required = access.task.requiredPhotoCount ?? 0;
+        if (required > 0) {
+          const attached = await storage.countTaskPhotos(id);
+          if (attached < required) {
+            return res.status(422).json({
+              code: "PHOTOS_REQUIRED",
+              required,
+              attached,
+              message: `This task requires ${required} photo${required === 1 ? "" : "s"} before it can be completed (${attached} attached).`,
+            });
+          }
+        }
       }
       // Idempotent atomic completion stamping. Strip completedAt from the
       // caller-controlled patch first, then do the regular update, then
@@ -1404,6 +1484,77 @@ export async function registerRoutes(
       res.json(updated);
     } catch (error) {
       res.status(500).json({ message: "Failed to update task" });
+    }
+  });
+
+  // ── Task photos (mirrors the checklist-item photo joins) ────────────────
+  // All routes scope through projects.accountId (via getTaskWithAccess /
+  // verifyMediaAccess-style joins), matching the existing media access
+  // pattern — never just task-belongs-to-project.
+  app.get("/api/tasks/:id/photos", requireReadAccess, async (req: any, res) => {
+    try {
+      const taskId = parseInt(req.params.id as string);
+      if (!Number.isInteger(taskId) || taskId <= 0) return res.status(400).json({ message: "Invalid task id" });
+      const access = await getTaskWithAccess(taskId, req.user.accountId);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
+      const photos = await storage.getTaskPhotos(taskId);
+      // Presign the nested media URLs (same treatment as project media).
+      const presigned = await Promise.all(photos.map(async (p) => ({
+        ...p,
+        media: (await presignMediaUrls([p.media]))[0],
+      })));
+      res.json(presigned);
+    } catch {
+      res.status(500).json({ message: "Failed to fetch task photos" });
+    }
+  });
+
+  app.post("/api/tasks/:id/photos", requireWriteAccess, async (req: any, res) => {
+    try {
+      const taskId = parseInt(req.params.id as string);
+      if (!Number.isInteger(taskId) || taskId <= 0) return res.status(400).json({ message: "Invalid task id" });
+      const access = await getTaskWithAccess(taskId, req.user.accountId);
+      if (!access.ok) return res.status(403).json({ message: "Access denied" });
+      const mediaIds = req.body?.mediaIds;
+      if (!Array.isArray(mediaIds) || mediaIds.length === 0 || !mediaIds.every((n) => Number.isInteger(n) && n > 0)) {
+        return res.status(400).json({ message: "mediaIds must be a non-empty array of positive integers" });
+      }
+      // Cross-account + cross-project guard: every media row must belong to
+      // the caller's account AND to the task's own project. Photos from
+      // other projects are rejected, not silently filtered.
+      const owned = await db.select({ id: media.id, projectId: media.projectId })
+        .from(media)
+        .innerJoin(projects, eq(media.projectId, projects.id))
+        .where(and(inArray(media.id, mediaIds), eq(projects.accountId, req.user.accountId)));
+      if (owned.length !== mediaIds.length) {
+        return res.status(403).json({ message: "One or more media rows are not in your account" });
+      }
+      if (owned.some((m) => m.projectId !== access.task.projectId)) {
+        return res.status(400).json({ message: "All photos must belong to the task's project" });
+      }
+      const created = await storage.attachTaskPhotos(taskId, mediaIds);
+      res.status(201).json(created);
+    } catch {
+      res.status(500).json({ message: "Failed to attach photos" });
+    }
+  });
+
+  app.delete("/api/task-photos/:id", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ message: "Invalid id" });
+      const row = await storage.getTaskPhoto(id);
+      if (!row) return res.status(404).json({ message: "Not found" });
+      // Account scoping through the task's project.
+      if (!(await verifyTaskAccess(row.taskId, req.user.accountId))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      // Detaching from a completed task is allowed and does NOT reopen it —
+      // the requirement is only checked at the done transition.
+      await storage.detachTaskPhoto(id);
+      res.json({ message: "Detached" });
+    } catch {
+      res.status(500).json({ message: "Failed to detach photo" });
     }
   });
 

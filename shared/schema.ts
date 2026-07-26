@@ -1,5 +1,5 @@
 import { sql, relations } from "drizzle-orm";
-import { pgTable, text, varchar, integer, bigint, timestamp, boolean, real, pgEnum, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, bigint, timestamp, boolean, real, pgEnum, jsonb, index, uniqueIndex, unique } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -99,10 +99,36 @@ export const tasks = pgTable("tasks", {
   // S45 — set ONCE on status NULL→done transition for idempotent CIO
   // task_completed event firing. Never re-set on re-edits.
   completedAt: timestamp("completed_at"),
+  // Photo requirement: minimum number of attached photos (task_photos rows)
+  // required before status can transition to "done". 0 = no requirement
+  // (backward compatible — every existing client is unaffected). Enforced
+  // server-side in PATCH /api/tasks/:id (422 PHOTOS_REQUIRED). Checked ONLY
+  // on the transition to done — never recomputed afterwards, so raising the
+  // requirement or deleting attached photos does NOT reopen a completed task.
+  // Settable only by admins on flag-enabled accounts (see
+  // FEATURE_TASK_PHOTO_REQUIREMENT_ACCOUNTS in server/routes.ts).
+  requiredPhotoCount: integer("required_photo_count").default(0).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
   index("tasks_project_id_idx").on(table.projectId),
+]);
+
+// Photo ↔ task join (mirrors checklist_item_photos). Detach deletes ONLY the
+// join row — the media row is not deleted (other things may reference it).
+// Media deletion cascades the join row away; task deletion likewise. No
+// updated_at on purpose — re-attach is delete + create. Unlike
+// checklist_item_photos there is NO completion recompute on attach/detach:
+// the requirement is evaluated only at the moment of the done transition.
+export const taskPhotos = pgTable("task_photos", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  taskId: integer("task_id").references(() => tasks.id, { onDelete: "cascade" }).notNull(),
+  mediaId: integer("media_id").references(() => media.id, { onDelete: "cascade" }).notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("task_photos_task_sort_idx").on(table.taskId, table.sortOrder),
+  unique("task_photos_task_media_uniq").on(table.taskId, table.mediaId),
 ]);
 
 export const checklists = pgTable("checklists", {
@@ -826,6 +852,11 @@ export type InsertChecklistItemOption = z.infer<typeof insertChecklistItemOption
 export type ChecklistItemOption = typeof checklistItemOptions.$inferSelect;
 export type InsertChecklistItemPhoto = z.infer<typeof insertChecklistItemPhotoSchema>;
 export type ChecklistItemPhoto = typeof checklistItemPhotos.$inferSelect;
+// No zod insert schema on purpose: attach validation happens in the route
+// (mediaIds array shape + account/project scoping), and drizzle-zod's .omit
+// on identity columns trips the known TS2322 'never' quirk in this repo.
+export type InsertTaskPhoto = typeof taskPhotos.$inferInsert;
+export type TaskPhoto = typeof taskPhotos.$inferSelect;
 export type InsertReport = z.infer<typeof insertReportSchema>;
 export type Report = typeof reports.$inferSelect;
 export type InsertReportSection = z.infer<typeof insertReportSectionSchema>;

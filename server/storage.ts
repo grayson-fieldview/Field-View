@@ -9,6 +9,7 @@ import {
   checklistSections,
   checklistItemOptions,
   checklistItemPhotos,
+  taskPhotos,
   reports,
   reportSections,
   reportSectionPhotos,
@@ -31,6 +32,7 @@ import {
   type InsertMediaAnnotation,
   type Task,
   type InsertTask,
+  type TaskPhoto,
   type Checklist,
   type InsertChecklist,
   type ChecklistItem,
@@ -165,6 +167,11 @@ export interface IStorage {
   createTask(task: InsertTask): Promise<Task>;
   updateTask(id: number, data: Partial<InsertTask>): Promise<Task | undefined>;
   deleteTask(id: number, accountId: string): Promise<boolean>;
+  getTaskPhotos(taskId: number): Promise<(TaskPhoto & { media: Media })[]>;
+  getTaskPhoto(id: number): Promise<TaskPhoto | undefined>;
+  attachTaskPhotos(taskId: number, mediaIds: number[]): Promise<TaskPhoto[]>;
+  detachTaskPhoto(id: number): Promise<void>;
+  countTaskPhotos(taskId: number): Promise<number>;
 
   getChecklistsByProject(projectId: number): Promise<(Checklist & { assignedTo?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }; itemCount: number; checkedCount: number; sectionCount: number })[]>;
   getAllChecklists(accountId: string): Promise<(Checklist & { project?: { name: string }; assignedTo?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }; itemCount: number; checkedCount: number; sectionCount: number })[]>;
@@ -598,6 +605,8 @@ export class DatabaseStorage implements IStorage {
           firstName: users.firstName,
           lastName: users.lastName,
         },
+        // Correlated count subquery — no extra round trip, no row fan-out.
+        attachedPhotoCount: sql<number>`(select count(*)::int from ${taskPhotos} where ${taskPhotos.taskId} = ${tasks.id})`,
       })
       .from(tasks)
       .leftJoin(users, eq(tasks.assignedToId, users.id))
@@ -607,6 +616,7 @@ export class DatabaseStorage implements IStorage {
     return rows.map((r) => ({
       ...r.task,
       assignedTo: r.assignedTo?.firstName ? r.assignedTo : undefined,
+      attachedPhotoCount: r.attachedPhotoCount ?? 0,
     }));
   }
 
@@ -619,6 +629,7 @@ export class DatabaseStorage implements IStorage {
           firstName: users.firstName,
           lastName: users.lastName,
         },
+        attachedPhotoCount: sql<number>`(select count(*)::int from ${taskPhotos} where ${taskPhotos.taskId} = ${tasks.id})`,
       })
       .from(tasks)
       .innerJoin(projects, eq(tasks.projectId, projects.id))
@@ -630,12 +641,65 @@ export class DatabaseStorage implements IStorage {
       ...r.task,
       project: r.project?.name ? r.project : undefined,
       assignedTo: r.assignedTo?.firstName ? r.assignedTo : undefined,
+      attachedPhotoCount: r.attachedPhotoCount ?? 0,
     }));
   }
 
   async createTask(task: InsertTask): Promise<Task> {
     const [created] = await db.insert(tasks).values(task).returning();
     return created;
+  }
+
+  // ── Task photos (mirrors "Stage 2: per-item photos" for checklists) ──────
+  // NOTE: unlike checklist item photos there is deliberately NO completion
+  // recompute on attach/detach — the photo requirement is evaluated only at
+  // the moment of the status→done transition in PATCH /api/tasks/:id, so a
+  // completed task never reopens when photos are later detached or deleted.
+  async getTaskPhotos(taskId: number): Promise<(TaskPhoto & { media: Media })[]> {
+    const rows = await db
+      .select({ photo: taskPhotos, media })
+      .from(taskPhotos)
+      .innerJoin(media, eq(taskPhotos.mediaId, media.id))
+      .where(eq(taskPhotos.taskId, taskId))
+      .orderBy(asc(taskPhotos.sortOrder), asc(taskPhotos.id));
+    return rows.map((r) => ({ ...r.photo, media: r.media }));
+  }
+
+  async getTaskPhoto(id: number): Promise<TaskPhoto | undefined> {
+    const [row] = await db.select().from(taskPhotos).where(eq(taskPhotos.id, id)).limit(1);
+    return row;
+  }
+
+  async attachTaskPhotos(taskId: number, mediaIds: number[]): Promise<TaskPhoto[]> {
+    if (mediaIds.length === 0) return [];
+    return db.transaction(async (tx) => {
+      const [{ maxSort }] = await tx
+        .select({ maxSort: sql<number | null>`max(${taskPhotos.sortOrder})` })
+        .from(taskPhotos)
+        .where(eq(taskPhotos.taskId, taskId));
+      const start = (maxSort ?? -1) + 1;
+      const rows = mediaIds.map((mediaId, i) => ({ taskId, mediaId, sortOrder: start + i }));
+      // Idempotent on the (task_id, media_id) unique constraint: re-attaching
+      // an already-attached photo is a no-op, not an error (mobile retry safety).
+      const created = await tx
+        .insert(taskPhotos)
+        .values(rows)
+        .onConflictDoNothing()
+        .returning();
+      return created;
+    });
+  }
+
+  async detachTaskPhoto(id: number): Promise<void> {
+    await db.delete(taskPhotos).where(eq(taskPhotos.id, id));
+  }
+
+  async countTaskPhotos(taskId: number): Promise<number> {
+    const [row] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(taskPhotos)
+      .where(eq(taskPhotos.taskId, taskId));
+    return row?.count ?? 0;
   }
 
   async updateTask(id: number, data: Partial<InsertTask>): Promise<Task | undefined> {

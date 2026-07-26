@@ -1,3 +1,4 @@
+- [Task photo requirement](task-photo-requirement.md) — 422 gate only on done-transition, never recompute/reopen; strip (don't reject) the field for non-flagged callers; flag env gates writes not enforcement.
 - [Team page seat-cap gating](seat-cap-gating.md) — trial cap is enforced in 3 client gates (preflight, disabled button, inline warning), not just the API; change all in lockstep or the UI blocks before the server signal fires.
 - [Two production databases](two-production-databases.md) — real prod is Vercel+RDS; Replit's "production" DB is stale (froze Mar 2026); never diff/advise from it. Prod DDL via script/migrations convention.
 - [CRM/marketing side-effect sync](hubspot-cio-side-effect-sync.md) — GHL is the only lifecycle platform (CIO/HubSpot removed July 2026); syncs stay fire-and-forget + waitUntil-deferred, never throw into the request path.

@@ -23,6 +23,7 @@ import {
 import { Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/auth-utils";
+import { useAuth } from "@/hooks/use-auth";
 import type { Project } from "@shared/schema";
 
 type AccountUser = {
@@ -43,7 +44,13 @@ const PROJECT_UNSET = "__unset__";
 
 export default function TaskFormDialog({ open, onOpenChange, projectId }: TaskFormDialogProps) {
   const { toast } = useToast();
+  const { user } = useAuth();
   const isGlobalMode = projectId === undefined;
+  // Dogfooding flag: the photo-requirement input renders ONLY for admins on
+  // accounts listed in FEATURE_TASK_PHOTO_REQUIREMENT_ACCOUNTS (surfaced via
+  // /api/auth/user). The server enforces the same gate; this is UI gating.
+  const canSetPhotoRequirement =
+    (user as any)?.role === "admin" && (user as any)?.taskPhotoRequirementEnabled === true;
 
   const [selectedProjectId, setSelectedProjectId] = useState<string>(PROJECT_UNSET);
   const [title, setTitle] = useState("");
@@ -51,6 +58,7 @@ export default function TaskFormDialog({ open, onOpenChange, projectId }: TaskFo
   const [priority, setPriority] = useState<string>("medium");
   const [assigneeId, setAssigneeId] = useState<string>(ASSIGNEE_NONE);
   const [dueDate, setDueDate] = useState<string>("");
+  const [requiredPhotoCount, setRequiredPhotoCount] = useState<string>("0");
 
   useEffect(() => {
     if (open) {
@@ -60,6 +68,7 @@ export default function TaskFormDialog({ open, onOpenChange, projectId }: TaskFo
       setPriority("medium");
       setAssigneeId(ASSIGNEE_NONE);
       setDueDate("");
+      setRequiredPhotoCount("0");
     }
   }, [open]);
 
@@ -99,6 +108,10 @@ export default function TaskFormDialog({ open, onOpenChange, projectId }: TaskFo
       if (description.trim()) body.description = description.trim();
       if (assigneeId !== ASSIGNEE_NONE) body.assignedToId = assigneeId;
       if (dueDate) body.dueDate = new Date(dueDate).toISOString();
+      if (canSetPhotoRequirement) {
+        const n = parseInt(requiredPhotoCount, 10);
+        if (Number.isInteger(n) && n > 0) body.requiredPhotoCount = n;
+      }
       const res = await apiRequest("POST", `/api/projects/${effectiveProjectId}/tasks`, body);
       return res.json();
     },
@@ -227,6 +240,24 @@ export default function TaskFormDialog({ open, onOpenChange, projectId }: TaskFo
               </SelectContent>
             </Select>
           </div>
+
+          {canSetPhotoRequirement && (
+            <div className="space-y-1.5">
+              <Label htmlFor="task-required-photos">Required photos to complete</Label>
+              <Input
+                id="task-required-photos"
+                type="number"
+                min={0}
+                max={100}
+                value={requiredPhotoCount}
+                onChange={(e) => setRequiredPhotoCount(e.target.value)}
+                data-testid="input-task-required-photos"
+              />
+              <p className="text-xs text-muted-foreground">
+                0 = no requirement. The task can't be marked done until this many photos are attached.
+              </p>
+            </div>
+          )}
 
           <DialogFooter className="gap-2 sm:gap-2">
             <Button
