@@ -1,9 +1,14 @@
 ---
 name: Annotation text fontSize contract
-description: How stored text fontSize scales across web, mobile, and PDF renderers
+description: How text annotation font size is stored and resolved across web, mobile, and PDF renderers
 ---
-Stored text-stroke `fontSize` is absolute px authored against a notional 1000px-tall image; positions are 0–1 normalized. Every renderer must resolve it via the shared `resolveFontSize(fontSize, renderedHeightPx)` with `FONT_REFERENCE_HEIGHT = 1000` (exported from the web annotation-svg module) — the mobile repo and any PDF flatten must use the identical constant/function.
+Text strokes carry TWO sizing fields (additive migration, July 2026):
+- `fontSize` (required, legacy): absolute px authored against the full-size viewer's fitted-image box. Meaning must NEVER change — old mobile builds on TestFlight/Play still read/write it and can't be force-updated.
+- `fontSizeNorm` (optional, canonical): 0–1 fraction of image height, written alongside fontSize on every web text commit (`typedPx / fittedRectHeight`).
 
-**Why:** fontSize was the only non-normalized value in the payload; rendering it raw into a differently-sized basis makes text invisible or wrong-sized (thumbnail text bug, July 2026). No payload migration — render-time scaling only.
+Single resolution rule on EVERY surface (SVG overlay, full-size HTML divs, canvas draw, flatten, mobile, PDF):
+`resolvedPx = (fontSizeNorm ?? fontSize / FONT_REFERENCE_HEIGHT) * renderedHeightPx` with `FONT_REFERENCE_HEIGHT = 600` (user-calibrated; corroborated by the old flatten pre-scaler and mobile authoring basis — do not re-derive).
 
-**How to apply:** SVG overlay path renders text in viewBox units (vbH=1000, so the helper is identity there) with `dominant-baseline="text-before-edge"` + `text-anchor="start"` to match the HTML div top-left anchor; the full-size viewer keeps its HTML div text layer and passes `renderText={false}` to the shared overlay. Android has an unverified issue with `dominant-baseline` — verify on mobile.
+**Why:** fontSize was the only non-normalized payload value; raw px in a different render basis made text invisible/wrong-sized (thumbnail bug). Norm removes calibration; the 600 fallback keeps legacy rows and old-client writes rendering.
+
+**How to apply:** helpers live in the web annotation-svg module; conversion (strokeToShape/shapeToStroke) must carry fontSizeNorm both ways or edits silently downgrade strokes to legacy — a round-trip test guards this. Schema caps fontSizeNorm at 4 (sanity), NOT 1 — typedPx/fittedHeight can exceed 1 on small windows. SVG text uses explicit baseline arithmetic `y = anchorY + resolvedPx*0.8` (no dominant-baseline — Safari/react-native-svg/server renderers differ). Backfill script (`fontSizeNorm = fontSize/600`, idempotent) exists in scripts/migrations; user runs prod themselves.

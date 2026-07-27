@@ -42,7 +42,7 @@ import {
 } from "lucide-react";
 import type { Media, Comment, Task, Project, MediaAnnotation, AnnotationStroke } from "@shared/schema";
 import { useAuth } from "@/hooks/use-auth";
-import { AnnotationOverlay } from "@/lib/annotation-svg";
+import { AnnotationOverlay, resolveFontSize } from "@/lib/annotation-svg";
 
 type MediaWithUser = Media & {
   uploadedBy?: {
@@ -69,7 +69,17 @@ interface PhotoViewerProps {
   onNavigate: (media: MediaWithUser) => void;
 }
 
-type AnnotationPoint = { x: number; y: number };
+import {
+  type AnnotationPoint,
+  type AnnotationShape,
+  type TextAnnotation,
+  isTextStroke,
+  isTextShape,
+  newId,
+  nextFontSizeNorm,
+  shapeToStroke,
+  strokeToShape,
+} from "@/lib/annotation-convert";
 type AnnotationTool = "freehand" | "arrow" | "circle" | "rectangle" | "line" | "eraser" | "text";
 
 const ERASER_THRESHOLD = 0.015;
@@ -119,54 +129,8 @@ function shapeHit(shape: AnnotationShape, p: AnnotationPoint, threshold: number)
   }
   return false;
 }
-type AnnotationShape =
-  | { type: "freehand"; points: AnnotationPoint[]; color: string; width: number }
-  | { type: "arrow"; start: AnnotationPoint; end: AnnotationPoint; color: string; width: number }
-  | { type: "circle"; center: AnnotationPoint; radius: AnnotationPoint; color: string; width: number }
-  | { type: "rectangle"; start: AnnotationPoint; end: AnnotationPoint; color: string; width: number }
-  | { type: "line"; start: AnnotationPoint; end: AnnotationPoint; color: string; width: number }
-  | { type: "text"; id: string; x: number; y: number; content: string; color: string; fontSize: number };
-
-type TextAnnotation = Extract<AnnotationStroke, { type: "text" }>;
-const isTextStroke = (s: AnnotationStroke): s is TextAnnotation => s.type === "text";
-const isTextShape = (s: AnnotationShape): s is Extract<AnnotationShape, { type: "text" }> => s.type === "text";
-
-function newId(): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID();
-  }
-  return `s-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
-function shapeToStroke(shape: AnnotationShape): AnnotationStroke {
-  if (shape.type === "text") {
-    return { id: shape.id, type: "text", x: shape.x, y: shape.y, content: shape.content, color: shape.color, fontSize: shape.fontSize };
-  }
-  if (shape.type === "freehand") {
-    return { id: newId(), type: "pencil", color: shape.color, width: shape.width, points: shape.points };
-  }
-  if (shape.type === "circle") {
-    return { id: newId(), type: "circle", color: shape.color, width: shape.width, points: [shape.center, shape.radius] };
-  }
-  return { id: newId(), type: shape.type, color: shape.color, width: shape.width, points: [shape.start, shape.end] };
-}
-
-function strokeToShape(stroke: AnnotationStroke): AnnotationShape {
-  if (stroke.type === "text") {
-    return { type: "text", id: stroke.id, x: stroke.x, y: stroke.y, content: stroke.content, color: stroke.color, fontSize: stroke.fontSize };
-  }
-  const { color, width, points } = stroke;
-  if (stroke.type === "pencil") {
-    return { type: "freehand", color, width, points };
-  }
-  const [a, b] = points;
-  const safeA = a || { x: 0, y: 0 };
-  const safeB = b || safeA;
-  if (stroke.type === "circle") {
-    return { type: "circle", color, width, center: safeA, radius: safeB };
-  }
-  return { type: stroke.type, color, width, start: safeA, end: safeB };
-}
+// AnnotationShape / conversion helpers moved to @/lib/annotation-convert
+// so the fontSizeNorm round-trip is unit-testable outside the component.
 
 const ANNOTATION_COLORS = [
   { name: "Red", value: "#ff3b30" },
@@ -492,8 +456,11 @@ export default function PhotoViewer({
           if (!ctx) return reject(new Error("Canvas context unavailable"));
           ctx.drawImage(img, 0, 0, w, h);
           for (const shape of annotations) {
+            // Text: no pre-scaling — drawShape resolves via the shared helper
+            // against the flatten target's HEIGHT (was min(w,h)/600, which
+            // undersized text on landscape photos; height basis is the fix).
             const scaled: AnnotationShape = isTextShape(shape)
-              ? { ...shape, fontSize: Math.max(8, shape.fontSize * (Math.min(w, h) / 600)) }
+              ? shape
               : ({ ...shape, width: Math.max(1, shape.width * (Math.min(w, h) / 600)) } as AnnotationShape);
             drawShape(ctx, scaled, w, h);
           }
@@ -668,7 +635,8 @@ export default function PhotoViewer({
   const drawShape = useCallback((ctx: CanvasRenderingContext2D, shape: AnnotationShape, w: number, h: number) => {
     if (shape.type === "text") {
       ctx.save();
-      ctx.font = `600 ${shape.fontSize}px Inter, system-ui, -apple-system, sans-serif`;
+      // Single shared resolution rule: h is the render basis height.
+      ctx.font = `600 ${resolveFontSize(shape, h)}px Inter, system-ui, -apple-system, sans-serif`;
       ctx.textBaseline = "top";
       ctx.fillStyle = shape.color;
       ctx.shadowColor = "rgba(0,0,0,0.9)";
@@ -940,6 +908,8 @@ export default function PhotoViewer({
     setDrawStart(null);
   };
 
+  const fittedRectHeight = typeof imageRectStyle.height === "number" ? imageRectStyle.height : 0;
+
   const commitTextInput = () => {
     setTextInput((prev) => {
       if (!prev) return null;
@@ -949,14 +919,14 @@ export default function PhotoViewer({
         setAnnotations((shapes) =>
           shapes.map((s) =>
             isTextShape(s) && s.id === prev.editingId
-              ? { ...s, content: trimmed, color: annotationColor, fontSize: annotationFontSize }
+              ? { ...s, content: trimmed, color: annotationColor, fontSize: annotationFontSize, fontSizeNorm: nextFontSizeNorm(annotationFontSize, fittedRectHeight, s.fontSizeNorm) }
               : s,
           ),
         );
       } else {
         setAnnotations((shapes) => [
           ...shapes,
-          { type: "text", id: newId(), x: prev.x, y: prev.y, content: trimmed, color: annotationColor, fontSize: annotationFontSize },
+          { type: "text", id: newId(), x: prev.x, y: prev.y, content: trimmed, color: annotationColor, fontSize: annotationFontSize, fontSizeNorm: nextFontSizeNorm(annotationFontSize, fittedRectHeight) },
         ]);
       }
       return null;
@@ -1070,7 +1040,7 @@ export default function PhotoViewer({
                 left: `${t.x * 100}%`,
                 top: `${t.y * 100}%`,
                 color: t.color,
-                fontSize: t.fontSize,
+                fontSize: fittedRectHeight > 0 ? resolveFontSize(t, fittedRectHeight) : t.fontSize,
                 fontWeight: 600,
                 lineHeight: 1.1,
                 whiteSpace: "nowrap",
@@ -1100,7 +1070,7 @@ export default function PhotoViewer({
                 left: `${t.x * 100}%`,
                 top: `${t.y * 100}%`,
                 color: t.color,
-                fontSize: t.fontSize,
+                fontSize: fittedRectHeight > 0 ? resolveFontSize(t, fittedRectHeight) : t.fontSize,
                 fontWeight: 600,
                 lineHeight: 1.1,
                 whiteSpace: "nowrap",

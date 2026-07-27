@@ -777,6 +777,12 @@ const textAnnotationSchema = z.object({
   content: z.string().min(1).max(500),
   color: z.string(),
   fontSize: z.number().min(8).max(96).default(18),
+  // ADDITIVE (July 2026): normalized font size as a 0–1 fraction of image
+  // height. fontSize stays required with unchanged meaning — legacy mobile
+  // builds still read/write absolute px and cannot be force-updated.
+  // Bound is a sanity cap, not 1: typedPx / fittedHeight can legitimately
+  // exceed 1 on small windows (fontSize max 96 vs tiny fitted heights).
+  fontSizeNorm: z.number().positive().max(4).optional(),
 });
 
 export const annotationStrokeSchema = z.union([baseStrokeSchema, textAnnotationSchema]);

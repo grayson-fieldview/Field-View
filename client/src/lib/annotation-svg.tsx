@@ -20,14 +20,26 @@ interface AnnotationOverlayProps {
 }
 
 /**
- * Stored text fontSize is absolute px authored against a notional
- * 1000px-tall image. Both web surfaces, the mobile repo, and any future
- * PDF flatten must resolve it through this exact function so text scales
- * identically everywhere: fontSize is a fixed fraction of rendered height.
+ * CALIBRATION CONSTANT for legacy strokes: the full-size viewer's typical
+ * fitted-image height in px — the basis absolute-px fontSize values were
+ * authored against (corroborated by the flatten pre-scaler's historical 600
+ * and the mobile authoring basis). Used only as the fallback denominator for
+ * strokes without fontSizeNorm; new writes carry fontSizeNorm (a normalized
+ * 0–1 fraction of image height), which is the correct long-term encoding.
+ * Do not change without recalibrating against stored data.
  */
-export const FONT_REFERENCE_HEIGHT = 1000;
-export function resolveFontSize(strokeFontSize: number, renderedHeightPx: number): number {
-  return (strokeFontSize / FONT_REFERENCE_HEIGHT) * renderedHeightPx;
+export const FONT_REFERENCE_HEIGHT = 600;
+
+/**
+ * Single font-resolution rule for EVERY surface (SVG overlay, full-size HTML
+ * divs, canvas draw/flatten, mobile, future PDF):
+ *   resolvedPx = (fontSizeNorm ?? fontSize / FONT_REFERENCE_HEIGHT) * renderedHeightPx
+ */
+export function resolveFontSize(
+  stroke: { fontSize: number; fontSizeNorm?: number },
+  renderedHeightPx: number,
+): number {
+  return (stroke.fontSizeNorm ?? stroke.fontSize / FONT_REFERENCE_HEIGHT) * renderedHeightPx;
 }
 
 const ARROW_HEAD_LEN_FRAC = 0.025;
@@ -88,7 +100,7 @@ function renderStroke(s: AnnotationStroke, vbW: number, vbH: number, renderText:
     // photo-viewer renders text as HTML divs and passes renderText={false};
     // all other callers get SVG text on the shared path.
     if (!renderText) return null;
-    const fontSize = resolveFontSize(s.fontSize, vbH);
+    const fontSize = resolveFontSize(s, vbH);
     return (
       <text
         key={s.id}
