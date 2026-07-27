@@ -991,7 +991,16 @@ export async function setupAuth(app: Express) {
       return res.redirect("/login?error=google_not_configured");
     }
     const inviteToken = (req.query.invite as string) || null;
-    (req.session as any).oauthInviteToken = inviteToken;
+    // Session-cookie hygiene: only touch the session when there is real
+    // data. Unconditionally assigning null marked the session modified,
+    // defeating saveUninitialized:false — every bot/prefetch hit on this
+    // URL minted an anonymous sessions row. Clearing a stale token only
+    // mutates sessions that already persisted one (already saved rows).
+    if (inviteToken) {
+      (req.session as any).oauthInviteToken = inviteToken;
+    } else if ((req.session as any).oauthInviteToken) {
+      delete (req.session as any).oauthInviteToken;
+    }
     passport.authenticate("google", {
       scope: ["profile", "email"],
       prompt: "select_account",
@@ -1018,7 +1027,12 @@ export async function setupAuth(app: Express) {
       return res.redirect("/login?error=microsoft_not_configured");
     }
     const inviteToken = (req.query.invite as string) || null;
-    (req.session as any).oauthInviteToken = inviteToken;
+    // Session-cookie hygiene: see the identical guard on the Google route.
+    if (inviteToken) {
+      (req.session as any).oauthInviteToken = inviteToken;
+    } else if ((req.session as any).oauthInviteToken) {
+      delete (req.session as any).oauthInviteToken;
+    }
     passport.authenticate("microsoft", {
       scope: ["user.read", "openid", "profile", "email"],
       prompt: "select_account",
@@ -1226,21 +1240,64 @@ export async function setupAuth(app: Express) {
       // and skip the invalidate→refetch race that Commit A identified.
       // overlayAccountBillingOnUser + sanitizeUserForViewer match GET
       // /api/auth/user's shape so the cache seed is byte-equivalent.
-      req.login(verifiedUser, async (err) => {
-        if (err) {
-          console.error("[verify-email-code] req.login failed:", err);
-          // Even on relogin failure we still return the user — the client
-          // already had a valid session before the verify call, and the
-          // existing session cookie remains intact.
-        }
+      //
+      // Session-stranding fix (July 2026 login-loop incident): NEVER 500
+      // once req.login may have run. Passport 0.7's req.login calls
+      // session.regenerate(), which destroys the caller's current session
+      // row BEFORE any error can surface — so a non-2xx response here can
+      // carry the ONLY surviving sid, which the mobile differing-sid guard
+      // discards → stranded session → silent re-login loop. On overlay
+      // failure, degrade the body instead of erroring.
+      const respondWithUser = async () => {
         try {
           const { password: _pw, ...safeUser } = verifiedUser as any;
           const safeUserWithBilling = await overlayAccountBillingOnUser(safeUser, req);
           res.json(sanitizeUserForViewer(safeUserWithBilling, verifiedUser));
         } catch (overlayErr) {
-          console.error("[verify-email-code] overlay/sanitize failed:", overlayErr);
-          res.status(500).json({ error: "post_verify_serialization_failed" });
+          console.error(
+            "[verify-email-code] billing overlay failed (degrading, NOT 500):",
+            overlayErr,
+          );
+          // Degrade to the sanitized user row WITHOUT the billing overlay —
+          // the client setQueryData's this response into ['/api/auth/user'],
+          // and AppContent gates on fields like profileCompletedAt/role, so
+          // the payload must stay gate-safe. The users row carries all of
+          // those; only the billing overlay fields are missing, and the next
+          // GET /api/auth/user fills them in.
+          try {
+            const { password: _pw2, ...safeUser2 } = verifiedUser as any;
+            res.json(sanitizeUserForViewer(safeUser2, verifiedUser));
+          } catch (sanitizeErr) {
+            // Last resort — sanitize itself failed. Still 2xx (see
+            // stranding note); minimal shape, client must refetch.
+            console.error("[verify-email-code] sanitize failed too:", sanitizeErr);
+            res.json({
+              id: verifiedUser.id,
+              email: verifiedUser.email,
+              emailVerified: true,
+            });
+          }
         }
+      };
+
+      // Skip req.login when the caller is ALREADY authenticated as this
+      // user (the normal mid-onboarding path). serializeUser stores only
+      // user.id — unchanged by verification — and deserializeUser refetches
+      // the row on every request, so re-login adds nothing while its
+      // regenerate() would put a live session at risk for zero benefit.
+      if ((req as any).isAuthenticated?.() && (req as any).user?.id === verifiedUser.id) {
+        return void respondWithUser();
+      }
+
+      // Unauthenticated caller (fresh device / cross-device verify):
+      // req.login is what establishes the session — keep it.
+      req.login(verifiedUser, async (err) => {
+        if (err) {
+          // Still 200 with the user: verification itself succeeded, and a
+          // 500 here could carry a fresh sid (see stranding note above).
+          console.error("[verify-email-code] req.login failed:", err);
+        }
+        await respondWithUser();
       });
     } catch (error) {
       console.error("Verify email code error:", error);
