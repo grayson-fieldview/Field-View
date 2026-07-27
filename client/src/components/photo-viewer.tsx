@@ -290,27 +290,99 @@ export default function PhotoViewer({
     (a) => currentUser?.id && a.userId === currentUser.id,
   );
 
+  // Stroke ids the current edit session was seeded with. Merge rule on save:
+  // final = session strokes ∪ (fresh server strokes NOT in this baseline).
+  // Strokes the session saw and removed (eraser) stay deleted; strokes another
+  // client added after our cache was populated are preserved.
+  const editBaselineIdsRef = useRef<Set<string>>(new Set());
+
+  const strokeIds = (strokes: AnnotationStroke[]) =>
+    new Set(strokes.map((s) => s.id).filter(Boolean));
+
   const saveAnnotation = useMutation({
     mutationFn: async () => {
-      const strokes = annotations.map(shapeToStroke);
-      if (editingAnnotationId && strokes.length === 0) {
-        await apiRequest("DELETE", `/api/annotations/${editingAnnotationId}`);
-        return null;
+      const sessionStrokes = annotations.map(shapeToStroke);
+
+      // Freshness guard: never merge against the render-time TanStack cache.
+      // Refetch the server rows; if that fails, block the save outright —
+      // a blind write here is the destructive stale-PUT hole.
+      let fresh: MediaAnnotation[];
+      try {
+        const res = await fetch(`/api/media/${media.id}/annotations`, { credentials: "include" });
+        if (!res.ok) throw new Error(`${res.status}`);
+        fresh = await res.json();
+      } catch {
+        throw new Error("Could not load the latest annotations — nothing was saved. Check your connection and try again.");
       }
-      if (editingAnnotationId) {
-        const res = await apiRequest(
-          "PUT",
-          `/api/annotations/${editingAnnotationId}`,
-          { strokes },
-        );
+
+      const putMerged = async (rowId: string, strokes: AnnotationStroke[]) => {
+        if (strokes.length === 0) {
+          await apiRequest("DELETE", `/api/annotations/${rowId}`);
+          return null;
+        }
+        const res = await apiRequest("PUT", `/api/annotations/${rowId}`, { strokes });
         return res.json();
+      };
+
+      if (editingAnnotationId) {
+        const freshRow = fresh.find((a) => a.id === editingAnnotationId);
+        const freshStrokes: AnnotationStroke[] = Array.isArray(freshRow?.strokes)
+          ? (freshRow!.strokes as AnnotationStroke[])
+          : [];
+        const baseline = editBaselineIdsRef.current;
+        const unseen = freshStrokes.filter((s) => !s.id || !baseline.has(s.id));
+        const sessionIds = strokeIds(sessionStrokes);
+        const merged = [...unseen.filter((s) => !s.id || !sessionIds.has(s.id)), ...sessionStrokes];
+        if (freshRow) return putMerged(freshRow.id, merged);
+        // Row deleted server-side while we edited — fall through to create/merge.
+        return createOrMerge(merged, fresh);
       }
-      const res = await apiRequest(
-        "POST",
-        `/api/media/${media.id}/annotations`,
-        { strokes },
-      );
-      return res.json();
+
+      return createOrMerge(sessionStrokes, fresh);
+
+      async function createOrMerge(strokes: AnnotationStroke[], freshRows: MediaAnnotation[]) {
+        // If any row(s) already exist for this user, merge into one instead of
+        // POSTing a duplicate (the old behavior that caused divergence).
+        const mine = freshRows.filter((a) => currentUser?.id && a.userId === currentUser.id);
+        if (mine.length > 0) {
+          // Union across all my rows in createdAt order (API returns asc),
+          // dedupe by stroke id, session strokes win/append last.
+          const seen = new Set<string>();
+          const union: AnnotationStroke[] = [];
+          const sessionIds = strokeIds(strokes);
+          for (const row of mine) {
+            const rs = Array.isArray(row.strokes) ? (row.strokes as AnnotationStroke[]) : [];
+            for (const s of rs) {
+              if (s.id && (seen.has(s.id) || sessionIds.has(s.id))) continue;
+              if (s.id) seen.add(s.id);
+              union.push(s);
+            }
+          }
+          // PUT into the newest of my rows (mobile renders the newest one;
+          // pre-migration duplicates stay visible everywhere until merged).
+          const target = mine[mine.length - 1];
+          return putMerged(target.id, [...union, ...strokes]);
+        }
+        if (strokes.length === 0) return null;
+        try {
+          const res = await apiRequest("POST", `/api/media/${media.id}/annotations`, { strokes });
+          return res.json();
+        } catch (err: any) {
+          // Unique index (media_id, user_id): concurrent create → 409.
+          // Re-read and merge into the winning row instead of failing.
+          if (typeof err?.message === "string" && err.message.startsWith("409")) {
+            const res = await fetch(`/api/media/${media.id}/annotations`, { credentials: "include" });
+            if (!res.ok) throw new Error("Save conflicted and the retry could not load the latest annotations — nothing was saved.");
+            const rows: MediaAnnotation[] = await res.json();
+            const row = rows.find((a) => currentUser?.id && a.userId === currentUser.id);
+            if (!row) throw err;
+            const rs = Array.isArray(row.strokes) ? (row.strokes as AnnotationStroke[]) : [];
+            const sessionIds = strokeIds(strokes);
+            return putMerged(row.id, [...rs.filter((s) => !s.id || !sessionIds.has(s.id)), ...strokes]);
+          }
+          throw err;
+        }
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({
@@ -322,6 +394,7 @@ export default function PhotoViewer({
       setAnnotations([]);
       setCurrentShape(null);
       setEditingAnnotationId(null);
+      editBaselineIdsRef.current = new Set();
       setIsAnnotating(false);
       toast({ title: "Annotations saved" });
     },
@@ -375,6 +448,7 @@ export default function PhotoViewer({
       ? (myExistingAnnotation.strokes as AnnotationStroke[])
       : [];
     setAnnotations(strokes.map(strokeToShape));
+    editBaselineIdsRef.current = strokeIds(strokes);
     setEditingAnnotationId(myExistingAnnotation.id);
     setIsAnnotating(true);
     setShowOverlay(true);
@@ -552,6 +626,11 @@ export default function PhotoViewer({
       setAnnotations([]);
       setCurrentShape(null);
       setDrawStart(null);
+      // Reset edit state — a stale editingAnnotationId would PUT the next
+      // photo's strokes onto the previous photo's annotation row.
+      setEditingAnnotationId(null);
+      editBaselineIdsRef.current = new Set();
+      setIsAnnotating(false);
       onNavigate(allMedia[currentIndex - 1]);
     }
   }, [currentIndex, allMedia, onNavigate]);
@@ -561,6 +640,9 @@ export default function PhotoViewer({
       setAnnotations([]);
       setCurrentShape(null);
       setDrawStart(null);
+      setEditingAnnotationId(null);
+      editBaselineIdsRef.current = new Set();
+      setIsAnnotating(false);
       onNavigate(allMedia[currentIndex + 1]);
     }
   }, [currentIndex, allMedia, onNavigate]);
@@ -750,6 +832,7 @@ export default function PhotoViewer({
       const row = drag.source.row;
       const allStrokes = Array.isArray(row.strokes) ? (row.strokes as AnnotationStroke[]) : [];
       setAnnotations(allStrokes.map(strokeToShape));
+      editBaselineIdsRef.current = strokeIds(allStrokes);
       setEditingAnnotationId(row.id);
       drag.promoted = true;
     }
@@ -903,10 +986,12 @@ export default function PhotoViewer({
     if (annotationTool === "eraser") {
       const remaining = allStrokes.filter((s) => !(isTextStroke(s) && s.id === t.id));
       setAnnotations(remaining.map(strokeToShape));
+      editBaselineIdsRef.current = strokeIds(allStrokes);
       setEditingAnnotationId(row.id);
       return;
     }
     setAnnotations(allStrokes.map(strokeToShape));
+    editBaselineIdsRef.current = strokeIds(allStrokes);
     setEditingAnnotationId(row.id);
     setAnnotationFontSize(t.fontSize);
     setTextInput({ x: t.x, y: t.y, content: t.content, editingId: t.id });

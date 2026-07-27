@@ -1327,7 +1327,13 @@ export async function registerRoutes(
         strokes: parsedStrokes.data,
       });
       res.status(201).json(created);
-    } catch (error) {
+    } catch (error: any) {
+      // Unique index media_annotations_media_user_uniq: one row per
+      // (media, user). A concurrent/stray POST gets 409 so the client can
+      // fall back to merge-and-PUT instead of silently diverging.
+      if (error?.code === "23505" || error?.cause?.code === "23505") {
+        return res.status(409).json({ message: "Annotation already exists for this user and media" });
+      }
       res.status(500).json({ message: "Failed to create annotation" });
     }
   });

@@ -76,7 +76,12 @@ export const mediaAnnotations = pgTable("media_annotations", {
   strokes: jsonb("strokes").notNull().default(sql`'[]'::jsonb`),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (table) => [
+  // One annotation row per user per photo. Enforced in the DB (see
+  // scripts/migrations/migrate_media_annotations_dedupe.ts) so two clients
+  // can never diverge into duplicate rows; a stray POST hits 409 instead.
+  uniqueIndex("media_annotations_media_user_uniq").on(table.mediaId, table.userId),
+]);
 
 export const comments = pgTable("comments", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
