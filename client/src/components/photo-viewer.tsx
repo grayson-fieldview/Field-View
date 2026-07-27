@@ -1033,7 +1033,7 @@ export default function PhotoViewer({
         />
       )}
       {!isVideo && showOverlay && allDisplayedStrokes.length > 0 && (
-        <AnnotationOverlay strokes={allDisplayedStrokes} style={imageRectStyle} />
+        <AnnotationOverlay strokes={allDisplayedStrokes} style={imageRectStyle} renderText={false} />
       )}
       {!isVideo && (
         <canvas

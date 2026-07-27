@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import type { AnnotationStroke } from "@shared/schema";
+import type { AnnotationStroke } from "./annotation-types";
 
 interface AnnotationOverlayProps {
   strokes: AnnotationStroke[];

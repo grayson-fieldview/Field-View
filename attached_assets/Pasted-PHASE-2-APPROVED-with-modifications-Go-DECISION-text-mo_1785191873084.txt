@@ -1,0 +1,58 @@
+PHASE 2 — APPROVED, with modifications. Go.
+
+DECISION: text moves onto the shared SVG path, but the full-size viewer keeps
+its HTML divs for now. Do not delete or modify the photo-viewer.tsx HTML text
+layer in this task.
+
+1. AnnotationOverlay: replace `if (s.type === "text") return null` with a real
+   text branch emitting <text>, gated on a new prop:
+
+       renderText?: boolean   // default true
+
+   photo-viewer.tsx passes renderText={false} so its HTML divs remain the only
+   text renderer there and nothing changes visually in the full-size viewer.
+
+   Before implementing: audit and report EVERY call site of AnnotationOverlay.
+   Any caller that has its own HTML text layer must get renderText={false}.
+   Any caller without one gets the default. If you find a call site you cannot
+   confidently classify, stop and ask.
+
+2. Font size. vbH is 1000 and FONT_REFERENCE_HEIGHT is 1000, so the scaling
+   collapses to fontSize={s.fontSize} in user units — meaning "px at a
+   1000px-tall image", i.e. a fixed fraction of image height at every render
+   size. Still route it through an exported resolveFontSize helper rather than
+   inlining the value, because the mobile repo and the future PDF flatten both
+   need to call the identical function.
+
+3. Text anchoring. The HTML divs anchor at top-left of the div. SVG <text>
+   anchors on the baseline by default. Set dominant-baseline="text-before-edge"
+   and text-anchor="start" so the SVG anchor matches the existing HTML
+   semantics and stored coordinates keep meaning the same thing. Report which
+   baseline value you used — the mobile side has an unverified Android issue
+   with this exact attribute.
+
+4. Carry over the HTML layer's visual treatment: fontWeight 600 and an
+   equivalent contrast treatment (SVG paint-order stroke, or a filter). Text on
+   a light photo is unreadable without it — see the orange text in the sample.
+
+5. Thumbnail aspect ratio. project-detail.tsx:1796 passes no aspectRatio, so
+   ar=1 and the overlay stretches. Pass the real image aspect ratio.
+
+   FIRST: report whether the thumbnail <img> uses object-cover, object-contain,
+   or object-fill. If object-cover, the image is CROPPED, not letterboxed, and
+   no viewBox value will align the overlay — report that and leave the aspect
+   ratio alone rather than guessing. If contain or fill, pass the aspect ratio
+   and confirm shapes stop stretching.
+
+CONSTRAINTS
+- No migration, no payload change, render-time only.
+- Full-size viewer must be pixel-identical before and after. Verify explicitly.
+- Do not modify 520d22c's viewBox fix.
+
+VERIFY
+Photo with text plus at least two other stroke types. Confirm: text visible in
+grid thumbnail; thumbnail correct at two or more container widths; full-size
+viewer unchanged. Screenshots before and after for both surfaces.
+
+Finish with `git status -sb` and `git log --oneline -5` and report exactly what
+was committed.
