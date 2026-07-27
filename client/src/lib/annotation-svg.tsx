@@ -93,13 +93,16 @@ function renderStroke(s: AnnotationStroke, vbW: number, vbH: number, renderText:
       <text
         key={s.id}
         x={s.x * vbW}
-        y={s.y * vbH}
+        // Explicit baseline offset instead of dominant-baseline: attribute
+        // support differs across Safari, react-native-svg (Android), and
+        // server-side renderers; arithmetic behaves identically everywhere.
+        // Matches the mobile repo's shipping expression.
+        y={s.y * vbH + fontSize * 0.8}
         fill={s.color}
         fontSize={fontSize}
         fontWeight={600}
         fontFamily="Inter, system-ui, -apple-system, sans-serif"
         textAnchor="start"
-        dominantBaseline="text-before-edge"
         style={{
           // Contrast treatment mirroring the HTML layer's dark text-shadow:
           // dark halo painted under the glyph fill.

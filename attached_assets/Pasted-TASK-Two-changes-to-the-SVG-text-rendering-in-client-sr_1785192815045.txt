@@ -1,0 +1,59 @@
+TASK: Two changes to the SVG text rendering in client/src/lib/annotation-svg.tsx.
+Thumbnail text currently renders too small, and its anchoring needs to change
+to match what the mobile repo is shipping. Neither change should affect the
+full-size viewer, which renders text as HTML divs and does not go through this
+path — confirm that assumption before you start and tell me if it is wrong.
+
+`git status -sb` first. Report branch and working tree state.
+
+CHANGE 1 — ANCHORING
+
+Remove dominant-baseline="text-before-edge" entirely. Do not replace it with
+another baseline attribute. Position the text with an explicit offset instead:
+
+    y = anchorY + resolvedFontSize * 0.8
+
+Keep text-anchor="start". This is deliberate: baseline attribute support
+differs across Safari, react-native-svg on Android, and whatever renderer the
+server-side PDF flatten uses. Arithmetic behaves identically in all of them,
+and the mobile repo is shipping this exact expression right now.
+
+CHANGE 2 — FONT SIZE CALIBRATION
+
+FONT_REFERENCE_HEIGHT = 1000 is wrong. Stored fontSize values are absolute px
+authored against the full-size viewer's fitted image box, which renders far
+shorter than 1000px, so the thumbnail interprets every value as roughly 60% of
+its intended fraction of image height.
+
+I will give you the corrected number. Before I do, report:
+
+  1. The exact CSS/layout constraint that determines the rendered height of
+     the fitted image box in photo-viewer.tsx — max-height, viewport units,
+     flex sizing, whatever governs it. Quote the relevant classes or styles.
+  2. Whether that height is viewport-dependent. If it is, say so plainly
+     rather than picking a representative value.
+  3. Confirm FONT_REFERENCE_HEIGHT has exactly one definition and one export,
+     and list every file that imports it.
+
+Then wait for my number and set it. Add a comment above the constant stating
+what it represents: the full-size viewer's typical fitted-image height in px,
+which is the basis stored fontSize values were authored against. Note in the
+comment that this is a calibration constant and the correct long-term fix is
+storing fontSize as a normalized fraction of image height alongside the
+normalized coordinates.
+
+CONSTRAINTS
+- Render-time only. No schema change, no migration, no change to stored values.
+- Do not touch the HTML text divs in photo-viewer.tsx.
+- Do not touch the fitted-rect coordinate normalization or 520d22c's viewBox
+  fix.
+- Do not change preserveAspectRatio or the thumbnail aspect ratio. The
+  object-cover crop drift is a separate task.
+
+VERIFY
+The app is auth-gated and you cannot log in — do not build a sandbox
+reproduction and present it as verification. Report the diff and let me verify
+in the running app.
+
+Finish with `git status -sb` and `git log --oneline -5`. The checkpoint system
+auto-commits regardless of intent; report exactly what landed.
