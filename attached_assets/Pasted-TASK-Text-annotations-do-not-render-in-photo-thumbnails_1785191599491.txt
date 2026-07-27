@@ -1,0 +1,68 @@
+TASK: Text annotations do not render in photo thumbnails on web. All other
+stroke types (freehand, line, arrow, circle, rectangle) render correctly in
+thumbnails. Text DOES render correctly in the full-size photo viewer.
+
+Do NOT write any code until you complete PHASE 1 and report back.
+
+PHASE 1 — DIAGNOSE (read-only)
+
+First run `git status -sb` and report the current branch and any uncommitted
+changes. Note: there is an unpromoted AnnotationOverlay aspect-ratio/viewBox
+fix in this repo. Report whether it is present in the working tree.
+
+Then locate the two render paths and report on each:
+  A. The full-size annotation overlay (works for text)
+  B. The thumbnail annotation renderer used in the project photo grid (drops text)
+
+For BOTH paths report exactly:
+  1. The SVG viewBox value and preserveAspectRatio value
+  2. How normalized 0-1 stroke coordinates are mapped to render coordinates
+  3. For text strokes specifically: the element emitted, and the exact
+     expression used for fontSize, x, y, fill, and dominant-baseline
+  4. Any guard, filter, or switch statement in the stroke loop that a text
+     stroke could fail — pay particular attention to conditions on
+     points.length, since text strokes carry a single anchor point plus a
+     content string while all shape types carry two or more points
+
+Finally, state which of these is true for the thumbnail path:
+  (a) no <text> element is emitted at all — text is filtered upstream
+  (b) a <text> element is emitted but is invisible due to font size,
+      position, baseline, or fill
+
+Report findings. Do not fix yet.
+
+PHASE 2 — FIX (only after I approve the diagnosis)
+
+If (a): make the thumbnail renderer handle the text stroke type on the same
+code path as the other five. Do not special-case it.
+
+If (b): the underlying cause is that fontSize is the only value in the stroke
+payload that is not normalized. Coordinates are 0-1 so shapes survive any
+render basis; an absolute fontSize does not. Fix by deriving font size from
+the rendered height at draw time, using ONE shared helper called by both the
+overlay and the thumbnail:
+
+    export const FONT_REFERENCE_HEIGHT = 1000;
+    export function resolveFontSize(strokeFontSize, renderedHeightPx) {
+      return (strokeFontSize / FONT_REFERENCE_HEIGHT) * renderedHeightPx;
+    }
+
+CONSTRAINTS
+- No database migration. No change to stored annotation payloads. This is a
+  render-time fix only.
+- Do not change preserveAspectRatio in this task, and do not modify or revert
+  the unpromoted AnnotationOverlay viewBox fix.
+- Text must stay visually unchanged in the full-size viewer. If the shared
+  helper shifts full-size text size, tune FONT_REFERENCE_HEIGHT until
+  full-size matches current appearance, and tell me the value you landed on.
+- Export FONT_REFERENCE_HEIGHT and tell me its final value — the mobile repo
+  has to use the identical constant.
+
+VERIFY
+Test with a photo carrying text plus at least two other stroke types. Confirm
+text appears in the grid thumbnail, in the full-size viewer, and that the
+thumbnail renders correctly at more than one container width. Report before
+and after screenshots.
+
+Run `git status -sb` and `git log --oneline -5` at the end and report exactly
+what was committed.
