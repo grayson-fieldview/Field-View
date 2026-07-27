@@ -1,5 +1,6 @@
 import { db } from "../db";
 import { users, accounts } from "@shared/models/auth";
+import { processedStripeEvents } from "@shared/schema";
 import { eq } from "drizzle-orm";
 import { authStorage } from "../replit_integrations/auth/storage";
 import { isAccountBillingEnabled, computeSeatCountFromSub } from "./billing";
@@ -243,13 +244,32 @@ export async function handleSubscriptionEvent(event: any) {
               || user.email
               || "(unknown)";
             if (!isCompAccount(email)) {
-              const isTrial = (data.amount_total ?? 0) === 0;
-              const emoji = isTrial ? "🆓" : "💰";
-              const label = isTrial ? "Trial signup" : "New paid signup";
               const amount = ((data.amount_total ?? 0) / 100).toFixed(2);
               const currency = (data.currency ?? "usd").toUpperCase();
-              const suffix = isTrial ? "" : ` — $${amount} ${currency}`;
-              sendSlackNotification(`${emoji} ${label}: ${email}${suffix}`).catch(() => {});
+              // 100%-off promo (e.g. BETA100): amount_total is 0 but there is
+              // no future charge to imply. Coupon can live on sub.discount
+              // (classic) or sub.discounts[0] (newer API versions) — check both.
+              const discounts = [
+                subForGhl?.discount,
+                ...(Array.isArray(subForGhl?.discounts) ? subForGhl.discounts : []),
+              ].filter((d: any) => d && typeof d === "object");
+              const fullOffCoupon = discounts
+                .map((d: any) => d.coupon)
+                .find((c: any) => c?.percent_off === 100);
+              let message: string;
+              if ((data.amount_total ?? 0) === 0 && fullOffCoupon) {
+                const code = fullOffCoupon.name || fullOffCoupon.id || "promo";
+                message = `🎟️ Subscribed (100% off — ${code}): ${email}`;
+              } else if ((data.amount_total ?? 0) === 0) {
+                // In-trial checkout: card on file, auto-converts at trial_end.
+                const convertsOn = subForGhl?.trial_end
+                  ? new Date(subForGhl.trial_end * 1000).toISOString().slice(0, 10)
+                  : "(unknown date)";
+                message = `💳 Subscribed (in trial, converts ${convertsOn}): ${email}`;
+              } else {
+                message = `💰 New subscription (charged): ${email} — $${amount} ${currency}`;
+              }
+              sendSlackNotification(message).catch(() => {});
             }
           }
         }
@@ -373,12 +393,27 @@ export async function handleSubscriptionEvent(event: any) {
       // this is the ONLY pre-charge warning hook. Notification-only: no
       // status writes — subscription.updated owns the dual-write.
       //
-      // Idempotency: same posture as every other handler in this chain —
-      // no event-id dedupe store exists; the DB writes elsewhere are
-      // naturally idempotent and Slack/GHL sends are fire-and-forget. A
-      // Stripe redelivery would repeat the Slack message. Acceptable for
-      // an ops alert; GHL workflow-side dedupe handles its end (same
-      // contract as billing_event everywhere else).
+      // Idempotency: UNLIKE the other handlers (whose DB writes are
+      // naturally idempotent and whose Slack messages are ops-only), this
+      // one triggers a customer-facing "your card will be charged" email
+      // via GHL — a Stripe redelivery must not send it twice. Dedupe via
+      // INSERT ... ON CONFLICT DO NOTHING on processed_stripe_events
+      // (event-id PK): first delivery wins, replays skip the whole branch.
+      // A missing event id (malformed replay) proceeds rather than
+      // silently dropping a real warning.
+      if (event.id) {
+        const inserted = await db
+          .insert(processedStripeEvents)
+          .values({ eventId: event.id, eventType: type })
+          .onConflictDoNothing()
+          .returning({ eventId: processedStripeEvents.eventId });
+        if (inserted.length === 0) {
+          console.log(
+            `[stripeWebhook] trial_will_end ${event.id} already processed — skipping redelivery`,
+          );
+          return;
+        }
+      }
       const customerId = data.customer;
       const user = await authStorage.getUserByStripeCustomerId(customerId);
       if (user) {

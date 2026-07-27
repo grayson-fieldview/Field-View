@@ -130,6 +130,19 @@ export const taskPhotos = pgTable("task_photos", {
   unique("task_photos_task_media_uniq").on(table.taskId, table.mediaId),
 ]);
 
+// Stripe webhook event dedupe — currently used ONLY by the
+// customer.subscription.trial_will_end handler, because that event triggers a
+// customer-facing "your card will be charged" email via GHL: a Stripe
+// redelivery must not email the customer twice. The other handlers stay
+// dedupe-free on purpose (their DB writes are naturally idempotent and their
+// Slack messages are ops-only). INSERT ... ON CONFLICT DO NOTHING on the
+// event-id PK is the entire mechanism — first insert wins, replays skip.
+export const processedStripeEvents = pgTable("processed_stripe_events", {
+  eventId: varchar("event_id").primaryKey(), // Stripe event id (evt_...)
+  eventType: text("event_type").notNull(),
+  processedAt: timestamp("processed_at").defaultNow().notNull(),
+});
+
 export const checklists = pgTable("checklists", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }).notNull(),
