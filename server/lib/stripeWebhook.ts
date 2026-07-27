@@ -367,6 +367,107 @@ export async function handleSubscriptionEvent(event: any) {
           );
         }
       }
+    } else if (type === "customer.subscription.trial_will_end") {
+      // Fires ~3 days before trial_end. With auto-conversion live (checkout
+      // creates a real subscription that charges when trial_end passes),
+      // this is the ONLY pre-charge warning hook. Notification-only: no
+      // status writes — subscription.updated owns the dual-write.
+      //
+      // Idempotency: same posture as every other handler in this chain —
+      // no event-id dedupe store exists; the DB writes elsewhere are
+      // naturally idempotent and Slack/GHL sends are fire-and-forget. A
+      // Stripe redelivery would repeat the Slack message. Acceptable for
+      // an ops alert; GHL workflow-side dedupe handles its end (same
+      // contract as billing_event everywhere else).
+      const customerId = data.customer;
+      const user = await authStorage.getUserByStripeCustomerId(customerId);
+      if (user) {
+        // Amount: sum of the subscription's own line items (unit_amount ×
+        // quantity) — the real upcoming charge, not the MRR estimate.
+        let sub: any = data; // event payload IS the subscription object
+        try {
+          const stripe = await getUncachableStripeClient();
+          sub = await stripe.subscriptions.retrieve(data.id, {
+            expand: ["items.data.price.product"],
+          });
+        } catch (e) {}
+        const amountCents = (sub?.items?.data ?? []).reduce(
+          (acc: number, item: any) =>
+            acc + (item?.price?.unit_amount ?? 0) * (item?.quantity ?? 1),
+          0,
+        );
+        const amount = (amountCents / 100).toFixed(2);
+        const convertsOn = data.trial_end
+          ? new Date(data.trial_end * 1000).toISOString().slice(0, 10)
+          : "(unknown date)";
+        const email = user.email || "(unknown)";
+        if (!isCompAccount(email)) {
+          sendSlackNotification(
+            `⏰ Trial converting in 3 days: ${email} — $${amount} on ${convertsOn}`,
+          ).catch(() => {});
+        }
+
+        // S46 GHL billing_event — same contract as every other billing
+        // event: event_type carries the raw Stripe type so the GHL
+        // workflow can branch on it and send the heads-up email.
+        // payment_status maps trialing → "active" per GHL_PAYMENT_STATUS.
+        void sendGhlBillingEvent({
+          eventType: type,
+          stripeStatus: sub?.status ?? data.status ?? "trialing",
+          accountId: user.accountId,
+          sub,
+        });
+      }
+    } else if (type === "invoice.payment_failed") {
+      // Notification-only. Deliberately NO app status writes here:
+      // customer.subscription.updated owns the past_due dual-write and
+      // lapsed_at transitions — Stripe flips the sub to past_due and that
+      // event fires separately, so there is no conflict and no gap.
+      const customerId = data.customer;
+      const user = await authStorage.getUserByStripeCustomerId(customerId);
+      if (user) {
+        const email = data.customer_email || user.email || "(unknown)";
+        const amount = ((data.amount_due ?? 0) / 100).toFixed(2);
+        const currency = (data.currency ?? "usd").toUpperCase();
+        const attempt = data.attempt_count ?? 1;
+        // next_payment_attempt is unix seconds, or null when Stripe has
+        // exhausted retries (final failure).
+        const nextRetry = data.next_payment_attempt
+          ? new Date(data.next_payment_attempt * 1000).toISOString().slice(0, 10)
+          : null;
+        const retrySuffix = nextRetry
+          ? ` — next retry ${nextRetry}`
+          : " — no further retries";
+        if (!isCompAccount(email)) {
+          sendSlackNotification(
+            `⚠️ Payment failed: ${email} — $${amount} ${currency} (attempt ${attempt})${retrySuffix}`,
+          ).catch(() => {});
+        }
+
+        // S46 GHL billing_event for future dunning automation. Plan
+        // derivation needs the subscription's items; the invoice only
+        // carries the sub id, so retrieve it (best-effort — a failed
+        // retrieve degrades to plan:null, event still fires).
+        let subForGhl: any;
+        const subscriptionId =
+          typeof data.subscription === "string"
+            ? data.subscription
+            : data.subscription?.id;
+        if (subscriptionId) {
+          try {
+            const stripe = await getUncachableStripeClient();
+            subForGhl = await stripe.subscriptions.retrieve(subscriptionId, {
+              expand: ["items.data.price.product"],
+            });
+          } catch (e) {}
+        }
+        void sendGhlBillingEvent({
+          eventType: type,
+          stripeStatus: "past_due",
+          accountId: user.accountId,
+          sub: subForGhl,
+        });
+      }
     } else if (type === "customer.subscription.deleted") {
       const customerId = data.customer;
       const user = await authStorage.getUserByStripeCustomerId(customerId);
