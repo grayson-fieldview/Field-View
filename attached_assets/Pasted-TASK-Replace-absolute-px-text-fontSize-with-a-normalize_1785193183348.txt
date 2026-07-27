@@ -1,0 +1,54 @@
+TASK: Replace absolute-px text fontSize with a normalized fraction of image
+height, so text renders at a consistent proportion of the photo on every
+surface and both clients. This removes the need for a calibration constant.
+
+CRITICAL CONSTRAINT — this must be ADDITIVE. Older mobile builds are live in
+TestFlight and on Google Play, still writing and reading absolute px, and
+cannot be force-updated. Do NOT change the meaning of the existing fontSize
+field. Do NOT remove it.
+
+PHASE 1 — PLAN (read-only, report before coding)
+
+Report:
+  1. Where fontSize lives — inside the JSON stroke array in media_annotations,
+     or a real column? If JSON, confirm this needs no DDL, only a Zod change
+     and a data backfill.
+  2. The Zod union definition for the text stroke type and its file path.
+  3. Every write path that sets fontSize on a text stroke (web text commit).
+  4. Every read path that consumes it.
+  5. `SELECT count(*) FROM media_annotations;` and a count of rows whose JSON
+     contains at least one text stroke. Report both. I need to know the
+     backfill size before approving.
+
+PHASE 2 — IMPLEMENT (after approval)
+
+Schema: add an OPTIONAL fontSizeNorm field (0-1 fraction of image height) to
+the text stroke type. fontSize stays required and unchanged in meaning.
+
+Write path: on text commit, write BOTH —
+    fontSize     = typedPx                        (unchanged, legacy)
+    fontSizeNorm = typedPx / fittedRectHeight
+
+Read path, every surface, single shared helper:
+    resolvedPx = (stroke.fontSizeNorm ?? stroke.fontSize / FONT_REFERENCE_HEIGHT)
+                 * renderedHeightPx
+
+Note the fallback keeps FONT_REFERENCE_HEIGHT alive for legacy rows and old-
+client writes. Set it to <N> — I will give you the measured number. Do not
+delete the constant.
+
+Backfill: one-shot script converting existing text strokes, fontSizeNorm =
+fontSize / <N>. Idempotent — skip strokes that already have fontSizeNorm. Show
+me the script and a dry-run row count before running anything. Do not run it
+against prod; I run prod migrations myself following our snapshot → whitelist →
+ALLOW_PROD_MIGRATION → verify → promote → remove-IP order.
+
+Full-size viewer: text must look identical before and after, since it is the
+authoring basis. Verify explicitly.
+
+CONSTRAINTS
+- No changes to coordinate normalization or the viewBox fix.
+- The size picker still shows 14/18/24/32 as UI px; conversion happens at commit.
+- No mobile repo changes — separate task.
+
+Report the diff. Do not build a sandbox reproduction; I verify in the app.
