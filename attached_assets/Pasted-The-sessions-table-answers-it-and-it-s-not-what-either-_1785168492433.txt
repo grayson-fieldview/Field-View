@@ -1,0 +1,40 @@
+The sessions table answers it, and it's not what either of us expected.
+
+23 valid sessions for my user, all with originalMaxAge 1209600000 and
+expire dates 14 days out. The store is healthy — the server is NOT
+dropping sessions.
+
+The problem is the opposite: something is MINTING sessions constantly.
+Eight rows created within six minutes (15:42–15:48), five more in the
+twenty minutes before that. That's not eight logins. 3059 sessions exist
+table-wide for a handful of users.
+
+This also explains the client behavior: the phone isn't losing its
+cookie, it's being handed a NEW sid over and over. Our guard correctly
+discards a differing sid on a non-2xx — which is exactly the "fresh
+anonymous sid" hazard case. Eventually the sid the phone holds stops
+being honored.
+
+One anomaly worth checking: my newest row has expire 2026-08-10 15:54:05
+but cookie_expires 2026-08-06T21:19:13. Four days apart. Every other row
+has them matching to the second.
+
+INVESTIGATE (read-only, report before fixing):
+- What creates a session row on a request that already carries a valid
+  session cookie? saveUninitialized is false, so something must be
+  WRITING to req.session on paths that shouldn't. Walk every middleware
+  and route that touches req.session — including passport, CSRF,
+  attribution, and anything that calls req.session.regenerate() or
+  req.session.save().
+- The July 14 attributionCapture incident (e6437ed) was exactly this
+  class of bug and was supposedly fixed by skipping /api/*. Verify that
+  fix is still in place and actually covers the mobile request paths.
+  Mobile sends X-FieldView-Client: mobile-1 — does anything branch on
+  that in a way that touches the session?
+- Does any path call regenerate() on login-adjacent requests? Passport's
+  session.regenerate on every authenticated request would produce
+  exactly this pattern.
+- Explain the expire vs cookie_expires divergence on the newest row.
+
+This is a server-side bug, so it's the web repo. Report what's minting
+sessions before changing anything.
