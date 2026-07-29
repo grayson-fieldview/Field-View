@@ -1,0 +1,64 @@
+Implement server-side thumbnail renditions, per your earlier
+investigation. You recommended approach B (generate with sharp in the
+existing media registration handler, no new AWS infra) — that's what
+we're doing.
+
+Run `git status -sb` first and report the real state.
+
+SCOPE
+
+1. Schema
+   - Add nullable `thumb_url text` to the media table (schema.ts +
+     migration script).
+   - Migration script must follow our standard pattern: wrapped in
+     db.transaction(), env guard requiring the URL to contain
+     rds.amazonaws.com or neon.tech, ALLOW_PROD_MIGRATION=yes required
+     for RDS, entry-point guard, IF NOT EXISTS on the DDL, logs host
+     (no password) before the DB call.
+
+2. Generation — DEFERRED, not inline
+   In POST /api/projects/:id/media, after the media rows are created,
+   kick off thumbnail generation WITHOUT blocking the response. This
+   endpoint is batched — a user can register 40 photos at once — and
+   we already have 504s in Sentry from function timeouts. Registration
+   must never fail or slow down because of thumbnail work.
+
+   Use the same deferral pattern as the existing CRM syncs.
+   thumb_url lands null first and gets filled in shortly after; both
+   clients already handle null.
+
+   Per photo: getObjectStream(key) → sharp().rotate().resize(400,
+   null, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality:
+   70 }) → upload to photos/thumbs/{same-basename}.jpg → update
+   thumb_url. Failures log and leave thumb_url null — never throw into
+   the request path.
+
+3. HEIC check — REPORT BEFORE IMPLEMENTING
+   Our S3 keys preserve client extensions, so .heic objects exist.
+   Verify sharp can actually decode HEIC in the Vercel runtime (check
+   whether libvips is built with HEIF support). The existing PDF
+   pipeline runs sharp on these same objects, so if HEIC fails, that
+   feature may be silently broken too. Tell me what you find before
+   writing the generation code.
+
+4. Serializers
+   Include thumb_url in every API response that returns media. List
+   which endpoints you touched.
+
+5. Backfill script
+   Resumable and idempotent — select WHERE thumb_url IS NULL, process
+   sequentially, log progress, safe to re-run. Same env guard pattern
+   as the migrations. Include a DRY_RUN mode. ~3,216 rows expected.
+
+6. Cache headers
+   Set a long max-age + immutable on the thumbnail objects at upload
+   (they're immutable at distinct keys).
+
+CONSTRAINTS
+- Do not touch the mobile repo — that's a separate change.
+- Do not run the prod migration. Show me the script; I run it.
+- Show me the diff and stop. No commit, no push without approval.
+- Remove any Pasted-Goal-* artifacts from attached_assets before
+  anything is staged.
+
+Report file by file, and flag anything you compromised on.
