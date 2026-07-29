@@ -22,6 +22,7 @@ import { eq, sql, and, or, inArray, count, isNull, desc } from "drizzle-orm";
 import { sanitizeUserForViewer, sanitizeTimeEntryForViewer, isManagerRole } from "./lib/userVisibility";
 import { z } from "zod";
 import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, deleteFromS3, getObjectStream, getS3Url } from "./s3";
+import { queueThumbnailGeneration } from "./lib/thumbnails";
 import archiver from "archiver";
 import { sendInvitationEmail, sendAccountDeletionEmail } from "./services/email";
 import { sendGhlEvent, syncUsageToGhl } from "./lib/ghl";
@@ -705,6 +706,13 @@ export async function registerRoutes(
       // Single bulk insert (one round-trip) instead of N individual inserts,
       // so a 100-file batch doesn't open N connections against the RDS pool.
       const created = await storage.createMediaBatch(mediaRows);
+
+      // Thumbnail renditions — DEFERRED, never in the request path. A batch
+      // can be 40 photos and HEICs take ~1–2s each to decode; registration
+      // must not slow down or fail because of thumbnail work. thumb_url is
+      // null in this response and fills in shortly after (clients handle
+      // null by rendering the full url / on-device cache).
+      queueThumbnailGeneration(created);
 
       // S46 GHL activation_milestone — account crosses ≥1 project AND ≥5
       // photos. Fully fire-and-forget (doesn't delay the upload response).
@@ -5228,6 +5236,7 @@ export async function registerRoutes(
         photos: galleryMedia.map(m => ({
           id: m.id,
           url: m.url,
+          thumbUrl: m.thumbUrl ?? null,
           caption: gallery.includeDescriptions ? m.caption : null,
           createdAt: gallery.includeMetadata ? m.createdAt : null,
           uploadedBy: gallery.includeMetadata && m.uploadedBy ? {

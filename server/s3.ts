@@ -70,6 +70,29 @@ export async function uploadToS3(
   return { key, url: getS3Url(key) };
 }
 
+/**
+ * Put an object at an EXACT key (unlike uploadToS3, which generates one),
+ * with optional Cache-Control. Used for derived renditions (thumbnails)
+ * whose keys are deterministic and whose content is immutable.
+ */
+export async function putObject(
+  key: string,
+  body: Buffer,
+  contentType: string,
+  cacheControl?: string
+): Promise<string> {
+  await s3Client.send(
+    new PutObjectCommand({
+      Bucket: BUCKET,
+      Key: key,
+      Body: body,
+      ContentType: contentType,
+      ...(cacheControl ? { CacheControl: cacheControl } : {}),
+    })
+  );
+  return getS3Url(key);
+}
+
 export async function deleteFromS3(key: string): Promise<void> {
   await s3Client.send(
     new DeleteObjectCommand({

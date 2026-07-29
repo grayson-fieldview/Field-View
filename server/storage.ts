@@ -1581,7 +1581,7 @@ export class DatabaseStorage implements IStorage {
     // bounded; revisit with pagination if any project hits the cap.
     // TODO: paginate if soft cap is regularly reached.
     const photos = await db
-      .select({ id: media.id, url: media.url, takenAt: media.createdAt })
+      .select({ id: media.id, url: media.url, thumbUrl: media.thumbUrl, takenAt: media.createdAt })
       .from(media)
       .where(and(eq(media.projectId, project.id), like(media.mimeType, "image/%")))
       .orderBy(desc(media.createdAt))

@@ -60,6 +60,10 @@ export const media = pgTable("media", {
   originalName: text("original_name").notNull(),
   mimeType: text("mime_type").notNull(),
   url: text("url").notNull(),
+  // Server-generated 400px JPEG rendition (CloudFront URL). Nullable: filled
+  // shortly after registration by deferred generation, or by the backfill.
+  // Clients render thumbUrl ?? url.
+  thumbUrl: text("thumb_url"),
   caption: text("caption"),
   latitude: real("latitude"),
   longitude: real("longitude"),

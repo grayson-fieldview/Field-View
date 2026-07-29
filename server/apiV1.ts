@@ -132,6 +132,7 @@ apiV1Router.get("/photos", async (req, res) => {
         projectName: projects.name,
         projectAddress: projects.address,
         url: media.url,
+        thumbUrl: media.thumbUrl,
         caption: media.caption,
         tags: media.tags,
         latitude: media.latitude,
@@ -160,6 +161,8 @@ apiV1Router.get("/photos", async (req, res) => {
           address: r.projectAddress,
         },
         url: permanentUrl(r.url),
+        // Nullable 400px rendition; consumers render thumb_url ?? url.
+        thumb_url: r.thumbUrl ? permanentUrl(r.thumbUrl) : null,
         caption: r.caption,
         tags: r.tags ?? [],
         latitude: r.latitude,
