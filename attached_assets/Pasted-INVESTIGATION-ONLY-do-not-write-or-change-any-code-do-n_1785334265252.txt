@@ -1,0 +1,55 @@
+INVESTIGATION ONLY — do not write or change any code, do not commit.
+
+Run `git status -sb` and report the actual state first.
+
+Context: the mobile app had a memory crash because the photo grid
+decoded full-resolution originals — there is no thumbnail rendition
+anywhere in the system. We shipped an on-device thumbnail cache as a
+stopgap. I'm now scoping the durable fix: a real server-side
+thumbnail rendition. CloudFront is already in front of S3.
+
+Report on:
+
+1. CloudFront setup. Which distribution serves photos, what's the
+   origin, and what's the cache behavior config? Are there existing
+   Lambda@Edge functions or CloudFront Functions attached?
+
+2. URL generation. Trace how a media row's URL is produced and
+   returned to clients. Specifically:
+   - Is it a CloudFront hostname or a direct S3 URL?
+   - Are these signed URLs (CloudFront signed URLs / S3 presigned)
+     or public? If signed, what's the TTL, and would appending query
+     parameters break the signature?
+   - Is the URL stored in the DB or constructed at read time?
+
+3. Upload path. How do photo bytes get to S3 — direct presigned PUT
+   from the client, or proxied through our backend? Does any
+   server-side code ever hold the image bytes? What's the S3 key
+   naming scheme?
+
+4. Schema. What columns does the media table have today? Is there any
+   existing variant/thumbnail/derivative column, used or unused?
+   What would adding a nullable thumb_url cost?
+
+5. Existing image processing. Is sharp, jimp, or any image library
+   already a dependency anywhere in the backend? Is there any
+   existing resize/derivative code (report generation, PDF export,
+   email)?
+
+6. Volume for a backfill. How many media rows exist in production
+   total, and roughly what's the total S3 object size? I want to
+   scope what a one-off thumbnail backfill would cost in time and
+   money.
+
+Then give me a recommendation across these three approaches, with
+rough effort estimates:
+  A. Dynamic resize at the edge (Lambda@Edge / CloudFront Function)
+  B. Generate at upload server-side (S3 event → Lambda with sharp)
+  C. Generate on the client at capture, upload both, store thumb_url
+
+For whichever you recommend, note what the mobile client would need
+to change to consume it, and how it should interact with the
+on-device thumbnail cache we just shipped (that cache should stay as
+the fallback for pending/unsynced local photos).
+
+Do NOT implement anything. Report and stop.
