@@ -1,0 +1,49 @@
+INVESTIGATE ONLY. Make NO code changes. Read-only. Report findings as a
+numbered list.
+
+Context: the project detail page has a "Files" tab that renders an empty
+state ("No files yet — Files and documents for this project will appear
+here"). I need to know whether this is a working feature or a placeholder.
+
+1. FILES TAB COMPONENT
+   - Find the Files tab in client/src/pages/project-detail.tsx (or wherever
+     the tab bar lives). What component renders its contents?
+   - Does it call a useQuery against a real endpoint, or is the empty state
+     hardcoded with no data fetching at all?
+   - Is there any upload UI (button, drop zone, file input) in that
+     component, even if disabled or hidden?
+
+2. SCHEMA
+   - Search shared/schema.ts for any table resembling files, documents, or
+     attachments. Report the exact table name and full column list if found.
+   - If nothing exists: describe the `media` table's full column list, and
+     tell me whether it has a type/kind discriminator column distinguishing
+     images from videos, and what the enum values are.
+
+3. API SURFACE
+   - rg for route definitions containing "files" or "documents" in
+     server/routes.ts and any other route files. Report method + path +
+     what they do.
+   - If none exist, say so explicitly.
+
+4. UPLOAD SIGN ENDPOINT
+   - Find the presigned-URL endpoint (POST /api/uploads/sign or similar).
+     Show me the handler.
+   - Does it validate contentType against an allowlist? If yes, list the
+     exact allowed MIME types.
+   - Is there a file size cap enforced, and what is it?
+   - What S3 key prefix pattern does it generate? (e.g. accounts/:id/...)
+
+5. DELIVERY
+   - Are S3 objects served through CloudFront publicly, or via signed URLs?
+   - Is there any Content-Disposition or Content-Type handling on upload
+     that would affect how a browser handles a PDF vs an image?
+
+6. AUTHORIZATION PATTERN
+   - Show me how an existing project-scoped resource gates access for the
+     `restricted` role (project_assignments join). Name the middleware or
+     helper used — I want the new endpoints to match it exactly.
+
+Output: numbered findings 1-6. Then state plainly whether Files is (a) fully
+built, (b) partially built, or (c) a placeholder with no backend.
+Make NO code changes.
