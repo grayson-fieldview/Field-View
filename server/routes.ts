@@ -886,6 +886,52 @@ export async function registerRoutes(
     }
   });
 
+  app.patch("/api/files/:fileId", requireWriteAccess, async (req: any, res) => {
+    try {
+      const fileId = parseInt(req.params.fileId as string);
+      if (Number.isNaN(fileId)) return res.status(400).json({ message: "Invalid file id" });
+      const file = await storage.getProjectFile(fileId);
+      if (!file) return res.status(404).json({ message: "File not found" });
+      const project = await storage.getProject(file.projectId);
+      if (!project) return res.status(404).json({ message: "File not found" });
+      if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
+      if (req.user.role === "restricted") {
+        const [assignment] = await db.select().from(projectAssignments)
+          .where(and(eq(projectAssignments.projectId, file.projectId), eq(projectAssignments.userId, req.user.id)));
+        if (!assignment && project.createdById !== req.user.id) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+        // Restricted users may only rename files they uploaded themselves
+        // (same rule as DELETE).
+        if (file.uploadedById !== req.user.id) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+      }
+
+      if (typeof req.body?.displayName !== "string") {
+        return res.status(400).json({ message: "displayName must be a string" });
+      }
+      // Strip control characters (they break rendering); keep spaces,
+      // punctuation, "#", and unicode as-is. Then trim.
+      const displayName = req.body.displayName.replace(/[\x00-\x1f\x7f]/g, "").trim();
+      if (displayName.length === 0) {
+        return res.status(400).json({ message: "displayName cannot be empty" });
+      }
+      if (displayName.length > 255) {
+        return res.status(400).json({ message: "displayName cannot exceed 255 characters" });
+      }
+
+      // Updates ONLY display_name — filename, url, mimeType, originalName,
+      // and the S3 object are untouched.
+      const updated = await storage.updateProjectFileDisplayName(fileId, displayName);
+      if (!updated) return res.status(404).json({ message: "File not found" });
+      res.json(updated);
+    } catch (error) {
+      console.error("Failed to rename project file", error);
+      res.status(500).json({ message: "Failed to rename file" });
+    }
+  });
+
   app.delete("/api/files/:fileId", requireWriteAccess, async (req: any, res) => {
     try {
       const fileId = parseInt(req.params.fileId as string);

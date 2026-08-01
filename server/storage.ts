@@ -151,6 +151,7 @@ export interface IStorage {
   getProjectFilesByProject(projectId: number): Promise<(ProjectFile & { uploadedByName: string | null })[]>;
   getProjectFile(id: number): Promise<ProjectFile | undefined>;
   createProjectFilesBatch(items: InsertProjectFile[]): Promise<ProjectFile[]>;
+  updateProjectFileDisplayName(id: number, displayName: string): Promise<ProjectFile | undefined>;
   deleteProjectFile(id: number): Promise<void>;
   updateMedia(id: number, data: { caption?: string; tags?: string[] }): Promise<Media | undefined>;
   deleteMedia(id: number): Promise<void>;
@@ -528,6 +529,14 @@ export class DatabaseStorage implements IStorage {
   async createProjectFilesBatch(items: InsertProjectFile[]): Promise<ProjectFile[]> {
     if (items.length === 0) return [];
     return db.insert(projectFiles).values(items).returning();
+  }
+
+  async updateProjectFileDisplayName(id: number, displayName: string): Promise<ProjectFile | undefined> {
+    const [updated] = await db.update(projectFiles)
+      .set({ displayName })
+      .where(eq(projectFiles.id, id))
+      .returning();
+    return updated;
   }
 
   async deleteProjectFile(id: number): Promise<void> {

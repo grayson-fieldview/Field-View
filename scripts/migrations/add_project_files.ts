@@ -57,6 +57,7 @@ export async function addProjectFiles(): Promise<void> {
         uploaded_by_id varchar REFERENCES users(id),
         filename text NOT NULL,
         original_name text NOT NULL,
+        display_name text,
         mime_type text NOT NULL,
         url text NOT NULL,
         size_bytes integer,

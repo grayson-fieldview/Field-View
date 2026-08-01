@@ -82,7 +82,10 @@ export const projectFiles = pgTable("project_files", {
   projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }).notNull(),
   uploadedById: varchar("uploaded_by_id").references(() => users.id),
   filename: text("filename").notNull(),       // S3 key
-  originalName: text("original_name").notNull(),
+  originalName: text("original_name").notNull(), // immutable after insert
+  // User-editable rename; null = never renamed. Clients decide whether to
+  // render displayName ?? originalName — the server never collapses them.
+  displayName: text("display_name"),
   mimeType: text("mime_type").notNull(),
   url: text("url").notNull(),                 // CloudFront URL
   sizeBytes: integer("size_bytes"),
