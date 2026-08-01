@@ -90,6 +90,8 @@ import {
   Pencil,
   Download,
   Play,
+  File as FileIcon,
+  FileSpreadsheet,
 } from "lucide-react";
 import {
   Tooltip,
@@ -101,10 +103,39 @@ import { useLocation, Link } from "wouter";
 import { LayoutTemplate } from "lucide-react";
 import ReportFormDialog from "@/components/report-form-dialog";
 import { AddressAutocomplete } from "@/components/address-autocomplete";
-import type { Project, Media, Comment, Task, Checklist, ChecklistItem, Report, ChecklistTemplate, ChecklistTemplateItem, MediaAnnotation, AnnotationStroke } from "@shared/schema";
+import type { Project, Media, Comment, Task, Checklist, ChecklistItem, Report, ChecklistTemplate, ChecklistTemplateItem, MediaAnnotation, AnnotationStroke, ProjectFile } from "@shared/schema";
 import type { User } from "@shared/models/auth";
 import { AnnotationOverlay } from "@/lib/annotation-svg";
 import { UploadPhotosDialog } from "@/components/upload-photos-dialog";
+import { UploadFilesDialog } from "@/components/upload-files-dialog";
+
+type ProjectFileWithUploader = ProjectFile & { uploadedByName: string | null };
+
+function fileIconForMime(mimeType: string): typeof FileText {
+  if (mimeType === "application/pdf") return FileText;
+  if (
+    mimeType === "application/vnd.ms-excel" ||
+    mimeType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+    mimeType === "text/csv" ||
+    mimeType === "application/csv"
+  )
+    return FileSpreadsheet;
+  if (
+    mimeType === "application/msword" ||
+    mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+    mimeType === "text/plain"
+  )
+    return FileText;
+  if (mimeType.startsWith("image/")) return ImageIcon;
+  return FileIcon;
+}
+
+function formatFileSize(bytes: number | null | undefined): string | null {
+  if (bytes == null || !Number.isFinite(bytes)) return null;
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 type ProjectMember = {
   id: number;
@@ -292,6 +323,8 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const [pendingCameraFiles, setPendingCameraFiles] = useState<File[] | null>(null);
   const [membersOpen, setMembersOpen] = useState(false);
   const [addUserId, setAddUserId] = useState<string>("");
+  const [uploadFilesOpen, setUploadFilesOpen] = useState(false);
+  const [confirmDeleteFile, setConfirmDeleteFile] = useState<ProjectFileWithUploader | null>(null);
 
   const [filterStartDate, setFilterStartDate] = useState<Date | undefined>(undefined);
   const [filterEndDate, setFilterEndDate] = useState<Date | undefined>(undefined);
@@ -314,6 +347,24 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     () => new Map(accountUsers.map((u) => [u.id, u.role])),
     [accountUsers],
   );
+
+  const { data: projectFiles = [], isLoading: filesLoading } = useQuery<ProjectFileWithUploader[]>({
+    queryKey: ["/api/projects", id, "files"],
+  });
+
+  const deleteFile = useMutation({
+    mutationFn: async (fileId: number) => {
+      await apiRequest("DELETE", `/api/files/${fileId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", id, "files"] });
+      setConfirmDeleteFile(null);
+      toast({ title: "File deleted" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to delete file", description: error.message, variant: "destructive" });
+    },
+  });
 
   const addMember = useMutation({
     mutationFn: async (userId: string) => {
@@ -921,7 +972,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     { key: "tasks", label: "Tasks", count: projectTasks.length },
     { key: "checklists", label: "Checklists", count: projectChecklists.length },
     { key: "reports", label: "Reports", count: projectReports.length },
-    { key: "files", label: "Files", count: 0 },
+    { key: "files", label: "Files", count: projectFiles.length },
     { key: "daily-log", label: "Daily Log", count: 0 },
   ];
 
@@ -2139,18 +2190,46 @@ export default function ProjectDetailPage({ id }: { id: string }) {
           )}
 
           {activeTab === "files" && (
-            <div className="px-4 sm:px-6 py-4">
-              <Card className="p-12">
-                <div className="text-center space-y-3">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-md bg-muted mx-auto">
-                    <FileText className="h-6 w-6 text-muted-foreground" />
-                  </div>
-                  <h3 className="text-lg font-semibold">No files yet</h3>
-                  <p className="text-sm text-muted-foreground max-w-sm mx-auto">
-                    Files and documents for this project will appear here.
-                  </p>
+            <div className="px-4 sm:px-6 py-4 space-y-4">
+              <div className="flex items-center justify-end">
+                <Button onClick={() => setUploadFilesOpen(true)} data-testid="button-add-files">
+                  <Upload className="h-4 w-4 mr-2" />
+                  Add Files
+                </Button>
+              </div>
+              {filesLoading ? (
+                <div className="space-y-2" data-testid="loading-files">
+                  {[0, 1, 2].map((i) => (
+                    <Skeleton key={i} className="h-16 w-full rounded-md" />
+                  ))}
                 </div>
-              </Card>
+              ) : projectFiles.length === 0 ? (
+                <Card className="p-12">
+                  <div className="text-center space-y-3">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-md bg-muted mx-auto">
+                      <FileText className="h-6 w-6 text-muted-foreground" />
+                    </div>
+                    <h3 className="text-lg font-semibold">No files yet</h3>
+                    <p className="text-sm text-muted-foreground max-w-sm mx-auto">
+                      Files and documents for this project will appear here.
+                    </p>
+                  </div>
+                </Card>
+              ) : (
+                <div className="space-y-2" data-testid="list-project-files">
+                  {projectFiles.map((file) => (
+                    <ProjectFileRow
+                      key={file.id}
+                      file={file}
+                      projectId={id}
+                      canModify={
+                        !!user && (user.role !== "restricted" || file.uploadedById === user.id)
+                      }
+                      onDelete={() => setConfirmDeleteFile(file)}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -2159,6 +2238,38 @@ export default function ProjectDetailPage({ id }: { id: string }) {
           )}
         </div>
       </div>
+
+      <UploadFilesDialog projectId={id} open={uploadFilesOpen} onOpenChange={setUploadFilesOpen} />
+
+      <AlertDialog
+        open={confirmDeleteFile !== null}
+        onOpenChange={(open) => {
+          if (!open && !deleteFile.isPending) setConfirmDeleteFile(null);
+        }}
+      >
+        <AlertDialogContent data-testid="dialog-confirm-delete-file">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete file?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently remove "{confirmDeleteFile ? (confirmDeleteFile.displayName ?? confirmDeleteFile.originalName) : ""}".
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteFile.isPending} data-testid="button-cancel-delete-file">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                if (confirmDeleteFile !== null && !deleteFile.isPending) deleteFile.mutate(confirmDeleteFile.id);
+              }}
+              disabled={deleteFile.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-delete-file"
+            >
+              {deleteFile.isPending ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {selectedMedia && (
         <PhotoViewer
@@ -2719,6 +2830,176 @@ function ChecklistCard({
             onDeleted={onDeleted}
           />
         </div>
+      )}
+    </Card>
+  );
+}
+
+function ProjectFileRow({
+  file,
+  projectId,
+  canModify,
+  onDelete,
+}: {
+  file: ProjectFileWithUploader;
+  projectId: string;
+  canModify: boolean;
+  onDelete: () => void;
+}) {
+  const { toast } = useToast();
+  const displayedName = file.displayName ?? file.originalName;
+  const [isEditing, setIsEditing] = useState(false);
+  const [editValue, setEditValue] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  // Guards the blur handler: Enter saves then blurs, Escape cancels then
+  // blurs — either way blur must not double-fire a save.
+  const settledRef = useRef(false);
+
+  useEffect(() => {
+    if (isEditing) inputRef.current?.focus();
+  }, [isEditing]);
+
+  const renameMutation = useMutation({
+    mutationFn: async (displayName: string) => {
+      const res = await apiRequest("PATCH", `/api/files/${file.id}`, { displayName });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "files"] });
+      setIsEditing(false);
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to rename file", description: error.message, variant: "destructive" });
+      setIsEditing(false);
+    },
+  });
+
+  const startEditing = () => {
+    setEditValue(displayedName);
+    settledRef.current = false;
+    setIsEditing(true);
+  };
+
+  const saveEdit = () => {
+    if (settledRef.current) return;
+    settledRef.current = true;
+    const trimmed = editValue.trim();
+    if (!trimmed) {
+      toast({ title: "Name cannot be empty", variant: "destructive" });
+      setIsEditing(false);
+      return;
+    }
+    if (trimmed.length > 255) {
+      toast({ title: "Name too long", description: "Maximum 255 characters.", variant: "destructive" });
+      setIsEditing(false);
+      return;
+    }
+    if (trimmed === displayedName) {
+      setIsEditing(false);
+      return;
+    }
+    renameMutation.mutate(trimmed);
+  };
+
+  const cancelEdit = () => {
+    settledRef.current = true;
+    setIsEditing(false);
+  };
+
+  const Icon = fileIconForMime(file.mimeType);
+  const size = formatFileSize(file.sizeBytes);
+  const dateStr = file.createdAt
+    ? new Date(file.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+    : null;
+  const secondary = [file.uploadedByName, dateStr].filter(Boolean).join(" · ");
+
+  return (
+    <Card
+      role="button"
+      tabIndex={0}
+      className="p-3 flex items-center gap-3 hover-elevate cursor-pointer focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      onClick={() => {
+        if (!isEditing) window.open(file.url, "_blank", "noopener,noreferrer");
+      }}
+      onKeyDown={(e) => {
+        if (isEditing || e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          window.open(file.url, "_blank", "noopener,noreferrer");
+        }
+      }}
+      aria-label={`Open ${displayedName}`}
+      data-testid={`row-file-${file.id}`}
+    >
+      <div className="flex h-9 w-9 items-center justify-center rounded-md bg-muted shrink-0">
+        <Icon className="h-4 w-4 text-muted-foreground" />
+      </div>
+      <div className="flex-1 min-w-0">
+        {isEditing ? (
+          <Input
+            ref={inputRef}
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                saveEdit();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                cancelEdit();
+              }
+            }}
+            onBlur={saveEdit}
+            maxLength={255}
+            className="h-8"
+            disabled={renameMutation.isPending}
+            data-testid={`input-rename-file-${file.id}`}
+          />
+        ) : (
+          <p className="text-sm font-medium truncate" data-testid={`text-file-name-${file.id}`}>
+            {displayedName}
+          </p>
+        )}
+        {secondary && (
+          <p className="text-xs text-muted-foreground truncate mt-0.5" data-testid={`text-file-meta-${file.id}`}>
+            {secondary}
+          </p>
+        )}
+      </div>
+      {size && (
+        <span className="text-xs text-muted-foreground shrink-0" data-testid={`text-file-size-${file.id}`}>
+          {size}
+        </span>
+      )}
+      {canModify && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 shrink-0"
+              onClick={(e) => e.stopPropagation()}
+              data-testid={`button-file-menu-${file.id}`}
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+            <DropdownMenuItem onClick={startEditing} data-testid={`menu-rename-file-${file.id}`}>
+              <Pencil className="h-4 w-4 mr-2" />
+              Rename
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={onDelete}
+              className="text-destructive focus:text-destructive"
+              data-testid={`menu-delete-file-${file.id}`}
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       )}
     </Card>
   );
