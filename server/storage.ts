@@ -148,7 +148,7 @@ export interface IStorage {
   getMedia(id: number): Promise<Media | undefined>;
   createMedia(item: InsertMedia): Promise<Media>;
   createMediaBatch(items: InsertMedia[]): Promise<Media[]>;
-  getProjectFilesByProject(projectId: number): Promise<ProjectFile[]>;
+  getProjectFilesByProject(projectId: number): Promise<(ProjectFile & { uploadedByName: string | null })[]>;
   getProjectFile(id: number): Promise<ProjectFile | undefined>;
   createProjectFilesBatch(items: InsertProjectFile[]): Promise<ProjectFile[]>;
   deleteProjectFile(id: number): Promise<void>;
@@ -499,10 +499,25 @@ export class DatabaseStorage implements IStorage {
     await db.delete(media).where(eq(media.id, id));
   }
 
-  async getProjectFilesByProject(projectId: number): Promise<ProjectFile[]> {
-    return db.select().from(projectFiles)
+  async getProjectFilesByProject(projectId: number): Promise<(ProjectFile & { uploadedByName: string | null })[]> {
+    // Same single LEFT JOIN pattern as getMediaByProject's uploader join;
+    // flattened to one display-name string like apiV1's uploaded_by.name.
+    const rows = await db
+      .select({
+        file: projectFiles,
+        uploaderFirstName: users.firstName,
+        uploaderLastName: users.lastName,
+      })
+      .from(projectFiles)
+      .leftJoin(users, eq(projectFiles.uploadedById, users.id))
       .where(eq(projectFiles.projectId, projectId))
       .orderBy(desc(projectFiles.createdAt));
+
+    return rows.map((r) => ({
+      ...r.file,
+      uploadedByName:
+        [r.uploaderFirstName, r.uploaderLastName].filter(Boolean).join(" ") || null,
+    }));
   }
 
   async getProjectFile(id: number): Promise<ProjectFile | undefined> {

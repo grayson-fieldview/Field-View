@@ -1,0 +1,39 @@
+Three fixes to the project files backend. No new features, no scope beyond
+this list.
+
+1. SECURITY — POST /api/projects/:id/files does not validate that the
+   client-supplied key and publicUrl point at our own storage. Add
+   validation before building fileRows:
+     - it.key must start with "files/"
+     - it.publicUrl must equal exactly
+       `https://${CLOUDFRONT_DOMAIN}/${it.key}` using the same env var /
+       helper the signing endpoint uses to construct publicUrl. Do not
+       accept a prefix match or a different host.
+   Reject the whole batch with 400 if either fails.
+
+2. STATUS CODES — the per-item validation inside fileRows.map currently
+   throws into the outer catch and surfaces as a 500 with the raw error
+   message in the response body. Restructure:
+     - validate all items first; on any failure return
+       res.status(400).json({ message: "<specific reason>" })
+     - wrap ONLY the storage.createProjectFilesBatch call in try/catch,
+       returning a generic 500 message with no error detail in the body
+       (log the real error server-side as now)
+
+3. GET /api/projects/:id/files should include the uploader's display name.
+   Join users on uploadedById in storage.getProjectFilesByProject and
+   return it as uploadedByName (null when uploadedById is null). Match how
+   an existing endpoint in this codebase joins a user display name — find
+   one and follow it rather than inventing a shape.
+
+Also answer, do not change:
+  a) Show me the exact diff hunk for the POST /api/uploads/sign changes and
+     the full isAllowedDocumentUpload function.
+  b) What is the column type of users.id in shared/schema.ts, and does
+     media.uploadedById use the same type as project_files.uploaded_by_id
+     in the migration script?
+  c) Are extractS3KeyFromUrl and deleteFromS3 pre-existing helpers, or did
+     you create them in this diff?
+
+Do not push or deploy. Do not run the migration. Do not commit the pasted
+prompt file from attached_assets. Report typecheck and diff stat when done.

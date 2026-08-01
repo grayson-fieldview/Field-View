@@ -835,33 +835,54 @@ export async function registerRoutes(
         return res.status(400).json({ message: `Cannot save more than ${MAX_UPLOAD_BATCH} files at once` });
       }
 
-      const fileRows = items.map((it: any) => {
+      // Validate ALL items up front — any failure rejects the whole batch
+      // with a 400 and a specific reason. Nothing below this loop throws for
+      // client-supplied data.
+      for (const it of items) {
         if (!it?.key || !it?.publicUrl || !it?.originalName || !it?.mimeType) {
-          throw new Error("Each file must include key, publicUrl, originalName, and mimeType");
+          return res.status(400).json({ message: "Each file must include key, publicUrl, originalName, and mimeType" });
         }
         // Re-check the document allowlist at registration so a photo-signed
         // key (or arbitrary metadata) can't be registered as a document.
         if (!isAllowedDocumentUpload(it.originalName, it.mimeType)) {
-          throw new Error(`File type not allowed: ${it.originalName}`);
+          return res.status(400).json({ message: `File type not allowed: ${it.originalName}` });
         }
-        return {
-          projectId,
-          uploadedById: req.user.id,
-          filename: it.key,
-          originalName: it.originalName,
-          mimeType: it.mimeType,
-          url: it.publicUrl,
-          sizeBytes: typeof it.fileSize === "number" && Number.isFinite(it.fileSize) && it.fileSize > 0
-            ? Math.round(it.fileSize)
-            : null,
-        };
-      });
+        // The key/publicUrl pair must point at OUR storage, in the documents
+        // namespace: key under files/, and publicUrl exactly what the sign
+        // endpoint would have returned for that key (same helper — no prefix
+        // matches, no other hosts).
+        if (typeof it.key !== "string" || !it.key.startsWith("files/")) {
+          return res.status(400).json({ message: `Invalid storage key: ${it.originalName}` });
+        }
+        if (it.publicUrl !== getS3Url(it.key)) {
+          return res.status(400).json({ message: `Invalid file URL: ${it.originalName}` });
+        }
+      }
 
-      const created = await storage.createProjectFilesBatch(fileRows);
-      res.status(201).json(created);
+      const fileRows = items.map((it: any) => ({
+        projectId,
+        uploadedById: req.user.id,
+        filename: it.key,
+        originalName: it.originalName,
+        mimeType: it.mimeType,
+        url: it.publicUrl,
+        sizeBytes: typeof it.fileSize === "number" && Number.isFinite(it.fileSize) && it.fileSize > 0
+          ? Math.round(it.fileSize)
+          : null,
+      }));
+
+      // Only the DB write gets the try/catch → generic 500; the real error is
+      // logged server-side but never echoed to the client.
+      try {
+        const created = await storage.createProjectFilesBatch(fileRows);
+        return res.status(201).json(created);
+      } catch (error: any) {
+        console.error("Create project file error:", error?.message || error);
+        return res.status(500).json({ message: "Failed to save files" });
+      }
     } catch (error: any) {
       console.error("Create project file error:", error?.message || error);
-      res.status(500).json({ message: error?.message || "Failed to save files" });
+      res.status(500).json({ message: "Failed to save files" });
     }
   });
 
