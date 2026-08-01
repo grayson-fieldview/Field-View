@@ -23,11 +23,24 @@ export async function getPresignedUrl(key: string): Promise<string> {
   return `https://${CLOUDFRONT_DOMAIN}/${key}`;
 }
 
+/**
+ * Build an RFC 6266 inline Content-Disposition for an original filename.
+ * ASCII-sanitized `filename` fallback plus RFC 5987 `filename*` so UTF-8
+ * names survive. Inline so browsers preview (PDF viewer, image) instead of
+ * blind-downloading.
+ */
+export function inlineContentDisposition(originalName: string): string {
+  const ascii = originalName.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+  const utf8 = encodeURIComponent(originalName).replace(/['()]/g, escape);
+  return `inline; filename="${ascii}"; filename*=UTF-8''${utf8}`;
+}
+
 export async function getPresignedPutUrl(
   originalName: string,
   mimeType: string,
   folder: string = "photos",
-  contentLength?: number
+  contentLength?: number,
+  contentDisposition?: string
 ): Promise<{ key: string; uploadUrl: string; publicUrl: string }> {
   const ext = path.extname(originalName);
   const uniqueName = `${Date.now()}-${crypto.randomBytes(8).toString("hex")}${ext}`;
@@ -37,6 +50,10 @@ export async function getPresignedPutUrl(
     Key: key,
     ContentType: mimeType,
     ...(typeof contentLength === "number" ? { ContentLength: contentLength } : {}),
+    // NOTE: when set, the signature covers Content-Disposition, so the client
+    // performing the PUT must send the exact same Content-Disposition header
+    // (returned to the client as `contentDisposition` by the sign endpoint).
+    ...(contentDisposition ? { ContentDisposition: contentDisposition } : {}),
   });
   const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 600 });
   return { key, uploadUrl, publicUrl: getS3Url(key) };

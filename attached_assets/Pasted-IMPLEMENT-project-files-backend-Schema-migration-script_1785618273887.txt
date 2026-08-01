@@ -1,0 +1,71 @@
+IMPLEMENT: project files backend. Schema + migration script + API endpoints.
+NO frontend changes in this prompt — the Files tab stays as-is for now.
+
+CONTEXT: the Files tab on project-detail.tsx is a hardcoded placeholder.
+We're building the backend for it. Files are documents (work orders, change
+orders, permits) uploaded by office staff and viewed by field crews.
+
+1. SCHEMA — new table in shared/schema.ts, named projectFiles / project_files.
+   Model it on the existing `media` table's conventions (identity PK, same FK
+   cascade behavior, index on projectId). Columns:
+     - id            identity PK
+     - projectId     FK -> projects, cascade delete, NOT NULL
+     - uploadedById  FK -> users
+     - filename      text NOT NULL   (S3 key basename)
+     - originalName  text NOT NULL   (what the user's file was called)
+     - mimeType      text NOT NULL
+     - url           text NOT NULL   (CloudFront URL)
+     - sizeBytes     integer
+     - createdAt     timestamp, same default as media.createdAt
+   Index on projectId.
+   Do NOT add an accountId column — derive account via the project join,
+   matching how `media` does it.
+
+2. MIGRATION SCRIPT — scripts/migrations/ following the exact standards in
+   scripts/migrations/migrate_session22_timesheets.ts:
+     - DDL wrapped in db.transaction()
+     - env guard: throw unless the URL contains rds.amazonaws.com or
+       neon.tech; require ALLOW_PROD_MIGRATION=yes for RDS
+     - entry-point guard so a dynamic import can't auto-execute it
+     - log the host (never the password) and the mode before any DB call
+     - IF NOT EXISTS on every DDL statement
+   This will be run by hand against prod BEFORE the code deploy. Do not run
+   it against anything yourself.
+
+3. UPLOAD SIGNING — extend POST /api/uploads/sign to support documents
+   WITHOUT altering the existing photo/video path:
+     - accept "files" as a valid `folder` value
+     - when folder === "files", validate against a NEW separate function
+       (isAllowedDocumentUpload or similar) — do NOT modify isAllowedUpload
+     - document allowlist: application/pdf, image/jpeg, image/png, image/heic,
+       and the Office types for doc/docx/xls/xlsx/csv/txt. Validate BOTH the
+       extension AND the mimeType (AND, not OR — isAllowedUpload's OR is a
+       hole I don't want duplicated).
+     - size cap for documents: 50 MB
+     - key pattern unchanged: files/{Date.now()}-{randomHex}{ext}
+     - set ContentDisposition to inline with the original filename on the
+       presigned PUT so browsers preview rather than blind-download
+
+4. ENDPOINTS in server/routes.ts, placed near the media endpoints:
+     - GET    /api/projects/:id/files    -> ProjectFile[], newest first
+     - POST   /api/projects/:id/files    -> register metadata after S3 PUT,
+                                            mirrors the shape of
+                                            POST /api/projects/:id/media
+     - DELETE /api/files/:fileId         -> delete row AND the S3 object
+   Auth: requireReadAccess on GET, requireWriteAccess on POST/DELETE.
+   Then copy the EXACT inline restricted-role block used at
+   server/routes.ts:524 (projectAssignments join OR project.createdById
+   escape hatch, 403 otherwise) into every one of these three handlers.
+   DELETE additionally: a `restricted` user may only delete a file they
+   uploaded themselves.
+
+5. Add matching storage methods following the existing storage.* convention.
+
+CONSTRAINTS:
+- Do NOT touch the Files tab JSX or anything else in project-detail.tsx.
+- Do NOT run db:push. The migration script is the only schema mechanism.
+- Do NOT push or deploy. I review the diff first.
+- Do not commit the pasted prompt file from attached_assets.
+
+When done: run typecheck, report the diff stat, and show me the full contents
+of the migration script and the three new route handlers.

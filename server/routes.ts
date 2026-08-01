@@ -21,7 +21,7 @@ import { db } from "./db";
 import { eq, sql, and, or, inArray, count, isNull, desc } from "drizzle-orm";
 import { sanitizeUserForViewer, sanitizeTimeEntryForViewer, isManagerRole } from "./lib/userVisibility";
 import { z } from "zod";
-import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, deleteFromS3, getObjectStream, getS3Url } from "./s3";
+import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, deleteFromS3, getObjectStream, getS3Url, inlineContentDisposition } from "./s3";
 import { queueThumbnailGeneration } from "./lib/thumbnails";
 import archiver from "archiver";
 import { sendInvitationEmail, sendAccountDeletionEmail } from "./services/email";
@@ -430,6 +430,34 @@ function isAllowedUpload(originalName: string, mimeType: string): boolean {
 
 const MAX_IMAGE_SIZE = 50 * 1024 * 1024;  // 50 MB — covers 4K iPhone photos with headroom
 const MAX_VIDEO_SIZE = 500 * 1024 * 1024; // 500 MB — covers ~30s of 4K video, ~2 min of 1080p
+const MAX_DOCUMENT_SIZE = 50 * 1024 * 1024; // 50 MB — project documents (files folder)
+
+// Project-document allowlist (folder === "files"). Deliberately separate from
+// isAllowedUpload and deliberately stricter: BOTH the extension AND the
+// mimeType must match (isAllowedUpload's extension-OR-mime is a known hole we
+// don't want to duplicate for documents).
+const ALLOWED_DOCUMENT_TYPES: Record<string, string[]> = {
+  pdf: ["application/pdf"],
+  jpg: ["image/jpeg"],
+  jpeg: ["image/jpeg"],
+  png: ["image/png"],
+  heic: ["image/heic"],
+  doc: ["application/msword"],
+  docx: ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+  xls: ["application/vnd.ms-excel"],
+  xlsx: ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+  // Browsers report CSVs inconsistently (Windows/Excel machines often send
+  // application/vnd.ms-excel); accept the common variants for .csv only.
+  csv: ["text/csv", "application/csv", "application/vnd.ms-excel"],
+  txt: ["text/plain"],
+};
+function isAllowedDocumentUpload(originalName: string, mimeType: string): boolean {
+  const ext = originalName.split(".").pop()?.toLowerCase();
+  if (!ext || ext === originalName.toLowerCase()) return false; // no extension
+  const allowedMimes = ALLOWED_DOCUMENT_TYPES[ext];
+  if (!allowedMimes) return false;
+  return allowedMimes.includes(mimeType.toLowerCase());
+}
 
 const APP_PROMPT_SURFACES = ["modal", "banner"];
 const APP_PROMPT_ACTIONS = ["shown", "clicked_ios", "clicked_android", "dismissed"];
@@ -634,6 +662,23 @@ export async function registerRoutes(
           if (!f?.originalName || !f?.mimeType) {
             throw new Error("Each file must include originalName and mimeType");
           }
+          // Documents (folder "files") validate against their own, stricter
+          // allowlist; the photo/video path below is untouched.
+          if (f.folder === "files") {
+            if (!isAllowedDocumentUpload(f.originalName, f.mimeType)) {
+              throw new Error(`File type not allowed: ${f.originalName}`);
+            }
+            if (typeof f.fileSize !== "number" || !Number.isFinite(f.fileSize) || f.fileSize <= 0 || f.fileSize > MAX_DOCUMENT_SIZE) {
+              throw new Error(`File size must be between 1 byte and ${Math.round(MAX_DOCUMENT_SIZE / (1024 * 1024))} MB: ${f.originalName}`);
+            }
+            // Inline Content-Disposition (with the original name) is baked
+            // into the signature; the client MUST send the returned
+            // contentDisposition value as the Content-Disposition header on
+            // its PUT or S3 rejects it.
+            const contentDisposition = inlineContentDisposition(f.originalName);
+            const signedDoc = await getPresignedPutUrl(f.originalName, f.mimeType, "files", f.fileSize, contentDisposition);
+            return { ...signedDoc, contentDisposition };
+          }
           if (!isAllowedUpload(f.originalName, f.mimeType)) {
             throw new Error(`File type not allowed: ${f.originalName}`);
           }
@@ -741,6 +786,117 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Create media error:", error?.message || error);
       res.status(500).json({ message: error?.message || "Failed to save media" });
+    }
+  });
+
+  // ── Project files (documents) ─────────────────────────────────────────────
+
+  app.get("/api/projects/:id/files", requireReadAccess, async (req: any, res) => {
+    try {
+      const projectId = parseInt(req.params.id as string);
+      if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
+      if (req.user.role === "restricted") {
+        const [assignment] = await db.select().from(projectAssignments)
+          .where(and(eq(projectAssignments.projectId, projectId), eq(projectAssignments.userId, req.user.id)));
+        if (!assignment && project.createdById !== req.user.id) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+      }
+      res.json(await storage.getProjectFilesByProject(projectId));
+    } catch (error) {
+      console.error("[API] GET /api/projects/:id/files failed:", error);
+      res.status(500).json({ message: "Failed to fetch files" });
+    }
+  });
+
+  app.post("/api/projects/:id/files", requireWriteAccess, async (req: any, res) => {
+    try {
+      const projectId = parseInt(req.params.id as string);
+      if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
+      if (req.user.role === "restricted") {
+        const [assignment] = await db.select().from(projectAssignments)
+          .where(and(eq(projectAssignments.projectId, projectId), eq(projectAssignments.userId, req.user.id)));
+        if (!assignment && project.createdById !== req.user.id) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+      }
+
+      const items = req.body?.files;
+      if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ message: "Provide a non-empty 'files' array of uploaded objects" });
+      }
+      if (items.length > MAX_UPLOAD_BATCH) {
+        return res.status(400).json({ message: `Cannot save more than ${MAX_UPLOAD_BATCH} files at once` });
+      }
+
+      const fileRows = items.map((it: any) => {
+        if (!it?.key || !it?.publicUrl || !it?.originalName || !it?.mimeType) {
+          throw new Error("Each file must include key, publicUrl, originalName, and mimeType");
+        }
+        // Re-check the document allowlist at registration so a photo-signed
+        // key (or arbitrary metadata) can't be registered as a document.
+        if (!isAllowedDocumentUpload(it.originalName, it.mimeType)) {
+          throw new Error(`File type not allowed: ${it.originalName}`);
+        }
+        return {
+          projectId,
+          uploadedById: req.user.id,
+          filename: it.key,
+          originalName: it.originalName,
+          mimeType: it.mimeType,
+          url: it.publicUrl,
+          sizeBytes: typeof it.fileSize === "number" && Number.isFinite(it.fileSize) && it.fileSize > 0
+            ? Math.round(it.fileSize)
+            : null,
+        };
+      });
+
+      const created = await storage.createProjectFilesBatch(fileRows);
+      res.status(201).json(created);
+    } catch (error: any) {
+      console.error("Create project file error:", error?.message || error);
+      res.status(500).json({ message: error?.message || "Failed to save files" });
+    }
+  });
+
+  app.delete("/api/files/:fileId", requireWriteAccess, async (req: any, res) => {
+    try {
+      const fileId = parseInt(req.params.fileId as string);
+      if (Number.isNaN(fileId)) return res.status(400).json({ message: "Invalid file id" });
+      const file = await storage.getProjectFile(fileId);
+      if (!file) return res.status(404).json({ message: "File not found" });
+      const project = await storage.getProject(file.projectId);
+      if (!project) return res.status(404).json({ message: "File not found" });
+      if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
+      if (req.user.role === "restricted") {
+        const [assignment] = await db.select().from(projectAssignments)
+          .where(and(eq(projectAssignments.projectId, file.projectId), eq(projectAssignments.userId, req.user.id)));
+        if (!assignment && project.createdById !== req.user.id) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+        // Restricted users may only delete files they uploaded themselves.
+        if (file.uploadedById !== req.user.id) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+      }
+      await storage.deleteProjectFile(fileId);
+      // S3 delete after the row delete, best-effort (same pattern as
+      // DELETE /api/media/:id): an orphaned S3 object is harmless; a DB row
+      // pointing at a deleted object is not.
+      const key = extractS3KeyFromUrl(file.url);
+      if (key) {
+        try { await deleteFromS3(key); } catch (e) { console.warn("S3 delete failed", e); }
+      }
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Failed to delete project file", error);
+      res.status(500).json({ message: "Failed to delete file" });
     }
   });
 

@@ -73,6 +73,24 @@ export const media = pgTable("media", {
   index("media_project_id_idx").on(table.projectId),
 ]);
 
+// Project documents (work orders, change orders, permits) — uploaded by
+// office staff, viewed by field crews. Separate from `media` (photos/videos):
+// no caption/tags/geo/thumbnail semantics. Account scoping is derived via the
+// project join (same as media) — deliberately no accountId column.
+export const projectFiles = pgTable("project_files", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }).notNull(),
+  uploadedById: varchar("uploaded_by_id").references(() => users.id),
+  filename: text("filename").notNull(),       // S3 key
+  originalName: text("original_name").notNull(),
+  mimeType: text("mime_type").notNull(),
+  url: text("url").notNull(),                 // CloudFront URL
+  sizeBytes: integer("size_bytes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("project_files_project_id_idx").on(table.projectId),
+]);
+
 export const mediaAnnotations = pgTable("media_annotations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   mediaId: integer("media_id").references(() => media.id, { onDelete: "cascade" }).notNull(),
@@ -760,6 +778,12 @@ export const insertMediaSchema = createInsertSchema(media).omit({
   createdAt: true,
 });
 
+// No createInsertSchema for projectFiles: the drizzle-zod version in this
+// repo makes .omit() a TS error (boolean-not-assignable-to-never, same as the
+// pre-existing errors on the other insert schemas) and nothing consumes it —
+// routes validate fields explicitly and InsertProjectFile comes from
+// $inferInsert below.
+
 export const insertCommentSchema = createInsertSchema(comments).omit({
   id: true,
   createdAt: true,
@@ -862,6 +886,12 @@ export type InsertProject = z.infer<typeof insertProjectSchema>;
 export type Project = typeof projects.$inferSelect;
 export type InsertMedia = z.infer<typeof insertMediaSchema>;
 export type Media = typeof media.$inferSelect;
+
+// Typed from the table (not z.infer) — the drizzle-zod version in this repo
+// infers createInsertSchema types as {} (see the pre-existing TS2769 errors
+// on media/comments inserts); $inferInsert gives the real column types.
+export type InsertProjectFile = Omit<typeof projectFiles.$inferInsert, "id" | "createdAt">;
+export type ProjectFile = typeof projectFiles.$inferSelect;
 export type InsertComment = z.infer<typeof insertCommentSchema>;
 export type Comment = typeof comments.$inferSelect;
 export type AnnotationStroke = z.infer<typeof annotationStrokeSchema>;

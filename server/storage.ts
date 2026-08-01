@@ -1,6 +1,7 @@
 import {
   projects,
   media,
+  projectFiles,
   mediaAnnotations,
   comments,
   tasks,
@@ -26,6 +27,8 @@ import {
   type InsertProject,
   type Media,
   type InsertMedia,
+  type ProjectFile,
+  type InsertProjectFile,
   type Comment,
   type InsertComment,
   type MediaAnnotation,
@@ -145,6 +148,10 @@ export interface IStorage {
   getMedia(id: number): Promise<Media | undefined>;
   createMedia(item: InsertMedia): Promise<Media>;
   createMediaBatch(items: InsertMedia[]): Promise<Media[]>;
+  getProjectFilesByProject(projectId: number): Promise<ProjectFile[]>;
+  getProjectFile(id: number): Promise<ProjectFile | undefined>;
+  createProjectFilesBatch(items: InsertProjectFile[]): Promise<ProjectFile[]>;
+  deleteProjectFile(id: number): Promise<void>;
   updateMedia(id: number, data: { caption?: string; tags?: string[] }): Promise<Media | undefined>;
   deleteMedia(id: number): Promise<void>;
 
@@ -490,6 +497,26 @@ export class DatabaseStorage implements IStorage {
 
   async deleteMedia(id: number): Promise<void> {
     await db.delete(media).where(eq(media.id, id));
+  }
+
+  async getProjectFilesByProject(projectId: number): Promise<ProjectFile[]> {
+    return db.select().from(projectFiles)
+      .where(eq(projectFiles.projectId, projectId))
+      .orderBy(desc(projectFiles.createdAt));
+  }
+
+  async getProjectFile(id: number): Promise<ProjectFile | undefined> {
+    const [item] = await db.select().from(projectFiles).where(eq(projectFiles.id, id));
+    return item;
+  }
+
+  async createProjectFilesBatch(items: InsertProjectFile[]): Promise<ProjectFile[]> {
+    if (items.length === 0) return [];
+    return db.insert(projectFiles).values(items).returning();
+  }
+
+  async deleteProjectFile(id: number): Promise<void> {
+    await db.delete(projectFiles).where(eq(projectFiles.id, id));
   }
 
   async getAccountTags(accountId: string, type?: string): Promise<AccountTag[]> {
