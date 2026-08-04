@@ -67,6 +67,8 @@ interface PhotoViewerProps {
   tasks: Task[];
   onClose: () => void;
   onNavigate: (media: MediaWithUser) => void;
+  /** Opens the parent-owned task-creation dialog (see project-detail). */
+  onNewTask?: () => void;
 }
 
 import {
@@ -150,6 +152,7 @@ export default function PhotoViewer({
   tasks,
   onClose,
   onNavigate,
+  onNewTask,
 }: PhotoViewerProps) {
   const { toast } = useToast();
   const { user: currentUser } = useAuth();
@@ -1581,7 +1584,7 @@ export default function PhotoViewer({
               <ClipboardList className="h-3.5 w-3.5" />
               Tasks
             </h3>
-            {tasks.length > 0 ? (
+            {tasks.length > 0 && (
               <div className="space-y-1">
                 {tasks.slice(0, 3).map((task) => (
                   <p key={task.id} className="text-sm text-muted-foreground truncate">
@@ -1592,12 +1595,11 @@ export default function PhotoViewer({
                   <p className="text-xs text-muted-foreground">+{tasks.length - 3} more</p>
                 )}
               </div>
-            ) : (
-              <Button variant="ghost" size="sm" className="text-primary" data-testid="button-new-task-viewer">
-                <PlusCircle className="h-3.5 w-3.5 mr-1" />
-                New Task
-              </Button>
             )}
+            <Button variant="ghost" size="sm" className="text-primary" onClick={() => onNewTask?.()} data-testid="button-new-task-viewer">
+              <PlusCircle className="h-3.5 w-3.5 mr-1" />
+              New Task
+            </Button>
           </div>
 
           <div className="border-t pt-4 space-y-2">

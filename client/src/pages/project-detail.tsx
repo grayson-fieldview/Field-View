@@ -1923,11 +1923,6 @@ export default function ProjectDetailPage({ id }: { id: string }) {
 
           {activeTab === "tasks" && (
             <div className="px-4 sm:px-6 py-4 space-y-4">
-              <TaskFormDialog
-                open={isAddTaskOpen}
-                onOpenChange={setIsAddTaskOpen}
-                projectId={Number(id)}
-              />
               <div className="flex items-center justify-end">
                 <Button
                   onClick={() => setIsAddTaskOpen(true)}
@@ -2271,6 +2266,20 @@ export default function ProjectDetailPage({ id }: { id: string }) {
         </AlertDialogContent>
       </AlertDialog>
 
+      {/* Single shared task-creation dialog — used by both the Tasks tab's
+          "Add Task" button and the photo viewer's "New Task" button. Mounted
+          at page level (not inside the Tasks tab) so it works from the viewer
+          regardless of the active tab. z-[110] on BOTH layers so it stacks
+          above the viewer's z-[100] overlay; raising only the content would
+          leave the backdrop (and click-outside) under the viewer. */}
+      <TaskFormDialog
+        open={isAddTaskOpen}
+        onOpenChange={setIsAddTaskOpen}
+        projectId={Number(id)}
+        overlayClassName="z-[110]"
+        contentClassName="z-[110]"
+      />
+
       {selectedMedia && (
         <PhotoViewer
           media={selectedMedia}
@@ -2279,6 +2288,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
           tasks={projectTasks}
           onClose={() => setSelectedMedia(null)}
           onNavigate={(m) => setSelectedMedia(m)}
+          onNewTask={() => setIsAddTaskOpen(true)}
         />
       )}
 

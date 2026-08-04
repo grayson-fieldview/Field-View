@@ -1,14 +1,18 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
 import {
   Dialog,
-  DialogContent,
+  DialogPortal,
+  DialogOverlay,
   DialogHeader,
   DialogTitle,
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
+import { X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -37,12 +41,20 @@ interface TaskFormDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectId?: number;
+  /**
+   * Optional z-index overrides for when this dialog must stack above a
+   * high-z surface (e.g. the photo viewer's z-[100] overlay). BOTH must be
+   * raised together — raising only the content leaves the backdrop under
+   * the surface, so click-outside hits the surface instead of the dialog.
+   */
+  overlayClassName?: string;
+  contentClassName?: string;
 }
 
 const ASSIGNEE_NONE = "__none__";
 const PROJECT_UNSET = "__unset__";
 
-export default function TaskFormDialog({ open, onOpenChange, projectId }: TaskFormDialogProps) {
+export default function TaskFormDialog({ open, onOpenChange, projectId, overlayClassName, contentClassName }: TaskFormDialogProps) {
   const { toast } = useToast();
   const { user } = useAuth();
   const isGlobalMode = projectId === undefined;
@@ -144,7 +156,19 @@ export default function TaskFormDialog({ open, onOpenChange, projectId }: TaskFo
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      {/* Composed inline (instead of ui/dialog's DialogContent, which hardcodes
+          its own z-50 overlay) so overlayClassName/contentClassName can raise
+          BOTH layers above high-z surfaces like the photo viewer. Classes below
+          mirror ui/dialog.tsx's DialogOverlay/DialogContent exactly. */}
+      <DialogPortal>
+        <DialogOverlay className={overlayClassName} />
+        <DialogPrimitive.Content
+          className={cn(
+            "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg",
+            "sm:max-w-md",
+            contentClassName,
+          )}
+        >
         <DialogHeader>
           <DialogTitle>Add task</DialogTitle>
           <DialogDescription>
@@ -277,7 +301,12 @@ export default function TaskFormDialog({ open, onOpenChange, projectId }: TaskFo
             </Button>
           </DialogFooter>
         </form>
-      </DialogContent>
+        <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
+          <X className="h-4 w-4" />
+          <span className="sr-only">Close</span>
+        </DialogPrimitive.Close>
+        </DialogPrimitive.Content>
+      </DialogPortal>
     </Dialog>
   );
 }
