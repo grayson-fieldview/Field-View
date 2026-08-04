@@ -88,7 +88,11 @@ export function SocialAuthButtons({
           >
             <SiApple className="mr-2 h-4 w-4" />
             {verb} with Apple
-            <span className="ml-1.5 text-[10px] uppercase text-muted-foreground">Soon</span>
+            {/* Hidden on login: the narrower card clips the badge; the
+                "Coming soon" tooltip still conveys the state. */}
+            {action === "signup" && (
+              <span className="ml-1.5 text-[10px] uppercase text-muted-foreground">Soon</span>
+            )}
           </Button>
         )}
       </div>
