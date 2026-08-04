@@ -45,6 +45,12 @@ const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 //   - Logout is bypassed to avoid chicken-and-egg if the session is broken.
 const PATH_BYPASS = [
   "/api/stripe/webhook",
+  // Sign in with Apple: Apple's callback is a legitimate cross-site POST
+  // (response_mode=form_post from appleid.apple.com), so the Origin check
+  // would always 403 it. CSRF defense for this route is the HMAC-signed
+  // `state` parameter validated in the handler (same precedent as
+  // /api/login: no ambient session is trusted, all inputs are verified).
+  "/api/auth/apple/callback",
   "/api/login",
   "/api/register",
   "/api/forgot-password",

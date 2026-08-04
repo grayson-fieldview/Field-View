@@ -34,6 +34,15 @@ import { sendGhlEvent } from "../../lib/ghl";
 import { sendMetaCapiEvent } from "../../lib/metaCapi";
 import { normalizeEmail } from "../../lib/normalizeEmail";
 import { csrfGuard } from "../../middleware/csrf";
+import {
+  isAppleConfigured,
+  generateAppleClientSecret,
+  verifyAppleIdToken,
+  signAppleState,
+  verifyAppleState,
+  generateAppleNonce,
+  nonceMatches,
+} from "../../lib/apple-auth";
 import { touchLastActive } from "../../middleware/touch-last-active";
 import { attributionCapture } from "../../middleware/attribution";
 
@@ -76,7 +85,7 @@ function getBaseUrl(req?: Request) {
 }
 
 async function findOrCreateOAuthUser(opts: {
-  provider: "google" | "microsoft";
+  provider: "google" | "microsoft" | "apple";
   providerId: string;
   email: string | null;
   firstName?: string | null;
@@ -93,12 +102,15 @@ async function findOrCreateOAuthUser(opts: {
   // Name of the freshly-created account (null unless isNewAccount).
   newAccountName: string | null;
 }> {
-  const providerIdField = opts.provider === "google" ? "googleId" : "microsoftId";
+  const providerIdField =
+    opts.provider === "google" ? "googleId" : opts.provider === "apple" ? "appleId" : "microsoftId";
 
   // 1. Match by provider id (returning user)
   const byProvider = opts.provider === "google"
     ? await authStorage.getUserByGoogleId(opts.providerId)
-    : await authStorage.getUserByMicrosoftId(opts.providerId);
+    : opts.provider === "apple"
+      ? await authStorage.getUserByAppleId(opts.providerId)
+      : await authStorage.getUserByMicrosoftId(opts.providerId);
   if (byProvider) {
     const restoreResult = await restoreAccountIfWithinGrace(byProvider);
     if (restoreResult.expired) {
@@ -1058,11 +1070,175 @@ export async function setupAuth(app: Express) {
     })(req, res, next);
   });
 
+  // ----- Apple OAuth routes (web) -----
+  // No passport strategy: Apple's flow is implemented directly because its
+  // callback is a cross-site form POST (response_mode=form_post). With
+  // SameSite=Lax the session cookie is NOT sent on that POST, so unlike
+  // Google/Microsoft, state and the invite token CANNOT live in the session
+  // — they ride in an HMAC-signed `state` parameter instead (see
+  // server/lib/apple-auth.ts).
+  app.get("/api/auth/apple", (req, res) => {
+    if (!process.env.APPLE_SERVICES_ID) {
+      return res.redirect("/login?error=apple_not_configured");
+    }
+    const inviteToken = (req.query.invite as string) || null;
+    // Browser binding: the same nonce goes into the signed state AND a
+    // SameSite=None cookie. SameSite=None is required — the callback is a
+    // cross-site POST from appleid.apple.com, and Lax/Strict cookies are
+    // not sent on it. None requires Secure (fine: prod + replit.dev are
+    // HTTPS; Apple can't be tested on plain-HTTP localhost anyway).
+    const nonce = generateAppleNonce();
+    res.cookie("fv_apple_nonce", nonce, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "none",
+      maxAge: 10 * 60 * 1000,
+      path: "/api/auth/apple/callback",
+    });
+    const params = new URLSearchParams({
+      client_id: process.env.APPLE_SERVICES_ID,
+      redirect_uri: `${getBaseUrl()}/api/auth/apple/callback`,
+      response_type: "code",
+      response_mode: "form_post",
+      scope: "name email",
+      state: signAppleState(inviteToken, nonce),
+    });
+    res.redirect(`https://appleid.apple.com/auth/authorize?${params.toString()}`);
+  });
+
+  // POST, not GET — Apple uses form_post. Bypassed in csrf.ts PATH_BYPASS;
+  // the signed state parameter is the CSRF defense for this route.
+  app.post("/api/auth/apple/callback", async (req, res) => {
+    const fail = (message: string) =>
+      res.redirect(`/login?error=${encodeURIComponent(message)}`);
+    try {
+      const { code, state, user: userJson, error: appleError } = req.body || {};
+      if (appleError) {
+        // e.g. user_cancelled_authorize
+        return fail(appleError === "user_cancelled_authorize" ? "Apple sign-in was cancelled" : String(appleError));
+      }
+      if (!code) return fail("Apple sign-in failed (no code)");
+
+      // Verify HMAC state (integrity) and extract the invite token + nonce.
+      const { inviteToken, nonce } = verifyAppleState(state);
+      // Browser binding (login-CSRF defense): the nonce cookie set by
+      // /api/auth/apple must match the nonce inside the state. Without this,
+      // an attacker could mint a valid state + code for THEIR Apple account
+      // and cross-site POST it to log a victim into the attacker's account.
+      const cookieNonce = req.cookies?.fv_apple_nonce;
+      res.clearCookie("fv_apple_nonce", { path: "/api/auth/apple/callback" });
+      if (!nonceMatches(cookieNonce, nonce)) {
+        return fail("Apple sign-in failed (state mismatch — please try again)");
+      }
+
+      // Exchange the code — client secret is generated fresh per request.
+      const tokenRes = await fetch("https://appleid.apple.com/auth/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          code: String(code),
+          redirect_uri: `${getBaseUrl()}/api/auth/apple/callback`,
+          client_id: process.env.APPLE_SERVICES_ID!,
+          client_secret: generateAppleClientSecret(),
+        }),
+      });
+      if (!tokenRes.ok) {
+        const errBody = await tokenRes.text().catch(() => "");
+        console.error("[apple-auth] token exchange failed:", tokenRes.status, errBody.slice(0, 300));
+        return fail("Apple sign-in failed (token exchange)");
+      }
+      const tokenBody = (await tokenRes.json()) as { id_token?: string };
+      if (!tokenBody.id_token) return fail("Apple sign-in failed (no id_token)");
+
+      const payload = await verifyAppleIdToken(tokenBody.id_token, [process.env.APPLE_SERVICES_ID!]);
+
+      // Apple name gotcha: `user` arrives ONLY on the very first
+      // authorization, as JSON in the POST body, and is never sent again.
+      let firstName: string | null = null;
+      let lastName: string | null = null;
+      if (typeof userJson === "string" && userJson) {
+        try {
+          const parsed = JSON.parse(userJson);
+          firstName = parsed?.name?.firstName || null;
+          lastName = parsed?.name?.lastName || null;
+        } catch {
+          // ignore malformed user JSON — name stays null
+        }
+      }
+
+      const { user, isNewSignup, isNewAccount, newAccountName } = await findOrCreateOAuthUser({
+        provider: "apple",
+        providerId: payload.sub,
+        email: (payload.email as string) || null,
+        firstName,
+        lastName,
+        profileImageUrl: null,
+        inviteToken,
+      });
+
+      // Side effects — identical gating to the Google strategy callback.
+      if (isNewAccount && !isCompAccount(user.email)) {
+        const name = [user.firstName, user.lastName].filter(Boolean).join(" ").trim() || "(no name)";
+        sendSlackNotification(`🎉 New signup (Apple): ${user.email} — ${name}`).catch(() => {});
+      } else if (isNewSignup && !isNewAccount && !isCompAccount(user.email)) {
+        notifyTeamMemberJoined(user);
+      }
+      // Attribution: the cross-site POST carries no cookies/session, so this
+      // usually resolves to "direct" — kept for parity with Google (it
+      // degrades gracefully inside the helpers).
+      if (isNewSignup) {
+        await persistSignupAttribution(req, user.id);
+      }
+      if (isNewAccount && !isCompAccount(user.email)) {
+        const ghlAttr = resolveSignupAttribution(req);
+        sendGhlEvent("partial_signup", {
+          email: user.email,
+          app_user_id: user.id,
+          company_name: newAccountName,
+          trial_ends_at: user.trialEndsAt,
+          partial_signup_date: new Date().toISOString().slice(0, 10),
+          signup_source: ghlAttr.utm_source ?? "direct",
+          utm_medium: ghlAttr.utm_medium ?? null,
+          utm_campaign: ghlAttr.utm_campaign ?? null,
+          signup_method: "apple",
+        });
+        sendMetaCapiEvent({
+          eventName: "Lead",
+          eventId: crypto.randomUUID(),
+          email: user.email!,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          clientIp: req.ip,
+          userAgent: req.headers?.["user-agent"],
+          fbp: req.cookies?._fbp ?? user.signupFbp,
+          fbc: req.cookies?._fbc ?? user.signupFbc,
+        });
+      }
+
+      req.login(user, (loginErr) => {
+        if (loginErr) return res.redirect(`/login?error=session`);
+        // Explicit save before redirect: deterministic Set-Cookie on this
+        // cross-site POST response (serverless session stores can otherwise
+        // race the redirect). Browsers accept Set-Cookie here — SameSite
+        // restricts sending, not setting.
+        req.session.save((saveErr) => {
+          if (saveErr) return res.redirect(`/login?error=session`);
+          res.redirect("/");
+        });
+      });
+    } catch (err: any) {
+      console.error("[apple-auth] callback failed:", err?.message || err);
+      return fail(err?.message || "Apple sign-in failed");
+    }
+  });
+
   // Tells the frontend which OAuth providers are enabled
   app.get("/api/auth/providers", (_req, res) => {
     res.json({
       google: !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
       microsoft: !!(process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET),
+      apple: isAppleConfigured(),
     });
   });
 

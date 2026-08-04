@@ -8,6 +8,7 @@ export interface IAuthStorage {
   getUserByEmail(email: string): Promise<User | undefined>;
   getUserByGoogleId(googleId: string): Promise<User | undefined>;
   getUserByMicrosoftId(microsoftId: string): Promise<User | undefined>;
+  getUserByAppleId(appleId: string): Promise<User | undefined>;
   getUserByStripeCustomerId(stripeCustomerId: string): Promise<User | undefined>;
   getAllUsers(): Promise<User[]>;
   upsertUser(user: UpsertUser): Promise<User>;
@@ -43,6 +44,12 @@ class AuthStorage implements IAuthStorage {
   async getUserByMicrosoftId(microsoftId: string): Promise<User | undefined> {
     if (!microsoftId) return undefined;
     const [user] = await db.select().from(users).where(eq(users.microsoftId, microsoftId));
+    return user;
+  }
+
+  async getUserByAppleId(appleId: string): Promise<User | undefined> {
+    if (!appleId) return undefined;
+    const [user] = await db.select().from(users).where(eq(users.appleId, appleId));
     return user;
   }
 
