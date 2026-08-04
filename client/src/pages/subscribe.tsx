@@ -2,14 +2,13 @@ import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import {
   CheckCircle2,
   Loader2,
-  Crown,
   Minus,
   Plus,
   CreditCard,
@@ -117,7 +116,6 @@ export default function SubscribePage() {
   const totalPrice = basePrice + extraUsers * extraPrice;
   const periodSuffix = isAnnual ? "/year" : "/month";
   const periodShort = isAnnual ? "/yr" : "/mo";
-  const ctaPeriodLabel = isAnnual ? "/year" : "/mo";
 
   const features = [
     "Unlimited photo documentation",
@@ -212,11 +210,7 @@ export default function SubscribePage() {
 
         <Card className="shadow-lg border-0 overflow-hidden">
           <CardHeader className="bg-[#1E1E1E] text-white pb-6">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Crown className="h-5 w-5 text-[#F09000]" />
-                <CardTitle className="text-xl">Field View Pro</CardTitle>
-              </div>
+            <div className="flex items-center justify-end">
               <div className="flex items-center gap-2 bg-white/10 rounded-full p-1">
                 <button
                   onClick={() => setBillingCycle("annual")}
@@ -243,7 +237,7 @@ export default function SubscribePage() {
               </div>
             </div>
             {billingCycle === "annual" && (
-              <Badge className="w-fit bg-[#267D32] text-white mt-2">Save 38%</Badge>
+              <Badge className="w-fit ml-auto bg-[#267D32] text-white mt-2">Save 38%</Badge>
             )}
           </CardHeader>
 
@@ -318,10 +312,10 @@ export default function SubscribePage() {
                   <Loader2 className="mr-2 h-5 w-5 animate-spin" />
                   Redirecting to checkout...
                 </>
-              ) : status === "none" || !status ? (
+              ) : trialAppliesAtCheckout ? (
                 <>
                   <CreditCard className="mr-2 h-5 w-5" />
-                  Start Free Trial — ${totalPrice}{ctaPeriodLabel} after trial
+                  Add Card — ${totalPrice}{periodSuffix} starting {billingTrialEndLabel}
                 </>
               ) : (
                 <>
