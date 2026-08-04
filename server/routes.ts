@@ -5928,16 +5928,46 @@ export async function registerRoutes(
 
   app.post("/api/create-checkout-session", isAuthenticated, async (req: any, res) => {
     try {
-      const { lineItems, priceId } = req.body;
+      const { lineItems, priceId, plan, seats } = req.body;
 
       let stripeLineItems: { price: string; quantity: number }[];
 
-      if (lineItems && Array.isArray(lineItems) && lineItems.length > 0) {
+      if (plan !== undefined || seats !== undefined) {
+        // New authoritative shape: { plan, seats }. The server resolves
+        // price IDs from env so the client can never pair a monthly seat
+        // price with an annual base price (Stripe rejects mixed intervals).
+        if (plan !== "monthly" && plan !== "annual") {
+          return res.status(400).json({ message: 'plan must be "monthly" or "annual"' });
+        }
+        if (!Number.isInteger(seats) || seats < 3) {
+          return res.status(400).json({ message: "seats must be an integer of at least 3" });
+        }
+        const basePriceId =
+          plan === "monthly" ? process.env.STRIPE_PRICE_MONTHLY : process.env.STRIPE_PRICE_ANNUAL;
+        if (!basePriceId) {
+          return res.status(500).json({
+            message: `Server billing configuration incomplete: ${plan === "monthly" ? "STRIPE_PRICE_MONTHLY" : "STRIPE_PRICE_ANNUAL"} is not set`,
+          });
+        }
+        stripeLineItems = [{ price: basePriceId, quantity: 1 }];
+        if (seats > 3) {
+          // getSeatAddonPriceId expects Stripe's interval strings.
+          const seatPriceId = getSeatAddonPriceId(plan === "monthly" ? "month" : "year");
+          if (!seatPriceId) {
+            return res.status(500).json({
+              message: `Server billing configuration incomplete: ${plan === "monthly" ? "STRIPE_PRICE_SEAT_ADDON_MONTHLY" : "STRIPE_PRICE_SEAT_ADDON_ANNUAL"} is not set`,
+            });
+          }
+          stripeLineItems.push({ price: seatPriceId, quantity: seats - 3 });
+        }
+      } else if (lineItems && Array.isArray(lineItems) && lineItems.length > 0) {
+        console.warn("[checkout] legacy lineItems request shape used — client should send { plan, seats }");
         stripeLineItems = lineItems.map((item: any) => ({
           price: item.priceId,
           quantity: item.quantity || 1,
         }));
       } else if (priceId) {
+        console.warn("[checkout] legacy priceId request shape used — client should send { plan, seats }");
         stripeLineItems = [{ price: priceId, quantity: 1 }];
       } else {
         return res.status(400).json({ message: "Price ID or line items required" });

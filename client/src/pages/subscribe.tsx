@@ -67,12 +67,8 @@ export default function SubscribePage() {
     }
   }, [qc, user?.email]);
 
-  const { data: prices, isLoading: pricesLoading } = useQuery({
-    queryKey: ["/api/stripe/prices"],
-  });
-
   const checkoutMutation = useMutation({
-    mutationFn: async (lineItems: { priceId: string; quantity: number }[]) => {
+    mutationFn: async (payload: { plan: "monthly" | "annual"; seats: number }) => {
       // Rewardful referral id (set by the tracker script in client/index.html
       // when a visitor lands with ?via=<code>). May be undefined for direct
       // traffic — that's fine, server treats it as optional.
@@ -81,7 +77,7 @@ export default function SubscribePage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ lineItems, rewardfulReferral }),
+        body: JSON.stringify({ ...payload, rewardfulReferral }),
       });
       if (!res.ok) {
         const data = await res.json();
@@ -138,44 +134,12 @@ export default function SubscribePage() {
   ];
 
   const handleSubscribe = () => {
-    const priceList = prices as any[];
-    if (!priceList || priceList.length === 0) {
-      toast({
-        title: "Plans not available",
-        description: "Please try again in a moment.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    const interval = billingCycle === "annual" ? "year" : "month";
-    const basePlan = priceList.find(
-      (p: any) => p.recurring_interval === interval && p.product_name?.toLowerCase().includes("field view")
-    ) || priceList.find((p: any) => p.recurring_interval === interval && !p.product_name?.toLowerCase().includes("additional") && !p.product_name?.toLowerCase().includes("seat"));
-
-    if (!basePlan) {
-      toast({
-        title: "Plan not found",
-        description: "Please try again in a moment.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    const items: { priceId: string; quantity: number }[] = [
-      { priceId: basePlan.price_id, quantity: 1 },
-    ];
-
-    if (extraUsers > 0) {
-      const seatPrice = priceList.find(
-        (p: any) => p.product_name?.toLowerCase().includes("additional") || p.product_name?.toLowerCase().includes("seat")
-      );
-      if (seatPrice) {
-        items.push({ priceId: seatPrice.price_id, quantity: extraUsers });
-      }
-    }
-
-    checkoutMutation.mutate(items);
+    // Server-authoritative checkout: send plan + seats, the server resolves
+    // the exact Stripe price IDs from env (interval-matched base + seat).
+    checkoutMutation.mutate({
+      plan: billingCycle === "annual" ? "annual" : "monthly",
+      seats: teamSize,
+    });
   };
 
   const status = user?.subscriptionStatus;
@@ -334,7 +298,7 @@ export default function SubscribePage() {
             <Button
               onClick={handleSubscribe}
               className="w-full bg-[#F09000] hover:bg-[#d98000] text-white h-12 text-base"
-              disabled={checkoutMutation.isPending || pricesLoading}
+              disabled={checkoutMutation.isPending}
               data-testid="button-subscribe"
             >
               {checkoutMutation.isPending ? (
