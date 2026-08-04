@@ -947,7 +947,7 @@ export default function LandingPage() {
                 </div>
                 {teamSize > 3 && (
                   <p className="text-xs text-muted-foreground mt-2 text-center">
-                    Additional users: ${annual ? "24" : "29"}/month each
+                    Additional users: ${annual ? (125 / 12).toFixed(2) : "15"}/month each
                   </p>
                 )}
               </div>
@@ -959,20 +959,24 @@ export default function LandingPage() {
                 </div>
                 {teamSize > 3 && (
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm text-muted-foreground">{teamSize - 3} additional user{teamSize - 3 > 1 ? "s" : ""} × ${annual ? "24" : "29"}</span>
-                    <span className="text-sm font-medium">${(teamSize - 3) * (annual ? 24 : 29)}/mo</span>
+                    <span className="text-sm text-muted-foreground">{teamSize - 3} additional user{teamSize - 3 > 1 ? "s" : ""} × ${annual ? (125 / 12).toFixed(2) : "15"}</span>
+                    <span className="text-sm font-medium">${annual ? ((teamSize - 3) * (125 / 12)).toFixed(2) : (teamSize - 3) * 15}/mo</span>
                   </div>
                 )}
                 <div className="border-t pt-2 mt-2 flex items-center justify-between">
                   <span className="text-sm font-semibold">Total</span>
                   <div className="text-right">
                     <span className="text-2xl font-bold text-primary" data-testid="text-total-price">
-                      ${(annual ? 49 : 79) + Math.max(0, teamSize - 3) * (annual ? 24 : 29)}
+                      ${annual
+                        ? (49 + Math.max(0, teamSize - 3) * (125 / 12)).toFixed(2)
+                        : 79 + Math.max(0, teamSize - 3) * 15}
                     </span>
                     <span className="text-sm text-muted-foreground">/month</span>
                     {annual && (
                       <p className="text-xs text-muted-foreground">
-                        ${((annual ? 49 : 79) + Math.max(0, teamSize - 3) * (annual ? 24 : 29)) * 12}/year
+                        {/* Computed as exact yearly amounts (588 + 125/seat), not
+                            monthly × 12, to avoid float rounding drift. */}
+                        ${588 + Math.max(0, teamSize - 3) * 125}/year
                       </p>
                     )}
                   </div>

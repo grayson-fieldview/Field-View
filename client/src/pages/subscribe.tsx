@@ -109,11 +109,11 @@ export default function SubscribePage() {
   // Actual amounts billed per period (matches Stripe products):
   // - Field View Monthly: $79/month
   // - Field View Annual:  $588/year (≈ $49/month equivalent → "Save 38%")
-  // - Additional User Seat: $29/month (annualized to $288/year for display on annual)
+  // - Additional User Seat: $15/month, $125/year (≈ $10.42/month equivalent)
   const monthlyBase = 79;
   const annualBase = 588;
-  const monthlyExtra = 29;
-  const annualExtra = 288;
+  const monthlyExtra = 15;
+  const annualExtra = 125;
 
   const isAnnual = billingCycle === "annual";
   const basePrice = isAnnual ? annualBase : monthlyBase;

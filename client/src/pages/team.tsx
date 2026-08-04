@@ -89,7 +89,7 @@ function SeatAddConfirmationDialog({
   isConfirming,
 }: SeatAddConfirmationDialogProps) {
   const isAnnual = seatStatus.billingCycle === "annual";
-  const seatPrice = isAnnual ? "$243.60/yr" : "$29/mo";
+  const seatPrice = isAnnual ? "$125/yr" : "$15/mo";
   const isTrial =
     seatStatus.subscriptionStatus === "trialing" ||
     seatStatus.subscriptionStatus === "trial";
