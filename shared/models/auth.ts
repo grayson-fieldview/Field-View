@@ -60,6 +60,7 @@ export const users = pgTable("users", {
   authProvider: varchar("auth_provider").default("local"),
   googleId: varchar("google_id").unique(),
   microsoftId: varchar("microsoft_id").unique(),
+  appleId: varchar("apple_id").unique(),
   role: varchar("role").default("standard"),
   accountId: varchar("account_id").references(() => accounts.id),
   stripeCustomerId: varchar("stripe_customer_id"),
