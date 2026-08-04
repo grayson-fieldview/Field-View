@@ -143,6 +143,16 @@ export default function SubscribePage() {
   };
 
   const status = user?.subscriptionStatus;
+  // Charge-timing state, derived from the SAME account-level value checkout
+  // evaluates (billingTrialEndsAt from /api/auth/user): future date → Stripe
+  // gets trial_end (no charge today); past/null → charged immediately.
+  const billingTrialEnd = (user as any)?.billingTrialEndsAt
+    ? new Date((user as any).billingTrialEndsAt)
+    : null;
+  const trialAppliesAtCheckout = !!billingTrialEnd && billingTrialEnd.getTime() > Date.now();
+  const billingTrialEndLabel = billingTrialEnd
+    ? billingTrialEnd.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+    : "";
   const trialEndsAt = user?.trialEndsAt ? new Date(user.trialEndsAt) : null;
   const trialExpired = trialEndsAt && trialEndsAt < new Date();
   const daysLeft = trialEndsAt
@@ -179,10 +189,12 @@ export default function SubscribePage() {
         ) : status === "none" || !status ? (
           <div className="text-center mb-8">
             <h1 className="text-3xl font-bold text-foreground mb-2" data-testid="text-subscribe-title">
-              Start your 14-day free trial
+              {trialAppliesAtCheckout ? "Start your free trial" : "Subscribe to Field View"}
             </h1>
             <p className="text-muted-foreground text-lg">
-              Add a payment method to begin — you won't be charged until the trial ends
+              {trialAppliesAtCheckout
+                ? `Add a payment method to begin — you won't be charged until ${billingTrialEndLabel}`
+                : "Add a payment method to continue — your subscription starts today"}
             </p>
           </div>
         ) : (
@@ -320,7 +332,9 @@ export default function SubscribePage() {
             </Button>
 
             <p className="text-xs text-center text-muted-foreground">
-              14-day free trial — your card won't be charged until the trial ends. Cancel anytime.
+              {trialAppliesAtCheckout
+                ? `Your trial ends ${billingTrialEndLabel} — you won't be charged until then. Cancel anytime.`
+                : `You'll be charged $${totalPrice} today. Cancel anytime.`}
             </p>
 
             {/* Session 3 Commit B: "Maybe later" dismiss link. Only

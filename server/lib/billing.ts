@@ -184,13 +184,19 @@ export async function overlayAccountBillingOnUser<T extends Record<string, any>>
     billing.subscriptionLapsedAt,
     billing.trialEndsAt,
   );
+  // billingTrialEndsAt: the EXACT value /api/create-checkout-session
+  // evaluates (getAccountBilling(req).trialEndsAt) when deciding whether
+  // Checkout gets a trial_end or charges immediately. Exposed explicitly so
+  // the /subscribe page renders its charge/no-charge copy from the same
+  // source of truth, in both flag states.
   if (billing.source === "user") {
-    return { ...user, accessLevel };
+    return { ...user, accessLevel, billingTrialEndsAt: billing.trialEndsAt };
   }
   return {
     ...user,
     subscriptionStatus: billing.subscriptionStatus,
     trialEndsAt: billing.trialEndsAt,
+    billingTrialEndsAt: billing.trialEndsAt,
     stripeCustomerId: billing.stripeCustomerId,
     stripeSubscriptionId: billing.stripeSubscriptionId,
     accessLevel,
