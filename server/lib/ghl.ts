@@ -39,7 +39,7 @@ export function sendGhlEvent(
 
 // ---------------------------------------------------------------------------
 // Estimated MRR from the company_size dropdown (accounts.company_size).
-// Pricing: $79/mo includes 3 seats; each additional seat is $29/mo.
+// Pricing: $79/mo includes 3 seats; each additional seat is $15/mo.
 //
 // NOTE: assumed seats are deliberately conservative — a company's headcount
 // is not its FieldView seat count (office staff, subs, and part-timers
@@ -56,7 +56,7 @@ const SEAT_ASSUMPTIONS: Record<string, number> = {
 };
 
 const BASE_PRICE = 79;
-const SEAT_PRICE = 29;
+const SEAT_PRICE = 15;
 const INCLUDED_SEATS = 3;
 
 export function estimatedMrrFromCompanySize(
@@ -68,7 +68,7 @@ export function estimatedMrrFromCompanySize(
 
 export function actualMrrFromSeats(seatCount: number, isAnnual: boolean): number {
   const monthlyEquivalentBase = isAnnual ? 588 / 12 : BASE_PRICE; // $49/mo effective on annual
-  const monthlyEquivalentSeat = isAnnual ? 240 / 12 : SEAT_PRICE; // $20/mo effective on annual
+  const monthlyEquivalentSeat = isAnnual ? 125 / 12 : SEAT_PRICE; // ≈$10.42/mo effective on annual
   return (
     monthlyEquivalentBase +
     Math.max(0, seatCount - INCLUDED_SEATS) * monthlyEquivalentSeat

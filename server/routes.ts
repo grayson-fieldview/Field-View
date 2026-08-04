@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import crypto from "crypto";
 import { storage } from "./storage";
 import { setupAuth, registerAuthRoutes, isAuthenticated, requireReadAccess, requireWriteAccess } from "./replit_integrations/auth";
-import { getAccountBilling, isAccountBillingEnabled, overlayAccountBillingOnUser, isSeatAddonItem } from "./lib/billing";
+import { getAccountBilling, isAccountBillingEnabled, overlayAccountBillingOnUser, isSeatAddonItem, getSeatAddonPriceId } from "./lib/billing";
 import { requireAdmin, requireAdminOrManager, requireOwnerAdmin } from "./middleware/auth";
 import { generateApiKey } from "./lib/apiKeys";
 import { normalizeEmail } from "./lib/normalizeEmail";
@@ -3216,25 +3216,37 @@ export async function registerRoutes(
         if (!interval) {
           return res.status(500).json({ message: "Could not determine billing interval from subscription" });
         }
-        const allPrices = await stripe.prices.list({
-          active: true,
-          expand: ["data.product"],
-          limit: 100,
-        });
-        const seatPrice = allPrices.data.find((p) => {
-          const product = p.product as any;
-          const name = (product?.name || "").toLowerCase();
-          return (
-            (name.includes("additional") || name.includes("seat")) &&
-            p.recurring?.interval === interval
+        // Prefer exact price ID from env (same source of truth as
+        // isSeatAddonItem in lib/billing.ts) — the product-name string-match
+        // is ambiguous now that each seat product has two prices.
+        let seatPriceId = getSeatAddonPriceId(interval);
+        if (!seatPriceId) {
+          const missingVar =
+            interval === "month" ? "STRIPE_PRICE_SEAT_ADDON_MONTHLY" : "STRIPE_PRICE_SEAT_ADDON_ANNUAL";
+          console.warn(
+            `[billing] ${missingVar} is not set — falling back to product-name string-match to resolve the seat add-on price. Set the env var to remove this fallback.`
           );
-        });
-        if (!seatPrice) {
-          return res.status(500).json({
-            message: `Additional Seat price not found for ${interval} billing`,
+          const allPrices = await stripe.prices.list({
+            active: true,
+            expand: ["data.product"],
+            limit: 100,
           });
+          const seatPrice = allPrices.data.find((p) => {
+            const product = p.product as any;
+            const name = (product?.name || "").toLowerCase();
+            return (
+              (name.includes("additional") || name.includes("seat")) &&
+              p.recurring?.interval === interval
+            );
+          });
+          if (!seatPrice) {
+            return res.status(500).json({
+              message: `Additional Seat price not found for ${interval} billing`,
+            });
+          }
+          seatPriceId = seatPrice.id;
         }
-        itemsUpdate = [{ price: seatPrice.id, quantity: desiredAddonQty }];
+        itemsUpdate = [{ price: seatPriceId, quantity: desiredAddonQty }];
       }
 
       let stripeUpdated = false;

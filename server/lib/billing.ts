@@ -154,6 +154,16 @@ export function isSeatAddonItem(item: any): boolean {
   return lower.includes("additional") || lower.includes("seat");
 }
 
+// Resolve the seat add-on price ID for a billing interval from the same two
+// env vars used by isSeatAddonItem — the single source of truth for seat
+// pricing config. Returns undefined when the matching env var is unset
+// (callers may fall back, but should warn).
+export function getSeatAddonPriceId(interval: string): string | undefined {
+  if (interval === "month") return process.env.STRIPE_PRICE_SEAT_ADDON_MONTHLY || undefined;
+  if (interval === "year") return process.env.STRIPE_PRICE_SEAT_ADDON_ANNUAL || undefined;
+  return undefined;
+}
+
 export function computeSeatCountFromSub(sub: any): number {
   let extra = 0;
   for (const item of sub?.items?.data ?? []) {
