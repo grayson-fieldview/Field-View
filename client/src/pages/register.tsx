@@ -273,7 +273,7 @@ export default function RegisterPage() {
               </div>
             </div>
 
-            <SocialAuthButtons inviteToken={inviteToken} showTermsNote />
+            <SocialAuthButtons inviteToken={inviteToken} showTermsNote action="signup" />
             <form onSubmit={handleSubmit} className="space-y-3">
               <div className="space-y-2">
                 <Label htmlFor="email">Work email</Label>
@@ -443,7 +443,7 @@ export default function RegisterPage() {
               Welcome! Create an account for your company.
             </h2>
 
-            <SocialAuthButtons showTermsNote />
+            <SocialAuthButtons showTermsNote action="signup" />
             <form onSubmit={handleSubmit} className="space-y-3">
               <div className="space-y-2">
                 <Label htmlFor="companyName">Company Name</Label>

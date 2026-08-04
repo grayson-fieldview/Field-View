@@ -80,7 +80,7 @@ export default function LoginPage() {
           <CardDescription>Sign in to your account to continue</CardDescription>
         </CardHeader>
         <CardContent>
-          <SocialAuthButtons />
+          <SocialAuthButtons action="signin" />
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
