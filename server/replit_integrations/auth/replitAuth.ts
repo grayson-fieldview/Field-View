@@ -1128,7 +1128,8 @@ export async function setupAuth(app: Express) {
       const cookieNonce = req.cookies?.fv_apple_nonce;
       res.clearCookie("fv_apple_nonce", { path: "/api/auth/apple/callback" });
       if (!nonceMatches(cookieNonce, nonce)) {
-        return fail("Apple sign-in failed (state mismatch — please try again)");
+        console.error("[apple-auth] nonce cookie/state mismatch");
+        return fail("Apple sign-in failed");
       }
 
       // Exchange the code — client secret is generated fresh per request.
@@ -1153,6 +1154,19 @@ export async function setupAuth(app: Express) {
 
       const payload = await verifyAppleIdToken(tokenBody.id_token, [process.env.APPLE_SERVICES_ID!]);
 
+      // Email-verification gate: Apple sends email_verified as boolean true
+      // OR the string "true". findOrCreateOAuthUser links to an existing
+      // account by email match (branch 2), so an unverified email must never
+      // reach it — pass null instead, which forces provider-id-only matching
+      // and prevents account takeover via an unverified address.
+      const emailVerified =
+        payload.email_verified === true || payload.email_verified === "true";
+      let email = (payload.email as string) || null;
+      if (email && !emailVerified) {
+        console.warn(`[apple-auth] unverified email dropped for sub=${payload.sub}`);
+        email = null;
+      }
+
       // Apple name gotcha: `user` arrives ONLY on the very first
       // authorization, as JSON in the POST body, and is never sent again.
       let firstName: string | null = null;
@@ -1170,7 +1184,7 @@ export async function setupAuth(app: Express) {
       const { user, isNewSignup, isNewAccount, newAccountName } = await findOrCreateOAuthUser({
         provider: "apple",
         providerId: payload.sub,
-        email: (payload.email as string) || null,
+        email,
         firstName,
         lastName,
         profileImageUrl: null,
@@ -1228,8 +1242,10 @@ export async function setupAuth(app: Express) {
         });
       });
     } catch (err: any) {
+      // Log the detail; never leak internal messages (aud mismatch, JWKS
+      // errors, etc.) into the user's address bar.
       console.error("[apple-auth] callback failed:", err?.message || err);
-      return fail(err?.message || "Apple sign-in failed");
+      return fail("Apple sign-in failed");
     }
   });
 
