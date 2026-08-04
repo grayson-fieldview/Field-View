@@ -273,7 +273,7 @@ export default function RegisterPage() {
               </div>
             </div>
 
-            <SocialAuthButtons inviteToken={inviteToken} showTermsNote action="signup" />
+            <SocialAuthButtons inviteToken={inviteToken} action="signup" />
             <form onSubmit={handleSubmit} className="space-y-3">
               <div className="space-y-2">
                 <Label htmlFor="email">Work email</Label>
@@ -345,6 +345,28 @@ export default function RegisterPage() {
                   </a>
                 </span>
               </label>
+              <p className="text-xs text-muted-foreground">
+                By signing up with Google or Apple, you agree to our{" "}
+                <a
+                  href="https://www.field-view.com/legal/terms-and-conditions"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[#f09004] underline hover:no-underline"
+                  data-testid="link-terms-oauth"
+                >
+                  Terms of Service
+                </a>{" "}
+                and{" "}
+                <a
+                  href="https://www.field-view.com/legal/privacy-policy"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[#f09004] underline hover:no-underline"
+                  data-testid="link-privacy-oauth"
+                >
+                  Privacy Policy
+                </a>
+              </p>
               <Button
                 type="submit"
                 className="w-full bg-[#F09000] hover:bg-[#d98000] text-white"
@@ -443,7 +465,7 @@ export default function RegisterPage() {
               Welcome! Create an account for your company.
             </h2>
 
-            <SocialAuthButtons showTermsNote action="signup" />
+            <SocialAuthButtons action="signup" />
             <form onSubmit={handleSubmit} className="space-y-3">
               <div className="space-y-2">
                 <Label htmlFor="companyName">Company Name</Label>
@@ -544,6 +566,28 @@ export default function RegisterPage() {
                   </a>
                 </span>
               </label>
+              <p className="text-xs text-muted-foreground">
+                By signing up with Google or Apple, you agree to our{" "}
+                <a
+                  href="https://www.field-view.com/legal/terms-and-conditions"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[#f09004] underline hover:no-underline"
+                  data-testid="link-terms-oauth"
+                >
+                  Terms of Service
+                </a>{" "}
+                and{" "}
+                <a
+                  href="https://www.field-view.com/legal/privacy-policy"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[#f09004] underline hover:no-underline"
+                  data-testid="link-privacy-oauth"
+                >
+                  Privacy Policy
+                </a>
+              </p>
               <Button
                 type="submit"
                 className="w-full bg-[#F09000] hover:bg-[#d98000] text-white"

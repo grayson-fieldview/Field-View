@@ -39,12 +39,9 @@ function GoogleGIcon({ className }: { className?: string }) {
  */
 export function SocialAuthButtons({
   inviteToken,
-  showTermsNote = false,
   action = "signup",
 }: {
   inviteToken?: string | null;
-  /** Register page only: consent note below the button row. */
-  showTermsNote?: boolean;
   /** Verb on the buttons: "Sign in with …" (login) vs "Sign up with …" (register). */
   action?: "signin" | "signup";
 }) {
@@ -80,14 +77,18 @@ export function SocialAuthButtons({
         ) : (
           <Button
             variant="outline"
-            className={`${buttonFill} opacity-50 cursor-not-allowed`}
+            className={`${buttonFill} cursor-not-allowed`}
             aria-disabled="true"
             onClick={(e) => e.preventDefault()}
             data-testid="button-apple-auth"
             title="Coming soon"
           >
-            <SiApple className="mr-2 h-4 w-4" />
-            {verb} with Apple
+            {/* Dim only icon + label; the SOON badge stays full-opacity so
+                it reads as a deliberate label, not a blurred artifact. */}
+            <span className="flex items-center opacity-50">
+              <SiApple className="mr-2 h-4 w-4" />
+              {verb} with Apple
+            </span>
             {/* Hidden on login: the narrower card clips the badge; the
                 "Coming soon" tooltip still conveys the state. */}
             {action === "signup" && (
@@ -96,30 +97,6 @@ export function SocialAuthButtons({
           </Button>
         )}
       </div>
-      {showTermsNote && (
-        <p className="text-xs text-muted-foreground">
-          By continuing, you agree to the{" "}
-          <a
-            href="https://www.field-view.com/legal/terms-and-conditions"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[#f09004] underline hover:no-underline"
-            data-testid="link-terms-oauth"
-          >
-            Terms of Service
-          </a>{" "}
-          and{" "}
-          <a
-            href="https://www.field-view.com/legal/privacy-policy"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[#f09004] underline hover:no-underline"
-            data-testid="link-privacy-oauth"
-          >
-            Privacy Policy
-          </a>
-        </p>
-      )}
       <div className="relative my-2">
         <div className="absolute inset-0 flex items-center">
           <span className="w-full border-t border-border" />
