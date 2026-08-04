@@ -2289,6 +2289,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
           onClose={() => setSelectedMedia(null)}
           onNavigate={(m) => setSelectedMedia(m)}
           onNewTask={() => setIsAddTaskOpen(true)}
+          keyboardDisabled={isAddTaskOpen}
         />
       )}
 

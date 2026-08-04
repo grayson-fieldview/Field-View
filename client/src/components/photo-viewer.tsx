@@ -69,6 +69,9 @@ interface PhotoViewerProps {
   onNavigate: (media: MediaWithUser) => void;
   /** Opens the parent-owned task-creation dialog (see project-detail). */
   onNewTask?: () => void;
+  /** When true (e.g. a dialog is stacked above the viewer), the viewer's
+   *  window-level keydown handler ignores all keys. */
+  keyboardDisabled?: boolean;
 }
 
 import {
@@ -153,6 +156,7 @@ export default function PhotoViewer({
   onClose,
   onNavigate,
   onNewTask,
+  keyboardDisabled,
 }: PhotoViewerProps) {
   const { toast } = useToast();
   const { user: currentUser } = useAuth();
@@ -619,6 +623,7 @@ export default function PhotoViewer({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (keyboardDisabled) return;
       if (e.key === "Escape") {
         if (photoOnlyMode) {
           setPhotoOnlyMode(false);
@@ -633,7 +638,7 @@ export default function PhotoViewer({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose, photoOnlyMode, goToPrev, goToNext]);
+  }, [onClose, photoOnlyMode, goToPrev, goToNext, keyboardDisabled]);
 
   const drawShape = useCallback((ctx: CanvasRenderingContext2D, shape: AnnotationShape, w: number, h: number) => {
     if (shape.type === "text") {
