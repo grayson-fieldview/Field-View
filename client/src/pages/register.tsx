@@ -10,6 +10,7 @@ import { Eye, EyeOff, Loader2, Users, Star } from "lucide-react";
 import { useGoogleReCaptcha } from "react-google-recaptcha-v3";
 import faviconImg from "@assets/Favicon-01-brand_1778259672.png";
 import { trackEvent } from "@/lib/google-analytics";
+import { SocialAuthButtons } from "@/components/social-auth-buttons";
 
 export default function RegisterPage() {
   const [, setLocation] = useLocation();
@@ -272,6 +273,7 @@ export default function RegisterPage() {
               </div>
             </div>
 
+            <SocialAuthButtons inviteToken={inviteToken} showTermsNote />
             <form onSubmit={handleSubmit} className="space-y-3">
               <div className="space-y-2">
                 <Label htmlFor="email">Work email</Label>
@@ -441,6 +443,7 @@ export default function RegisterPage() {
               Welcome! Create an account for your company.
             </h2>
 
+            <SocialAuthButtons showTermsNote />
             <form onSubmit={handleSubmit} className="space-y-3">
               <div className="space-y-2">
                 <Label htmlFor="companyName">Company Name</Label>

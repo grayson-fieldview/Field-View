@@ -142,9 +142,9 @@ async function findOrCreateOAuthUser(opts: {
   let isNewAccount = false;
   let newAccountName: string | null = null;
 
-  // TODO: Terms acceptance gate for OAuth signups. Users signing up via Google
-  // currently bypass the terms checkbox on /register. Consider adding a
-  // post-OAuth acceptance page that blocks access until terms_accepted_at is set.
+  // Terms acceptance: the OAuth buttons on /login and /register display
+  // "By continuing, you agree to the Terms of Service and Privacy Policy",
+  // so termsAcceptedAt/termsVersion are stamped at user creation below.
   if (opts.inviteToken) {
     const [invitation] = await db.select().from(invitations).where(
       and(eq(invitations.token, opts.inviteToken), eq(invitations.status, "pending"))
@@ -202,6 +202,11 @@ async function findOrCreateOAuthUser(opts: {
     emailVerified: true,
     subscriptionStatus: initialSubscriptionStatus,
     trialEndsAt: initialTrialEndsAt,
+    // OAuth consent: the register/login pages show "By continuing, you agree
+    // to the Terms of Service and Privacy Policy" next to the OAuth buttons.
+    // Same columns POST /api/register writes for the checkbox flow.
+    termsAcceptedAt: new Date(),
+    termsVersion: CURRENT_TERMS_VERSION,
   } as any);
 
   // S46 GHL: stamp the self-serve creator as account owner, mirroring
