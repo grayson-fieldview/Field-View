@@ -31,7 +31,7 @@ export function SocialAuthButtons({
 
   return (
     <div className="space-y-2">
-      <div className="grid grid-cols-2 gap-2">
+      <div className={providers.google === true ? "grid grid-cols-2 gap-2" : "grid grid-cols-1 gap-2"}>
         {providers.google === true && (
           <Button asChild variant="outline" className="w-full" data-testid="button-google-auth">
             <a href={`/api/auth/google${qs}`}>
@@ -69,7 +69,7 @@ export function SocialAuthButtons({
             href="https://www.field-view.com/legal/terms-and-conditions"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-[#F09000] underline hover:no-underline"
+            className="text-[#f09004] underline hover:no-underline"
             data-testid="link-terms-oauth"
           >
             Terms of Service
@@ -79,7 +79,7 @@ export function SocialAuthButtons({
             href="https://www.field-view.com/legal/privacy-policy"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-[#F09000] underline hover:no-underline"
+            className="text-[#f09004] underline hover:no-underline"
             data-testid="link-privacy-oauth"
           >
             Privacy Policy
