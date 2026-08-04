@@ -1109,8 +1109,11 @@ export async function setupAuth(app: Express) {
   // POST, not GET — Apple uses form_post. Bypassed in csrf.ts PATH_BYPASS;
   // the signed state parameter is the CSRF defense for this route.
   app.post("/api/auth/apple/callback", async (req, res) => {
+    // 303 (See Other) on every redirect in this handler: the request is a
+    // POST, and a 302/307 would be re-issued as POST / by the browser,
+    // hitting the SPA static catch-all with a 405. 303 forces GET.
     const fail = (message: string) =>
-      res.redirect(`/login?error=${encodeURIComponent(message)}`);
+      res.redirect(303, `/login?error=${encodeURIComponent(message)}`);
     try {
       const { code, state, user: userJson, error: appleError } = req.body || {};
       if (appleError) {
@@ -1231,14 +1234,14 @@ export async function setupAuth(app: Express) {
       }
 
       req.login(user, (loginErr) => {
-        if (loginErr) return res.redirect(`/login?error=session`);
+        if (loginErr) return res.redirect(303, `/login?error=session`);
         // Explicit save before redirect: deterministic Set-Cookie on this
         // cross-site POST response (serverless session stores can otherwise
         // race the redirect). Browsers accept Set-Cookie here — SameSite
         // restricts sending, not setting.
         req.session.save((saveErr) => {
-          if (saveErr) return res.redirect(`/login?error=session`);
-          res.redirect("/");
+          if (saveErr) return res.redirect(303, `/login?error=session`);
+          res.redirect(303, "/");
         });
       });
     } catch (err: any) {
