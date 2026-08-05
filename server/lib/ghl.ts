@@ -4,6 +4,7 @@
 // or fails the request path. If an env var is missing (e.g., local dev),
 // the call is a silent no-op.
 
+import { waitUntil } from "@vercel/functions";
 import { and, count, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 import { accounts, users } from "@shared/models/auth";
 import { media, projects } from "@shared/schema";
@@ -26,7 +27,7 @@ export function sendGhlEvent(
   const url = GHL_URLS[event];
   if (!url) return;
 
-  fetch(url, {
+  const promise = fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ event, ...payload }),
@@ -35,6 +36,15 @@ export function sendGhlEvent(
     // profile completion, uploads, or Stripe webhook processing.
     // (Optional: report to Sentry as a non-fatal breadcrumb.)
   });
+
+  // On Vercel, keep the instance alive until delivery (same pattern as
+  // lib/metaCapi.ts). Outside a Vercel request context waitUntil can throw
+  // — fall back to the dangling fetch with its swallowed rejection.
+  try {
+    waitUntil(promise);
+  } catch {
+    // Local dev / non-Vercel: dangling fetch.
+  }
 }
 
 // ---------------------------------------------------------------------------

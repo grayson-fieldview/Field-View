@@ -1,3 +1,5 @@
+import { waitUntil } from "@vercel/functions";
+
 // Slack webhook notifier. Fire-and-forget, fail-closed.
 // Set SLACK_WEBHOOK_URL on Vercel + Replit (https://api.slack.com/messaging/webhooks).
 // Failures NEVER throw — Slack outages must not break signup or webhook processing.
@@ -15,6 +17,25 @@ export async function sendSlackNotification(
   const webhookUrl = process.env.SLACK_WEBHOOK_URL;
   if (!webhookUrl) return; // no-op silently when unconfigured
 
+  const promise = deliverToSlack(webhookUrl, text, blocks);
+  // On Vercel, keep the instance alive until delivery (same pattern as
+  // lib/metaCapi.ts) — callers fire-and-forget, so without this the lambda
+  // can freeze after res.json() and kill the in-flight webhook POST.
+  try {
+    waitUntil(promise);
+  } catch {
+    // Local dev / non-Vercel request context: dangling promise, errors
+    // already swallowed inside deliverToSlack.
+  }
+  return promise;
+}
+
+// Actual delivery. Never throws — every failure path is caught and logged.
+async function deliverToSlack(
+  webhookUrl: string,
+  text: string,
+  blocks?: any[],
+): Promise<void> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 3000);
   try {

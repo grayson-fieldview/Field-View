@@ -11,7 +11,7 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { authStorage } from "./storage";
 import { db, pool } from "../../db";
-import { eq, and, isNull, isNotNull } from "drizzle-orm";
+import { eq, and, isNull, isNotNull, gt, desc, sql } from "drizzle-orm";
 import { passwordResetTokens, users, accounts, invitations, type User } from "@shared/models/auth";
 import { projectAssignments } from "@shared/schema";
 import { sendPasswordResetEmail, sendEmailVerificationEmail, sendAccountRestoredEmail } from "../../services/email";
@@ -33,6 +33,7 @@ import { sendSlackNotification, isCompAccount } from "../../lib/slack";
 import { sendGhlEvent } from "../../lib/ghl";
 import { sendMetaCapiEvent } from "../../lib/metaCapi";
 import { normalizeEmail } from "../../lib/normalizeEmail";
+import { waitUntil } from "@vercel/functions";
 import { csrfGuard } from "../../middleware/csrf";
 import {
   isAppleConfigured,
@@ -53,7 +54,7 @@ import { attributionCapture } from "../../middleware/attribution";
 function notifyTeamMemberJoined(
   user: Pick<User, "id" | "email" | "firstName" | "lastName" | "accountId">,
 ): void {
-  void (async () => {
+  const promise = (async () => {
     const name =
       [user.firstName, user.lastName].filter(Boolean).join(" ").trim() || "(no name)";
     let company = "";
@@ -72,6 +73,14 @@ function notifyTeamMemberJoined(
     const suffix = company ? ` → ${company}` : "";
     await sendSlackNotification(`➕ Team member joined: ${user.email} — ${name}${suffix}`);
   })().catch(() => {});
+  // On Vercel, keep the instance alive through the account-name lookup +
+  // Slack post (sendSlackNotification registers its own waitUntil, but only
+  // once it is actually called — the DB lookup before it needs cover too).
+  try {
+    waitUntil(promise);
+  } catch {
+    // Local dev / non-Vercel: dangling promise, rejection swallowed above.
+  }
 }
 
 function getBaseUrl(req?: Request) {
@@ -88,6 +97,12 @@ async function findOrCreateOAuthUser(opts: {
   provider: "google" | "microsoft" | "apple";
   providerId: string;
   email: string | null;
+  // REQUIRED: did the OAuth provider assert this email as verified?
+  // Gates the email-based pending-invitation lookup in branch 3 — an
+  // unverified address must never be able to claim a pending invite
+  // (account-joining via spoofed email). No default on purpose: every
+  // caller must state what its provider actually asserted.
+  emailVerified: boolean;
   firstName?: string | null;
   lastName?: string | null;
   profileImageUrl?: string | null;
@@ -157,6 +172,14 @@ async function findOrCreateOAuthUser(opts: {
   // Terms acceptance: the OAuth buttons on /login and /register display
   // "By continuing, you agree to the Terms of Service and Privacy Policy",
   // so termsAcceptedAt/termsVersion are stamped at user creation below.
+
+  // Resolve an invitation two ways: explicit token (existing flow), or —
+  // when the provider asserted the email as VERIFIED — a pending,
+  // unexpired invitation matching the email. Without the email fallback,
+  // an invitee who signs in with OAuth but doesn't carry the token forks
+  // into a brand-new admin account while their invite keeps holding a seat.
+  let matchedInvitation: typeof invitations.$inferSelect | null = null;
+  let invitePath: "token_invite" | "email_invite" | "new_account" = "new_account";
   if (opts.inviteToken) {
     const [invitation] = await db.select().from(invitations).where(
       and(eq(invitations.token, opts.inviteToken), eq(invitations.status, "pending"))
@@ -167,8 +190,34 @@ async function findOrCreateOAuthUser(opts: {
     if (normalizeEmail(invitation.email) !== normalizedEmail) {
       throw new Error("Email does not match invitation");
     }
-    accountId = invitation.accountId;
-    role = invitation.role;
+    matchedInvitation = invitation;
+    invitePath = "token_invite";
+  } else if (opts.emailVerified) {
+    // Verified-email invitation lookup. lower() on the stored side for
+    // parity with getUserByEmail (legacy rows may predate normalization);
+    // normalizedEmail is already lowercased. Most recent invite wins if an
+    // email was invited to multiple accounts.
+    const [invitation] = await db
+      .select()
+      .from(invitations)
+      .where(
+        and(
+          sql`lower(${invitations.email}) = ${normalizedEmail}`,
+          eq(invitations.status, "pending"),
+          gt(invitations.expiresAt, new Date()),
+        ),
+      )
+      .orderBy(desc(invitations.createdAt))
+      .limit(1);
+    if (invitation) {
+      matchedInvitation = invitation;
+      invitePath = "email_invite";
+    }
+  }
+
+  if (matchedInvitation) {
+    accountId = matchedInvitation.accountId;
+    role = matchedInvitation.role;
     // Mirror the parent account's billing onto the new user row so that
     // getAccountBilling's user-fallback path (when ACCOUNT_BILLING_ENABLED
     // is off) does not lock OAuth invitees joining active/trialing accounts.
@@ -184,7 +233,7 @@ async function findOrCreateOAuthUser(opts: {
     initialSubscriptionStatus = acct?.subscriptionStatus ?? "none";
     initialTrialEndsAt = acct?.trialEndsAt ?? null;
     // S41: defer status flip + project_assignments seed until after user upsert.
-    invitationForAssignment = invitation;
+    invitationForAssignment = matchedInvitation;
   } else {
     // Session 1 trial-flow rework: OAuth self-serve signups also start in
     // a 14-day no-card trial, mirroring the /api/register trial branch.
@@ -201,6 +250,11 @@ async function findOrCreateOAuthUser(opts: {
     isNewAccount = true;
     newAccountName = account.name;
   }
+
+  // Which branch-3 path was taken. No PII beyond the account id.
+  console.info(
+    `[oauth-signup] provider=${opts.provider} path=${invitePath} accountId=${accountId} role=${role}`,
+  );
 
   const created = await authStorage.upsertUser({
     email: normalizedEmail,
@@ -530,11 +584,19 @@ export async function setupAuth(app: Express) {
         async (req: any, _accessToken: string, _refreshToken: string, profile: any, done: any) => {
           try {
             const email = profile.emails?.[0]?.value || null;
+            // Google asserts verification via the email_verified claim
+            // (surfaced by passport-google-oauth20 as profile.emails[].verified
+            // and on the raw _json). Absent claim → false (fail closed).
+            const emailVerified =
+              profile.emails?.[0]?.verified === true ||
+              profile._json?.email_verified === true ||
+              profile._json?.email_verified === "true";
             const inviteToken = (req.session as any)?.oauthInviteToken || null;
             const { user, isNewSignup, isNewAccount, newAccountName } = await findOrCreateOAuthUser({
               provider: "google",
               providerId: profile.id,
               email,
+              emailVerified,
               firstName: profile.name?.givenName || null,
               lastName: profile.name?.familyName || null,
               profileImageUrl: profile.photos?.[0]?.value || null,
@@ -610,10 +672,15 @@ export async function setupAuth(app: Express) {
               profile._json?.userPrincipalName ||
               null;
             const inviteToken = (req.session as any)?.oauthInviteToken || null;
+            // Microsoft (Graph /me via passport-microsoft) supplies NO
+            // email-verified claim: `mail` / `userPrincipalName` carry no
+            // verification assertion. Fail closed — email-invite matching
+            // is disabled for Microsoft sign-ins.
             const { user, isNewSignup, isNewAccount, newAccountName } = await findOrCreateOAuthUser({
               provider: "microsoft",
               providerId: profile.id,
               email,
+              emailVerified: false,
               firstName: profile.name?.givenName || profile._json?.givenName || null,
               lastName: profile.name?.familyName || profile._json?.surname || null,
               profileImageUrl: null,
@@ -1188,6 +1255,10 @@ export async function setupAuth(app: Express) {
         provider: "apple",
         providerId: payload.sub,
         email,
+        // Boolean-or-"true" handling done above; unverified emails are also
+        // dropped to null there, so email==null && emailVerified never
+        // reaches the invite lookup (it requires normalizedEmail anyway).
+        emailVerified,
         firstName,
         lastName,
         profileImageUrl: null,
