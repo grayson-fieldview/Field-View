@@ -3013,6 +3013,54 @@ export async function registerRoutes(
     }
   });
 
+  // Rename the account (accounts.name). Admin-only, deliberately WITHOUT
+  // requireWriteAccess: renaming the account is account administration, not a
+  // content write. The 402 access tiers gate photos, projects, and reports.
+  // Expired-trial is deliberately recovery-friendly, and blocking a rename
+  // works against conversion. Critically, when ACCOUNT_BILLING_ENABLED is off,
+  // billing derives from the user row, so a newly OAuth-provisioned mobile
+  // user can compute to `locked` during an active account trial —
+  // requireWriteAccess would 402 the first field of onboarding for a
+  // brand-new signup.
+  //
+  // Account is resolved from req.user.accountId ONLY — never from the body.
+  // Normalization (trim + slice(0, 200)) matches POST /api/register exactly.
+  // Fires ZERO side effects (no GHL/CAPI/Slack/email): a rename is not a
+  // lifecycle event and nothing external stores the name.
+  app.patch("/api/account/name", requireAdmin, async (req: any, res) => {
+    try {
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const { name } = req.body || {};
+      if (typeof name !== "string" || name.trim().length === 0) {
+        return res.status(400).json({ message: "Name must be a non-empty string" });
+      }
+      const newName = name.trim().slice(0, 200);
+      const [existing] = await db
+        .select({ name: accounts.name })
+        .from(accounts)
+        .where(eq(accounts.id, accountId));
+      if (!existing) return res.status(404).json({ message: "Account not found" });
+      // Safe projection only — the full accounts row carries billing/provider
+      // identifiers (stripeCustomerId, stripeSubscriptionId, etc.) that must
+      // not ride along on a rename response.
+      const [updated] = await db
+        .update(accounts)
+        .set({ name: newName })
+        .where(eq(accounts.id, accountId))
+        .returning({ id: accounts.id, name: accounts.name });
+      // Audit trail: nothing external stores the name, so this log is the
+      // only record of a rename.
+      console.info(
+        `[account/name PATCH] account=${accountId} renamed from "${existing.name}" to "${newName}"`,
+      );
+      res.json(updated);
+    } catch (error) {
+      console.error("[account/name PATCH] error:", error);
+      res.status(500).json({ message: "Failed to update account name" });
+    }
+  });
+
   app.get("/api/users", requireReadAccess, async (req: any, res) => {
     try {
       const accountId = req.user.accountId;
