@@ -193,14 +193,50 @@ export async function writeAccountBilling(
     return null;
   }
 
-  // Single non-bypassable enforcement point: even if a future handler forgets
-  // its own provider check, no account-table billing write happens for a
-  // non-stripe account. Sits AFTER account resolution, BEFORE the write.
-  const nonStripeProvider = await resolveNonStripeProvider(chosen.accountId);
-  if (nonStripeProvider) {
+  return writeAccountBillingById(event, chosen.accountId, "stripe", fields, {
+    userId: chosen.id,
+  });
+}
+
+/**
+ * Provider-parameterized write half — the ONLY place the accounts-table
+ * billing write happens (non-bypassable gate). A second billing provider
+ * (e.g. Apple IAP) resolves its own accountId and calls this with its
+ * provider name; nothing passes anything but 'stripe' yet.
+ *
+ * Returns the accountId written, or null when the write was skipped because
+ * the account's billing_provider does not match expectedProvider.
+ */
+export async function writeAccountBillingById(
+  event: string,
+  accountId: string,
+  expectedProvider: string,
+  fields: {
+    stripeCustomerId?: string;
+    subscriptionStatus?: string;
+    stripeSubscriptionId?: string;
+    trialEndsAt?: Date | null;
+    seatCount?: number;
+    subscriptionLapsedAt?: Date | null;
+  },
+  // Optional extra keys merged into the success log (e.g. the Stripe path's
+  // resolved userId) so the existing [webhook-dual-write] log shape is
+  // preserved byte-for-byte for current callers.
+  logContext?: Record<string, unknown>,
+): Promise<string | null> {
+  // Provider gate — AFTER the caller's account resolution, BEFORE the write.
+  // Missing account row defaults to 'stripe' (the column default), matching
+  // the previous resolveNonStripeProvider behavior.
+  const [acct] = await db
+    .select({ billingProvider: accounts.billingProvider })
+    .from(accounts)
+    .where(eq(accounts.id, accountId))
+    .limit(1);
+  const provider = acct?.billingProvider ?? "stripe";
+  if (provider !== expectedProvider) {
     console.log(
       "[stripeWebhook] write skipped — non-stripe billing provider",
-      JSON.stringify({ event, accountId: chosen.accountId, provider: nonStripeProvider }),
+      JSON.stringify({ event, accountId, provider, expectedProvider }),
     );
     return null;
   }
@@ -209,21 +245,21 @@ export async function writeAccountBilling(
   for (const [k, v] of Object.entries(fields)) {
     if (v !== undefined) cleanFields[k] = v;
   }
-  if (Object.keys(cleanFields).length === 0) return chosen.accountId;
+  if (Object.keys(cleanFields).length === 0) return accountId;
 
-  await db.update(accounts).set(cleanFields).where(eq(accounts.id, chosen.accountId));
+  await db.update(accounts).set(cleanFields).where(eq(accounts.id, accountId));
 
   console.log(
     "[webhook-dual-write]",
     JSON.stringify({
       event,
-      accountId: chosen.accountId,
-      userId: chosen.id,
+      accountId,
+      ...(logContext ?? {}),
       flagEnabled: isAccountBillingEnabled(),
       fieldsWritten: Object.keys(cleanFields),
     }),
   );
-  return chosen.accountId;
+  return accountId;
 }
 
 export async function handleSubscriptionEvent(event: any) {
