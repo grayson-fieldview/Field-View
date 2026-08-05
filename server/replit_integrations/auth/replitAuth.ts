@@ -1468,7 +1468,7 @@ export async function setupAuth(app: Express) {
       case "Email permission was not granted by the OAuth provider":
         return {
           status: 400,
-          body: { error: "email_permission_denied", message: "We need your email address to sign you in. Please allow email sharing and try again." },
+          body: { error: "email_unverified_or_missing", message: "We couldn't verify your email address with Apple or Google. Please sign in with your email and password instead, or contact support@field-view.com." },
         };
       case "Email does not match invitation":
         return {
@@ -1623,7 +1623,7 @@ export async function setupAuth(app: Express) {
         payload.email_verified === true || payload.email_verified === "true";
       let email = (payload.email as string) || null;
       if (email && !emailVerified) {
-        console.warn(`[apple-mobile] unverified email dropped for sub=${payload.sub}`);
+        console.warn(`[oauth-mobile-unverified-email] provider=apple sub=${payload.sub}`);
         email = null;
       }
 
@@ -1673,7 +1673,7 @@ export async function setupAuth(app: Express) {
         payload.email_verified === true || payload.email_verified === "true";
       let email = (payload.email as string) || null;
       if (email && !emailVerified) {
-        console.warn(`[google-mobile] unverified email dropped for sub=${payload.sub}`);
+        console.warn(`[oauth-mobile-unverified-email] provider=google sub=${payload.sub}`);
         email = null;
       }
 
