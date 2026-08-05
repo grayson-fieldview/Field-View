@@ -53,6 +53,7 @@ type SeatStatus = {
   subscriptionStatus: string | null;
   stripeCustomerId: string | null;
   stripeSubscriptionId: string | null;
+  billingProvider: "stripe" | "apple" | null;
   ownerName: string | null;
   ownerId: string | null;
   trialMaxSeats: number | null;
@@ -235,10 +236,24 @@ export default function TeamPage() {
       if (body?.error === "trial_needs_card") {
         queryClient.invalidateQueries({ queryKey: ["/api/account/seats"] });
         queryClient.invalidateQueries({ queryKey: ["/api/invitations"] });
+        // Apple accounts must never see the Stripe add-a-card CTA, even in
+        // stale-state races where the server returns a trial/card error.
+        if (seatStatus?.billingProvider === "apple") {
+          showAppleSeatToast();
+          return;
+        }
         showTrialUnlockToast();
         return;
       }
       if (body?.error === "no_seats_available" || body?.error === "trial_cap_reached") {
+        if (seatStatus?.billingProvider === "apple") {
+          // No Stripe "Add seats" CTA for Apple accounts — plan changes
+          // happen in the iOS app.
+          showAppleSeatToast();
+          queryClient.invalidateQueries({ queryKey: ["/api/account/seats"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/invitations"] });
+          return;
+        }
         toast({
           title: "At capacity",
           description: body.suggestion || body.message || "Cannot send invitation",
@@ -341,6 +356,13 @@ export default function TeamPage() {
       sendInvite.mutate();
       return;
     }
+    // Apple IAP accounts: seats are owned by the purchased StoreKit product.
+    // Never offer the Stripe add-seat dialog or billing-setup routing —
+    // direct the user to change their plan in the iOS app instead.
+    if (seatStatus.billingProvider === "apple") {
+      showAppleSeatToast();
+      return;
+    }
     const blockedStatuses = ["canceled", "incomplete_expired", "unpaid"];
     const hasWorkingSubscription =
       !!seatStatus.stripeCustomerId &&
@@ -351,6 +373,14 @@ export default function TeamPage() {
       return;
     }
     setSeatConfirmOpen(true);
+  };
+
+  const showAppleSeatToast = () => {
+    toast({
+      title: "All seats are in use",
+      description:
+        "This account's plan is managed in the Field View iOS app. Change your plan there to adjust seats.",
+    });
   };
 
   const showBillingNotSetUpToast = () => {

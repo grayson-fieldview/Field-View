@@ -24,6 +24,7 @@ export type BillingState = {
   subscriptionStatus: string | null;
   trialEndsAt: Date | null;
   subscriptionLapsedAt: Date | null;
+  billingProvider: string;
   source: "user" | "account";
 };
 
@@ -66,6 +67,9 @@ function fromUser(user: any): BillingState {
     subscriptionStatus: user?.subscriptionStatus ?? null,
     trialEndsAt: user?.trialEndsAt ?? null,
     subscriptionLapsedAt: null,
+    // The users table has no provider column; the user-row fallback predates
+    // Apple IAP and is always Stripe.
+    billingProvider: "stripe",
     source: "user",
   };
 }
@@ -85,6 +89,7 @@ export async function getAccountBilling(req: any): Promise<BillingState> {
       subscriptionStatus: null,
       trialEndsAt: null,
       subscriptionLapsedAt: null,
+      billingProvider: "stripe",
       source: "user",
     };
   }
@@ -96,6 +101,7 @@ export async function getAccountBilling(req: any): Promise<BillingState> {
       subscriptionStatus: accounts.subscriptionStatus,
       trialEndsAt: accounts.trialEndsAt,
       subscriptionLapsedAt: accounts.subscriptionLapsedAt,
+      billingProvider: accounts.billingProvider,
     })
     .from(accounts)
     .where(eq(accounts.id, accountId))
@@ -119,6 +125,7 @@ export async function getAccountBilling(req: any): Promise<BillingState> {
     subscriptionStatus: row.subscriptionStatus,
     trialEndsAt: row.trialEndsAt,
     subscriptionLapsedAt: row.subscriptionLapsedAt,
+    billingProvider: row.billingProvider ?? "stripe",
     source: "account",
   };
 }
@@ -189,14 +196,22 @@ export async function overlayAccountBillingOnUser<T extends Record<string, any>>
   // Checkout gets a trial_end or charges immediately. Exposed explicitly so
   // the /subscribe page renders its charge/no-charge copy from the same
   // source of truth, in both flag states.
+  // billingProvider: 'stripe' | 'apple' — exposed the same way (both
+  // branches) so clients can suppress Stripe billing UI for Apple accounts.
   if (billing.source === "user") {
-    return { ...user, accessLevel, billingTrialEndsAt: billing.trialEndsAt };
+    return {
+      ...user,
+      accessLevel,
+      billingTrialEndsAt: billing.trialEndsAt,
+      billingProvider: billing.billingProvider,
+    };
   }
   return {
     ...user,
     subscriptionStatus: billing.subscriptionStatus,
     trialEndsAt: billing.trialEndsAt,
     billingTrialEndsAt: billing.trialEndsAt,
+    billingProvider: billing.billingProvider,
     stripeCustomerId: billing.stripeCustomerId,
     stripeSubscriptionId: billing.stripeSubscriptionId,
     accessLevel,

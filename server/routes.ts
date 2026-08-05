@@ -3064,6 +3064,7 @@ export async function registerRoutes(
           subscriptionStatus: accounts.subscriptionStatus,
           stripeCustomerId: accounts.stripeCustomerId,
           stripeSubscriptionId: accounts.stripeSubscriptionId,
+          billingProvider: accounts.billingProvider,
           trialEndsAt: accounts.trialEndsAt,
           ownerId: accounts.ownerId,
           ownerFirstName: users.firstName,
@@ -3104,6 +3105,7 @@ export async function registerRoutes(
         subscriptionStatus: row.subscriptionStatus ?? null,
         stripeCustomerId: row.stripeCustomerId ?? null,
         stripeSubscriptionId: row.stripeSubscriptionId ?? null,
+        billingProvider: row.billingProvider ?? "stripe",
         ownerName,
         ownerId: row.ownerId ?? null,
         trialMaxSeats,
@@ -3137,6 +3139,7 @@ export async function registerRoutes(
           stripeCustomerId: accounts.stripeCustomerId,
           stripeSubscriptionId: accounts.stripeSubscriptionId,
           subscriptionStatus: accounts.subscriptionStatus,
+          billingProvider: accounts.billingProvider,
         })
         .from(accounts)
         .where(eq(accounts.id, accountId))
@@ -3149,6 +3152,20 @@ export async function registerRoutes(
 
       if (currentSeats !== expectedCurrent) {
         return res.status(409).json({ message: "Seat count changed; please refresh." });
+      }
+
+      // Apple IAP accounts: seat count is owned by the purchased StoreKit
+      // product (fieldview.seats.3..10). The server must never attempt the
+      // change — the user buys a different tier in the iOS app and the App
+      // Store Server Notification updates seatCount. No Stripe call, no
+      // seatCount write.
+      if (acc.billingProvider === "apple") {
+        return res.status(409).json({
+          error: "seat_change_requires_app_store",
+          provider: "apple",
+          message:
+            "This account's subscription is managed through the App Store. Change your plan in the Field View iOS app to adjust seats.",
+        });
       }
       // Reject only when there's no working Stripe subscription to attach the
       // new seat line-item to. Trialing / active / past_due all support
@@ -3970,6 +3987,7 @@ export async function registerRoutes(
           ownerId: accounts.ownerId,
           stripeSubscriptionId: accounts.stripeSubscriptionId,
           seatCount: accounts.seatCount,
+          billingProvider: accounts.billingProvider,
         })
         .from(accounts)
         .where(eq(accounts.id, accountId))
@@ -3990,7 +4008,18 @@ export async function registerRoutes(
       // (NOT accounts.seatCount) to defend against lost-update races when multiple users
       // self-leave concurrently. DB seatCount is then synced to Stripe.
       let seatDecremented = false;
-      if (account.stripeSubscriptionId) {
+      // Apple IAP accounts intentionally SKIP the seat decrement: seat count
+      // is owned by the purchased StoreKit product (fieldview.seats.N).
+      // Lowering accounts.seatCount here would desync from Apple — the next
+      // App Store notification would just restore the product's tier. The
+      // freed seat simply becomes available within the purchased tier.
+      if (account.billingProvider === "apple") {
+        console.log(
+          "[account-deletion] apple-billed account",
+          accountId,
+          "— seat decrement intentionally skipped (seat count owned by StoreKit product)",
+        );
+      } else if (account.stripeSubscriptionId) {
         try {
           const stripe = await getUncachableStripeClient();
           const sub = await stripe.subscriptions.retrieve(account.stripeSubscriptionId, {
