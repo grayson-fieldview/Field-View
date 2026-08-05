@@ -6012,6 +6012,32 @@ export async function registerRoutes(
       // the user row when ACCOUNT_BILLING_ENABLED is off.
       const billing = await getAccountBilling(req);
 
+      // Apple IAP guard — MUST sit before the Stripe customer create/reuse
+      // below: an Apple account has no Stripe IDs, so it would otherwise get
+      // a fresh Stripe customer written to users+accounts and sail past the
+      // duplicate-subscription guard into a second, parallel charge.
+      // Read accounts.billing_provider DIRECTLY (not via billing.*): when
+      // ACCOUNT_BILLING_ENABLED is off, getAccountBilling falls back to the
+      // user row, which has no provider column and reports 'stripe'
+      // unconditionally — an apple account would slip through in that mode.
+      let checkoutProvider = "stripe";
+      if (user.accountId) {
+        const [provRow] = await db
+          .select({ billingProvider: accounts.billingProvider })
+          .from(accounts)
+          .where(eq(accounts.id, user.accountId))
+          .limit(1);
+        checkoutProvider = provRow?.billingProvider ?? "stripe";
+      }
+      if (checkoutProvider === "apple") {
+        return res.status(409).json({
+          error: "subscription_managed_by_app_store",
+          provider: "apple",
+          message:
+            "This account's subscription is managed through the App Store. Changes are made in the Field View iOS app.",
+        });
+      }
+
       let customerId = billing.stripeCustomerId ?? user.stripeCustomerId;
       if (!customerId) {
         const customer = await stripe.customers.create({

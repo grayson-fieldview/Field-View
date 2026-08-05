@@ -80,7 +80,13 @@ export default function SubscribePage() {
       });
       if (!res.ok) {
         const data = await res.json();
-        throw new Error(data.message || "Failed to create checkout");
+        // Carry the machine-readable error code (NOT the status code — the
+        // endpoint returns 409 for other reasons too) so onError can branch.
+        const err = new Error(data.message || "Failed to create checkout") as Error & {
+          code?: string;
+        };
+        err.code = data.error;
+        throw err;
       }
       return res.json();
     },
@@ -89,7 +95,16 @@ export default function SubscribePage() {
         window.location.href = data.url;
       }
     },
-    onError: (error: Error) => {
+    onError: (error: Error & { code?: string }) => {
+      if (error.code === "subscription_managed_by_app_store") {
+        // Neutral, non-destructive message — no App Store link or purchase CTA.
+        toast({
+          title: "Managed through the App Store",
+          description:
+            "This account's subscription is managed through the App Store. Changes are made in the Field View iOS app.",
+        });
+        return;
+      }
       toast({
         title: "Error",
         description: error.message,
