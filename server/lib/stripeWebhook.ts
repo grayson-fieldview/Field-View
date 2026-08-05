@@ -111,6 +111,30 @@ async function sendGhlBillingEvent(opts: {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Billing-provider gate (Apple IAP prep). Stripe webhook handlers must never
+// write billing state (subscriptionStatus, stripeSubscriptionId,
+// stripeCustomerId, seatCount, subscriptionLapsedAt) for an account whose
+// accounts.billing_provider is not 'stripe' — a stale Stripe event must not
+// overwrite/lock out an account paying through another provider.
+// Returns the non-stripe provider name when writes must be skipped, or null
+// when writing is allowed (provider is 'stripe', the column default, or the
+// user has no account row — the legacy user-only path, which is Stripe by
+// definition). Nothing writes billing_provider='apple' yet; this is the
+// enforcement side only.
+async function resolveNonStripeProvider(
+  accountId: string | null | undefined,
+): Promise<string | null> {
+  if (!accountId) return null;
+  const [acct] = await db
+    .select({ billingProvider: accounts.billingProvider })
+    .from(accounts)
+    .where(eq(accounts.id, accountId))
+    .limit(1);
+  const provider = acct?.billingProvider ?? "stripe";
+  return provider === "stripe" ? null : provider;
+}
+
 export async function writeAccountBilling(
   event: string,
   stripeCustomerId: string,
@@ -162,6 +186,18 @@ export async function writeAccountBilling(
     return null;
   }
 
+  // Single non-bypassable enforcement point: even if a future handler forgets
+  // its own provider check, no account-table billing write happens for a
+  // non-stripe account. Sits AFTER account resolution, BEFORE the write.
+  const nonStripeProvider = await resolveNonStripeProvider(chosen.accountId);
+  if (nonStripeProvider) {
+    console.log(
+      "[stripeWebhook] write skipped — non-stripe billing provider",
+      JSON.stringify({ event, accountId: chosen.accountId, provider: nonStripeProvider }),
+    );
+    return null;
+  }
+
   const cleanFields: Record<string, any> = {};
   for (const [k, v] of Object.entries(fields)) {
     if (v !== undefined) cleanFields[k] = v;
@@ -195,6 +231,15 @@ export async function handleSubscriptionEvent(event: any) {
       if (customerId && subscriptionId) {
         const user = await authStorage.getUserByStripeCustomerId(customerId);
         if (user) {
+          // Provider gate — after account resolution (user.accountId), before
+          // ANY write (users-table updateUser below has no other guard).
+          const nonStripe = await resolveNonStripeProvider(user.accountId);
+          if (nonStripe) {
+            console.log(
+              `[stripeWebhook] ${type} skipped — account ${user.accountId} billing_provider=${nonStripe} (non-stripe)`,
+            );
+            return;
+          }
           let appStatus = "trialing";
           let seatCountFromSub: number | undefined;
           let subForGhl: any; // S46 GHL: keep the retrieved sub for plan derivation
@@ -279,6 +324,16 @@ export async function handleSubscriptionEvent(event: any) {
       const status = data.status;
       const user = await authStorage.getUserByStripeCustomerId(customerId);
       if (user) {
+        // Provider gate — after account resolution, before any write. Sits
+        // ALONGSIDE (not instead of) the stripeSubscriptionId mismatch guard
+        // below, which stays for Stripe-vs-Stripe staleness.
+        const nonStripe = await resolveNonStripeProvider(user.accountId);
+        if (nonStripe) {
+          console.log(
+            `[stripeWebhook] ${type} skipped — account ${user.accountId} billing_provider=${nonStripe} (non-stripe)`,
+          );
+          return;
+        }
         let appStatus = "none";
         if (status === "active") appStatus = "active";
         else if (status === "trialing") appStatus = "trialing";
@@ -513,6 +568,16 @@ export async function handleSubscriptionEvent(event: any) {
         if (user.stripeSubscriptionId && data.id !== user.stripeSubscriptionId) {
           console.log(
             `[stripeWebhook] subscription.deleted for ${data.id} ignored — account's active sub is ${user.stripeSubscriptionId}`,
+          );
+          return;
+        }
+        // Provider gate — after account resolution and alongside the mismatch
+        // guard above (which is null-safe only for Stripe-vs-Stripe cases);
+        // before the users-table write below.
+        const nonStripe = await resolveNonStripeProvider(user.accountId);
+        if (nonStripe) {
+          console.log(
+            `[stripeWebhook] ${type} skipped — account ${user.accountId} billing_provider=${nonStripe} (non-stripe)`,
           );
           return;
         }
