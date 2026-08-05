@@ -30,3 +30,18 @@ export const COMPANY_SIZES = [
 ] as const;
 
 export const COMPANY_SIZE_VALUES = COMPANY_SIZES.map((s) => s.value) as readonly string[];
+
+// Job role — a PERSON attribute collected during onboarding (users.job_role).
+// NOT a permission: users.role (admin/standard/restricted) is entirely
+// separate, and job role must never be read in an authorization path.
+export const JOB_ROLES = [
+  { value: "owner_operator", label: "Owner / Operator" },
+  { value: "project_manager", label: "Project Manager" },
+  { value: "foreman_crew_lead", label: "Foreman / Crew Lead" },
+  { value: "estimator", label: "Estimator" },
+  { value: "sales", label: "Sales" },
+  { value: "office_admin", label: "Office / Admin" },
+  { value: "other", label: "Other" },
+] as const;
+
+export const JOB_ROLE_VALUES = JOB_ROLES.map((r) => r.value) as readonly string[];

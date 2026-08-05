@@ -15,7 +15,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Loader2, Star } from "lucide-react";
-import { INDUSTRIES, COMPANY_SIZES } from "@shared/constants";
+import { INDUSTRIES, COMPANY_SIZES, JOB_ROLES } from "@shared/constants";
 import faviconImg from "@assets/Favicon-01-brand_1778259672.png";
 import { trackEvent } from "@/lib/google-analytics";
 
@@ -47,6 +47,7 @@ export default function WelcomePage() {
   const [lastName, setLastName] = useState((user as any)?.lastName ?? "");
   const [phone, setPhone] = useState("");
   const [industry, setIndustry] = useState("");
+  const [jobRole, setJobRole] = useState("");
   const [companySize, setCompanySize] = useState("");
   const [tcpaAccepted, setTcpaAccepted] = useState(false);
 
@@ -66,6 +67,11 @@ export default function WelcomePage() {
         tcpaAccepted,
         metaEventId: metaEventIdRef.current,
       };
+      // Job role: optional, shown to ALL roles (person attribute, not a
+      // permission and not admin-gated server-side).
+      if (jobRole) {
+        body.jobRole = jobRole;
+      }
       if (isAdmin) {
         body.industry = industry;
         body.companySize = companySize;
@@ -258,6 +264,22 @@ export default function WelcomePage() {
                   className={FIELD_CLASS}
                   data-testid="input-phone"
                 />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="jobRole">Your role (optional)</Label>
+                <Select value={jobRole} onValueChange={setJobRole}>
+                  <SelectTrigger id="jobRole" className={FIELD_CLASS} data-testid="select-job-role">
+                    <SelectValue placeholder="Select your role" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {JOB_ROLES.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value} data-testid={`option-job-role-${opt.value}`}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
 
               {isAdmin && (

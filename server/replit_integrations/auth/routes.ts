@@ -7,7 +7,7 @@ import { sanitizeUserForViewer } from "../../lib/userVisibility";
 import { db } from "../../db";
 import { accounts, users } from "@shared/models/auth";
 import { eq } from "drizzle-orm";
-import { INDUSTRY_VALUES, COMPANY_SIZE_VALUES } from "@shared/constants";
+import { INDUSTRY_VALUES, COMPANY_SIZE_VALUES, JOB_ROLE_VALUES } from "@shared/constants";
 import { sendEmailVerificationEmail } from "../../services/email";
 import { sendGhlEvent, estimatedMrrFromCompanySize } from "../../lib/ghl";
 import { sendMetaCapiEvent } from "../../lib/metaCapi";
@@ -58,7 +58,7 @@ export function registerAuthRoutes(app: Express): void {
 
   app.patch("/api/auth/me", isAuthenticated, async (req: any, res) => {
     try {
-      const { firstName, lastName, phone, industry, companySize, tcpaAccepted } = req.body || {};
+      const { firstName, lastName, phone, industry, companySize, jobRole, tcpaAccepted } = req.body || {};
 
       const userUpdate: Record<string, any> = {};
 
@@ -101,6 +101,17 @@ export function registerAuthRoutes(app: Express): void {
         userUpdate.phone = trimmed;
       } else if (phone === null || phone === "") {
         userUpdate.phone = null;
+      }
+
+      // Job role — PERSON attribute on users.job_role. Deliberately NOT
+      // inside the admin gate below: every role (admin/standard/restricted)
+      // can set their own job role. It is NOT a permission and must never
+      // be read in an authorization path (users.role is the permission enum).
+      if (jobRole !== undefined && jobRole !== null && jobRole !== "") {
+        if (typeof jobRole !== "string" || !JOB_ROLE_VALUES.includes(jobRole)) {
+          return res.status(400).json({ message: "Invalid job role" });
+        }
+        userUpdate.jobRole = jobRole;
       }
 
       // Account-level fields — admin only. Non-admins: silently ignore.
@@ -179,6 +190,7 @@ export function registerAuthRoutes(app: Express): void {
             last_name: updated.lastName,
             phone: updated.phone,
             sms_consent: updated.smsConsentAt != null,
+            job_role: updated.jobRole ?? null,
             trade_type: acctIndustry,
             crew_size: acctCompanySize,
             trial_ends_at: updated.trialEndsAt,

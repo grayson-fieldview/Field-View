@@ -86,6 +86,11 @@ export const users = pgTable("users", {
   autoTrackingEnabled: boolean("auto_tracking_enabled").notNull().default(true),
   hourlyRateCents: integer("hourly_rate_cents"),
   phone: varchar("phone"),
+  // Job role — person attribute from onboarding (JOB_ROLES in
+  // shared/constants.ts). Nullable, no default: onboarding is skippable.
+  // NOT a permission — `role` above is the authorization enum; job_role
+  // must never be read in any authorization path.
+  jobRole: varchar("job_role"),
   profileCompletedAt: timestamp("profile_completed_at"),
   // S46 GHL: A2P/TCPA SMS consent timestamp. Set when the user checks the
   // consent box on the Complete Setup page (tcpaAccepted in PATCH
