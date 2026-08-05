@@ -55,6 +55,7 @@ async function sendGhlBillingEvent(opts: {
   sub: any; // subscription object with items (may be undefined on retrieve failure)
   paidConversion?: boolean; // checkout.session.completed only
   churn?: boolean; // customer.subscription.deleted only
+  stripeEventId?: string; // Stripe event.id — deterministic Meta CAPI dedup key
 }): Promise<void> {
   try {
     if (!opts.accountId) return;
@@ -96,9 +97,15 @@ async function sendGhlBillingEvent(opts: {
     // cancellations. No browser context (request comes from Stripe's
     // servers): fbp/fbc recovered from the owner row's signup attribution.
     if (opts.paidConversion) {
+      // eventId derived from the Stripe event id: the same Stripe event
+      // (including webhook redeliveries) always produces the same Meta
+      // event_id, so Meta dedupes retries instead of double-counting a paid
+      // conversion. Falls back to a UUID only if the event id is missing
+      // (malformed replay). Note: no browser pixel Subscribe exists today,
+      // so there is no client ID to pair with — this is redelivery dedup.
       sendMetaCapiEvent({
         eventName: "Subscribe",
-        eventId: crypto.randomUUID(),
+        eventId: opts.stripeEventId || crypto.randomUUID(),
         email: owner.email,
         value: actualMrrFromSeats(seatCount, isAnnual),
         currency: "USD",
@@ -279,6 +286,7 @@ export async function handleSubscriptionEvent(event: any) {
             accountId: writtenAccountId ?? user.accountId,
             sub: subForGhl,
             paidConversion: true,
+            stripeEventId: event.id,
           });
 
           // Slack notification: any subscription checkout (trial OR paid).
