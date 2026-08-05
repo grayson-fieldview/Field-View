@@ -14,6 +14,7 @@ import { normalizeEmail } from "./lib/normalizeEmail";
 import { initSentry, Sentry } from "./lib/sentry";
 import { logCsrfStartupMode } from "./middleware/csrf";
 import { handleSubscriptionEvent } from "./lib/stripeWebhook";
+import { processAppleNotification } from "./lib/appleIap";
 
 initSentry();
 
@@ -369,6 +370,26 @@ app.post(
     }
   },
 );
+
+// Dev-parity route for Apple App Store Server Notifications V2. In prod,
+// vercel.json routes /api/apple/notifications to the standalone function
+// (api/apple/notifications.js from server/vercelAppleNotifications.ts)
+// before the catch-all — this Express route only serves local dev.
+// Registered before the global express.json (route-local parser) to mirror
+// the Stripe dev route's placement.
+app.post("/api/apple/notifications", express.json(), async (req, res) => {
+  const signedPayload = (req.body as any)?.signedPayload;
+  if (typeof signedPayload !== "string" || signedPayload.length === 0) {
+    return res.status(400).json({ error: "Missing signedPayload" });
+  }
+  try {
+    const result = await processAppleNotification(signedPayload);
+    return res.status(result.status).json(result.body);
+  } catch (error: any) {
+    console.error("[apple-iap] unexpected error:", error?.message);
+    return res.status(500).json({ error: "Internal error" });
+  }
+});
 
 app.use(
   express.json({
