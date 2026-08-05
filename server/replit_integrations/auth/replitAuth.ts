@@ -93,6 +93,100 @@ function getBaseUrl(req?: Request) {
   return "http://localhost:5000";
 }
 
+// ---------------------------------------------------------------------------
+// Google ID-token verification for the mobile endpoint (native SDK tokens).
+// No passport strategy involved — verify signature against Google's JWKS
+// with Node crypto, then iss / aud / exp. JWKS cached in module scope with
+// a TTL honoring Cache-Control max-age (same approach as apple-auth.ts).
+// ---------------------------------------------------------------------------
+
+type GoogleIdTokenPayload = {
+  iss: string;
+  sub: string;
+  aud: string;
+  exp: number;
+  email?: string;
+  email_verified?: boolean | "true" | "false";
+  given_name?: string;
+  family_name?: string;
+  picture?: string;
+  [k: string]: unknown;
+};
+
+const GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs";
+const GOOGLE_ISSUERS = ["accounts.google.com", "https://accounts.google.com"];
+
+let googleJwksCache: { keys: any[]; expiresAt: number } | null = null;
+
+async function getGoogleJwks(forceRefresh = false): Promise<any[]> {
+  if (!forceRefresh && googleJwksCache && Date.now() < googleJwksCache.expiresAt) {
+    return googleJwksCache.keys;
+  }
+  const res = await fetch(GOOGLE_JWKS_URL);
+  if (!res.ok) throw new Error(`Google JWKS fetch failed: ${res.status}`);
+  const body = (await res.json()) as { keys?: any[] };
+  if (!Array.isArray(body.keys) || body.keys.length === 0) {
+    throw new Error("Google JWKS response had no keys");
+  }
+  // Honor Cache-Control max-age (Google typically serves ~5-6h); floor at
+  // 60s so a weird header can't make us refetch per request.
+  const cc = res.headers.get("cache-control") || "";
+  const maxAge = Number(/max-age=(\d+)/.exec(cc)?.[1] ?? 3600);
+  const ttlMs = Math.max(60, Number.isFinite(maxAge) ? maxAge : 3600) * 1000;
+  googleJwksCache = { keys: body.keys, expiresAt: Date.now() + ttlMs };
+  return body.keys;
+}
+
+async function verifyGoogleIdToken(
+  idToken: string,
+  allowedAudiences: string[],
+): Promise<GoogleIdTokenPayload> {
+  const parts = idToken.split(".");
+  if (parts.length !== 3) throw new Error("Malformed id_token");
+  const [headerB64, payloadB64, sigB64] = parts;
+
+  let header: { alg?: string; kid?: string };
+  let payload: GoogleIdTokenPayload;
+  try {
+    header = JSON.parse(Buffer.from(headerB64, "base64url").toString("utf8"));
+    payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8"));
+  } catch {
+    throw new Error("Malformed id_token JSON");
+  }
+  if (!header.kid) throw new Error("id_token missing kid");
+
+  // Find the signing key; on unknown kid, force one refresh (key rotation).
+  let jwk = (await getGoogleJwks()).find((k) => k.kid === header.kid);
+  if (!jwk) {
+    jwk = (await getGoogleJwks(true)).find((k) => k.kid === header.kid);
+  }
+  if (!jwk) throw new Error("id_token signed with unknown key");
+
+  // Google signs id_tokens with RS256.
+  const publicKey = crypto.createPublicKey({ key: jwk as any, format: "jwk" });
+  const valid = crypto.verify(
+    "sha256",
+    Buffer.from(`${headerB64}.${payloadB64}`),
+    publicKey,
+    Buffer.from(sigB64, "base64url"),
+  );
+  if (!valid) throw new Error("id_token signature verification failed");
+
+  if (!GOOGLE_ISSUERS.includes(payload.iss)) {
+    throw new Error(`id_token iss mismatch: ${payload.iss}`);
+  }
+  if (!allowedAudiences.includes(payload.aud)) {
+    throw new Error(`id_token aud mismatch: ${payload.aud}`);
+  }
+  const now = Math.floor(Date.now() / 1000);
+  if (typeof payload.exp !== "number" || payload.exp <= now) {
+    throw new Error("id_token expired");
+  }
+  if (!payload.sub) throw new Error("id_token missing sub");
+
+  return payload;
+}
+
 async function findOrCreateOAuthUser(opts: {
   provider: "google" | "microsoft" | "apple";
   providerId: string;
@@ -1320,6 +1414,282 @@ export async function setupAuth(app: Express) {
       // errors, etc.) into the user's address bar.
       console.error("[apple-auth] callback failed:", err?.message || err);
       return fail("Apple sign-in failed");
+    }
+  });
+
+  // ----- Mobile OAuth endpoints (native SDK id_token → session) -----
+  // Mobile is cookie-based: the app POSTs a native identity token here, we
+  // verify it server-side, establish a normal express-session via
+  // req.login(), and return the FULL user object (same shape as GET
+  // /api/auth/user) so AuthContext.signIn never needs a follow-up fetch
+  // that would race passport's session-id rotation.
+
+  // Serialize exactly like GET /api/auth/user (routes.ts): password strip,
+  // billing overlay, isOwner + account install-prompt fields, sanitize.
+  const serializeUserForAuthResponse = async (user: User, req: any) => {
+    const { password: _pw, ...safeUser } = user as any;
+    const safeUserWithBilling = await overlayAccountBillingOnUser(safeUser, req);
+    let isOwner = false;
+    let accountFirstMobileUploadAt: Date | null = null;
+    let accountCreatedAt: Date | null = null;
+    if (user.accountId) {
+      const [account] = await db
+        .select({
+          ownerId: accounts.ownerId,
+          firstMobileUploadAt: accounts.firstMobileUploadAt,
+          createdAt: accounts.createdAt,
+        })
+        .from(accounts)
+        .where(eq(accounts.id, user.accountId))
+        .limit(1);
+      isOwner = !!account && account.ownerId === user.id;
+      accountFirstMobileUploadAt = account?.firstMobileUploadAt ?? null;
+      accountCreatedAt = account?.createdAt ?? null;
+    }
+    return sanitizeUserForViewer(
+      { ...safeUserWithBilling, isOwner, accountFirstMobileUploadAt, accountCreatedAt },
+      user,
+    );
+  };
+
+  // Map findOrCreateOAuthUser's known throws to distinct client-safe 4xx
+  // responses (mobile shows different copy per case). Unknown errors → null
+  // (caller falls through to its generic 401/500 handling).
+  const mapOAuthUserError = (
+    err: any,
+  ): { status: number; body: { error: string; message: string } } | null => {
+    const msg = String(err?.message || "");
+    switch (msg) {
+      case "Account no longer exists":
+        return {
+          status: 410,
+          body: { error: "account_deleted", message: "This account was deleted and can no longer be restored." },
+        };
+      case "Email permission was not granted by the OAuth provider":
+        return {
+          status: 400,
+          body: { error: "email_permission_denied", message: "We need your email address to sign you in. Please allow email sharing and try again." },
+        };
+      case "Email does not match invitation":
+        return {
+          status: 403,
+          body: { error: "invite_email_mismatch", message: "This invitation was sent to a different email address. Sign in with the invited email." },
+        };
+      case "Invalid or expired invitation":
+        return {
+          status: 400,
+          body: { error: "invite_invalid", message: "This invitation link is invalid or has expired. Ask your admin to send a new one." },
+        };
+      default:
+        return null;
+    }
+  };
+
+  // Shared post-verification path: resolve/create the user, fire the same
+  // side effects as the web OAuth callbacks (identical gating; all
+  // waitUntil-backed since S41), then req.login → session.save → respond
+  // with the full serialized user (same pattern as POST /api/login).
+  const completeMobileOAuthLogin = async (
+    req: any,
+    res: any,
+    opts: {
+      provider: "google" | "apple";
+      providerId: string;
+      email: string | null;
+      emailVerified: boolean;
+      firstName: string | null;
+      lastName: string | null;
+      profileImageUrl: string | null;
+      inviteToken: string | null;
+    },
+  ) => {
+    let result: Awaited<ReturnType<typeof findOrCreateOAuthUser>>;
+    try {
+      result = await findOrCreateOAuthUser(opts);
+    } catch (err: any) {
+      const mapped = mapOAuthUserError(err);
+      if (mapped) return res.status(mapped.status).json(mapped.body);
+      console.error(`[${opts.provider}-mobile] findOrCreateOAuthUser failed:`, err?.message || err);
+      return res.status(500).json({ message: "Sign-in failed" });
+    }
+    let { user } = result;
+    const { isNewSignup, isNewAccount, newAccountName } = result;
+
+    // Apple sends the user's name ONLY on the very first authorization.
+    // If a name arrived but the stored row has none (e.g. returning user
+    // whose row predates name capture), persist it. Never overwrite a
+    // non-null stored value, and never write nulls over existing names.
+    if (!isNewSignup && (opts.firstName || opts.lastName)) {
+      const patch: Record<string, string> = {};
+      if (opts.firstName && !user.firstName) patch.firstName = opts.firstName;
+      if (opts.lastName && !user.lastName) patch.lastName = opts.lastName;
+      if (Object.keys(patch).length > 0) {
+        try {
+          user = (await authStorage.updateUser(user.id, patch as any)) ?? user;
+        } catch (nameErr) {
+          console.error(`[${opts.provider}-mobile] name backfill failed (non-fatal):`, nameErr);
+        }
+      }
+    }
+
+    // Side effects — identical gating to the web OAuth callbacks. Slack /
+    // GHL / notifyTeamMemberJoined are waitUntil-wrapped inside their
+    // helpers (S41); Meta CAPI has been waitUntil-based all along.
+    if (isNewAccount && !isCompAccount(user.email)) {
+      const providerLabel = opts.provider === "apple" ? "Apple mobile" : "Google mobile";
+      const name = [user.firstName, user.lastName].filter(Boolean).join(" ").trim() || "(no name)";
+      sendSlackNotification(`🎉 New signup (${providerLabel}): ${user.email} — ${name}`).catch(() => {});
+    } else if (isNewSignup && !isNewAccount && !isCompAccount(user.email)) {
+      notifyTeamMemberJoined(user);
+    }
+    if (isNewSignup) {
+      await persistSignupAttribution(req, user.id);
+    }
+    if (isNewAccount && !isCompAccount(user.email)) {
+      const ghlAttr = resolveSignupAttribution(req);
+      sendGhlEvent("partial_signup", {
+        email: user.email,
+        app_user_id: user.id,
+        company_name: newAccountName,
+        trial_ends_at: user.trialEndsAt,
+        partial_signup_date: new Date().toISOString().slice(0, 10),
+        signup_source: ghlAttr.utm_source ?? "direct",
+        utm_medium: ghlAttr.utm_medium ?? null,
+        utm_campaign: ghlAttr.utm_campaign ?? null,
+        signup_method: `${opts.provider}_mobile`,
+      });
+      sendMetaCapiEvent({
+        eventName: "Lead",
+        eventId: crypto.randomUUID(),
+        email: user.email!,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        clientIp: req.ip,
+        userAgent: req.headers?.["user-agent"],
+        fbp: req.cookies?._fbp ?? (user as any).signupFbp,
+        fbc: req.cookies?._fbc ?? (user as any).signupFbc,
+      });
+    }
+
+    // Session: exact POST /api/login pattern — respond only inside
+    // session.save's callback so Set-Cookie is committed before the
+    // response leaves (mobile's cookie jar only updates on 2xx).
+    const finalUser = user;
+    req.login(finalUser, (loginErr: any) => {
+      if (loginErr) {
+        console.error(`[${opts.provider}-mobile] req.login failed:`, loginErr);
+        return res.status(500).json({ message: "Sign-in failed" });
+      }
+      req.session.save(async (saveErr: any) => {
+        if (saveErr) {
+          console.error(`[${opts.provider}-mobile] session save failed:`, saveErr);
+          return res.status(500).json({ message: "Sign-in failed" });
+        }
+        try {
+          return res.json(await serializeUserForAuthResponse(finalUser, req));
+        } catch (serErr) {
+          // req.login already rotated the sid — NEVER non-2xx now (see the
+          // verify-email-code session-stranding note). Degrade the body;
+          // mobile falls back to GET /api/auth/user with a valid cookie.
+          console.error(`[${opts.provider}-mobile] serialization failed (degrading, NOT 500):`, serErr);
+          const { password: _pw, ...safeUser } = finalUser as any;
+          return res.json(safeUser);
+        }
+      });
+    });
+  };
+
+  app.post("/api/auth/apple/mobile", loginLimiter, async (req, res) => {
+    try {
+      const { idToken, inviteToken, firstName, lastName } = req.body || {};
+      if (typeof idToken !== "string" || !idToken) {
+        return res.status(400).json({ message: "Missing idToken" });
+      }
+
+      let payload: Awaited<ReturnType<typeof verifyAppleIdToken>>;
+      try {
+        payload = await verifyAppleIdToken(idToken, [
+          process.env.APPLE_MOBILE_BUNDLE_ID || "com.fieldview.app",
+        ]);
+      } catch (verifyErr: any) {
+        console.error("[apple-mobile] id_token verification failed:", verifyErr?.message || verifyErr);
+        return res.status(401).json({ message: "Invalid identity token" });
+      }
+
+      // Same email_verified handling as the web Apple callback: boolean
+      // true OR string "true"; absent → false; unverified email dropped to
+      // null so it can never email-match an existing account or invite.
+      const emailVerified =
+        payload.email_verified === true || payload.email_verified === "true";
+      let email = (payload.email as string) || null;
+      if (email && !emailVerified) {
+        console.warn(`[apple-mobile] unverified email dropped for sub=${payload.sub}`);
+        email = null;
+      }
+
+      await completeMobileOAuthLogin(req, res, {
+        provider: "apple",
+        providerId: payload.sub,
+        email,
+        emailVerified,
+        firstName: typeof firstName === "string" && firstName ? firstName : null,
+        lastName: typeof lastName === "string" && lastName ? lastName : null,
+        profileImageUrl: null,
+        inviteToken: typeof inviteToken === "string" && inviteToken ? inviteToken : null,
+      });
+    } catch (err: any) {
+      console.error("[apple-mobile] failed:", err?.message || err);
+      if (!res.headersSent) res.status(500).json({ message: "Sign-in failed" });
+    }
+  });
+
+  app.post("/api/auth/google/mobile", loginLimiter, async (req, res) => {
+    try {
+      const allowedAudiences = (process.env.GOOGLE_MOBILE_CLIENT_IDS || "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (allowedAudiences.length === 0) {
+        // Fail closed: without an aud allowlist any Google-issued token
+        // (for ANY app) would pass — never fall open.
+        return res.status(503).json({ message: "Provider not configured" });
+      }
+
+      const { idToken, inviteToken } = req.body || {};
+      if (typeof idToken !== "string" || !idToken) {
+        return res.status(400).json({ message: "Missing idToken" });
+      }
+
+      let payload: GoogleIdTokenPayload;
+      try {
+        payload = await verifyGoogleIdToken(idToken, allowedAudiences);
+      } catch (verifyErr: any) {
+        console.error("[google-mobile] id_token verification failed:", verifyErr?.message || verifyErr);
+        return res.status(401).json({ message: "Invalid identity token" });
+      }
+
+      // Strict verified-email gate, mirroring the Apple handling above.
+      const emailVerified =
+        payload.email_verified === true || payload.email_verified === "true";
+      let email = (payload.email as string) || null;
+      if (email && !emailVerified) {
+        console.warn(`[google-mobile] unverified email dropped for sub=${payload.sub}`);
+        email = null;
+      }
+
+      await completeMobileOAuthLogin(req, res, {
+        provider: "google",
+        providerId: payload.sub,
+        email,
+        emailVerified,
+        firstName: (payload.given_name as string) || null,
+        lastName: (payload.family_name as string) || null,
+        profileImageUrl: (payload.picture as string) || null,
+        inviteToken: typeof inviteToken === "string" && inviteToken ? inviteToken : null,
+      });
+    } catch (err: any) {
+      console.error("[google-mobile] failed:", err?.message || err);
+      if (!res.headersSent) res.status(500).json({ message: "Sign-in failed" });
     }
   });
 

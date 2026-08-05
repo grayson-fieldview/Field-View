@@ -51,6 +51,12 @@ const PATH_BYPASS = [
   // `state` parameter validated in the handler (same precedent as
   // /api/login: no ambient session is trusted, all inputs are verified).
   "/api/auth/apple/callback",
+  // Mobile native OAuth: unauthenticated entry points (no ambient session
+  // to forge) whose only credential is the verified provider id_token in
+  // the body — must not depend on the Origin allowlist (mobile requests
+  // carry no browser Origin). Same precedent as /api/login.
+  "/api/auth/apple/mobile",
+  "/api/auth/google/mobile",
   "/api/login",
   "/api/register",
   "/api/forgot-password",
