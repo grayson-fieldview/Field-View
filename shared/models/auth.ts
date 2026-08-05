@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { boolean, index, integer, jsonb, pgEnum, pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
+import { boolean, index, integer, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/pg-core";
 import { z } from "zod";
 
 export const sessions = pgTable(
@@ -29,6 +29,15 @@ export const accounts = pgTable("accounts", {
   seatCount: integer("seat_count").default(3),
   billingCycle: varchar("billing_cycle"),
   subscriptionLapsedAt: timestamp("subscription_lapsed_at"),
+  // Billing-provider discriminator ahead of Apple In-App Purchase support.
+  // Everything existing is Stripe, hence NOT NULL DEFAULT 'stripe'. No code
+  // reads or writes these yet — schema-only prep.
+  billingProvider: varchar("billing_provider").notNull().default("stripe"),
+  // Apple's originalTransactionId — the stable per-subscription key for IAP
+  // accounts. Uniqueness enforced via a PARTIAL unique index (WHERE NOT NULL),
+  // declared in the table config below, so the many NULL (Stripe) rows are
+  // exempt.
+  appleOriginalTransactionId: varchar("apple_original_transaction_id"),
   industry: varchar("industry"),
   companySize: varchar("company_size"),
   // S46 GHL: idempotency guard for the activation_milestone lifecycle event
@@ -47,6 +56,10 @@ export const accounts = pgTable("accounts", {
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => [
   index("idx_accounts_deleted_at").on(table.deletedAt),
+  // Partial unique: only non-NULL Apple transaction ids must be unique.
+  uniqueIndex("accounts_apple_original_transaction_id_unique")
+    .on(table.appleOriginalTransactionId)
+    .where(sql`apple_original_transaction_id IS NOT NULL`),
 ]);
 
 export const users = pgTable("users", {
