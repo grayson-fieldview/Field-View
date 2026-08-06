@@ -32,6 +32,7 @@ import ForgotPasswordPage from "@/pages/forgot-password";
 import ResetPasswordPage from "@/pages/reset-password";
 import VerifyEmailPage from "@/pages/verify-email";
 import SubscribePage from "@/pages/subscribe";
+import ChoosePlanPage, { hasSkippedChoosePlan } from "@/pages/choose-plan";
 import DashboardPage from "@/pages/dashboard";
 import ProjectsPage from "@/pages/projects";
 import ProjectDetailPage from "@/pages/project-detail";
@@ -349,6 +350,36 @@ function AppContent() {
   const { user, isLoading } = useAuth();
   const [location] = useLocation();
 
+  // Checkout-return handling for the /choose-plan soft paywall. Stripe's
+  // success_url is `/?checkout=success`, but the paywall gate below runs
+  // BEFORE SubscriptionGate/SubscribePage (which owns the existing
+  // confirm-checkout effect) — so a fresh Checkout return would still show
+  // a stale cached user (no stripeSubscriptionId, staleTime up to 5 min)
+  // and bounce the payer straight back into the paywall. Fix: detect the
+  // return here, fire confirm-checkout once (idempotent server-side), and
+  // invalidate the auth cache; the gate is bypassed while this URL flag is
+  // present.
+  const checkoutReturnRef = useRef(
+    typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("checkout") === "success",
+  );
+  const confirmFiredRef = useRef(false);
+  useEffect(() => {
+    if (!checkoutReturnRef.current || confirmFiredRef.current || !user) return;
+    confirmFiredRef.current = true;
+    fetch("/api/confirm-checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+    })
+      .catch((err) => {
+        console.error("[appcontent] confirm-checkout on return failed:", err);
+      })
+      .finally(() => {
+        queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+      });
+  }, [user]);
+
   // [DIAG] Session 3 BUG 2 instrumentation — every render of the auth gate
   console.log("[appcontent] render", {
     location,
@@ -415,6 +446,34 @@ function AppContent() {
   }
   if ((user as any).emailVerified && location === "/verify-email") {
     console.log("[appcontent] gate=verified & on /verify-email → redirect /");
+    return <Redirect to="/" />;
+  }
+
+  // Soft paywall — /choose-plan sits AFTER email verification and BEFORE
+  // SubscriptionGate. Shown only to the self-serve account owner (isOwner
+  // excludes invitees, including invited admins) while trialing with no
+  // Stripe subscription, unless skipped this browser session
+  // (sessionStorage). "Skip this step" routes to / and the trial continues.
+  const subStatus = (user as any).subscriptionStatus;
+  const needsChoosePlan =
+    !checkoutReturnRef.current &&
+    (user as any).role === "admin" &&
+    (user as any).isOwner === true &&
+    (subStatus === "trialing" || subStatus === "trial") &&
+    !(user as any).stripeSubscriptionId &&
+    !hasSkippedChoosePlan();
+  if (needsChoosePlan) {
+    if (location !== "/choose-plan") {
+      console.log("[appcontent] gate=needs-choose-plan → redirect /choose-plan", { location });
+      return <Redirect to="/choose-plan" />;
+    }
+    console.log("[appcontent] gate=needs-choose-plan → render ChoosePlanPage");
+    return <ChoosePlanPage />;
+  }
+  if (location === "/choose-plan") {
+    // Skipped / not eligible (non-owner, already subscribed) — never strand
+    // anyone on the paywall route.
+    console.log("[appcontent] gate=choose-plan-not-needed → redirect /");
     return <Redirect to="/" />;
   }
 
