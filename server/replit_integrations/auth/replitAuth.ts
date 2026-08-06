@@ -1693,6 +1693,246 @@ export async function setupAuth(app: Express) {
     }
   });
 
+  // ----- Mobile email/password registration -----
+  // POST /api/register requires a reCAPTCHA token that a native app cannot
+  // supply, so mobile gets its own endpoint. Validation/creation mirrors
+  // /api/register (8-char minimum, bcrypt 12, 409 duplicate, termsAccepted
+  // literal true); session/response mirrors the mobile OAuth endpoints
+  // (req.login → session.save → serializeUserForAuthResponse inside the
+  // save callback, so Set-Cookie is committed before the response leaves).
+  //
+  // No companyName: mobile onboarding renames the account later via
+  // PATCH /api/account/name, so the account name is synthesized exactly
+  // like findOrCreateOAuthUser's: "<First Last>'s Team" | "<email>'s Team"
+  // — names aren't collected here, so it is always "<email>'s Team".
+  //
+  // NO S41-style email-invite resolution here (token-based invites only):
+  // a fresh email/password signup has an unverified, unproven email, and
+  // resolving a pending invitation by email would let anyone who knows an
+  // invitee's address join that team. S41's email resolution is gated on a
+  // provider-attested verified email; that guarantee does not exist here.
+  app.post("/api/auth/register/mobile", registerLimiter, async (req: any, res) => {
+    try {
+      if (req.body?.termsAccepted !== true) {
+        return res.status(400).json({
+          error: "terms_not_accepted",
+          message: "You must accept the Terms of Service and Privacy Policy to continue.",
+        });
+      }
+
+      const { email: rawEmail, password, inviteToken: rawInviteToken } = req.body || {};
+      const inviteToken =
+        typeof rawInviteToken === "string" && rawInviteToken ? rawInviteToken : null;
+
+      if (!rawEmail || !password) {
+        return res.status(400).json({
+          error: "missing_credentials",
+          message: "Email and password are required",
+        });
+      }
+
+      const email = normalizeEmail(String(rawEmail));
+
+      if (password.length < 8) {
+        return res.status(400).json({
+          error: "password_too_short",
+          message: "Password must be at least 8 characters",
+        });
+      }
+
+      const existing = await authStorage.getUserByEmail(email);
+      if (existing) {
+        return res.status(409).json({
+          error: "email_exists",
+          message: "An account with this email already exists",
+        });
+      }
+
+      const hashedPassword = await bcrypt.hash(password, 12);
+
+      let accountId: string = "";
+      let role: string = "standard";
+      let firstName: string | null = null;
+      let lastName: string | null = null;
+
+      let invitationForAssignment: typeof invitations.$inferSelect | null = null;
+      if (inviteToken) {
+        const [invitation] = await db.select().from(invitations).where(
+          and(eq(invitations.token, inviteToken), eq(invitations.status, "pending"))
+        );
+        if (!invitation || new Date() > invitation.expiresAt) {
+          return res.status(400).json({
+            error: "invite_invalid",
+            message: "Invalid or expired invitation",
+          });
+        }
+        if (normalizeEmail(invitation.email) !== email) {
+          return res.status(403).json({
+            error: "invite_email_mismatch",
+            message: "Email does not match invitation",
+          });
+        }
+        accountId = invitation.accountId;
+        role = invitation.role;
+        firstName = invitation.firstName ?? null;
+        lastName = invitation.lastName ?? null;
+        invitationForAssignment = invitation;
+      }
+
+      let initialSubscriptionStatus: string;
+      let initialTrialEndsAt: Date | null;
+      let newAccountName: string | null = null;
+
+      if (inviteToken) {
+        // Invitee: copy the EXISTING account's billing fields onto the user
+        // row (matches /api/register) so getAccountBilling's user-fallback
+        // path does not lock out invitees joining active/trialing accounts.
+        const [acct] = await db
+          .select({
+            subscriptionStatus: accounts.subscriptionStatus,
+            trialEndsAt: accounts.trialEndsAt,
+          })
+          .from(accounts)
+          .where(eq(accounts.id, accountId))
+          .limit(1);
+        initialSubscriptionStatus = acct?.subscriptionStatus ?? "none";
+        initialTrialEndsAt = acct?.trialEndsAt ?? null;
+      } else {
+        initialSubscriptionStatus = "trialing";
+        initialTrialEndsAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+        // Account name synthesized like findOrCreateOAuthUser: no names are
+        // collected on this endpoint, so the "<First Last>" branch never
+        // applies — always "<email>'s Team". Renamed later via
+        // PATCH /api/account/name during mobile onboarding.
+        const accountName = [firstName, lastName].filter(Boolean).join(" ") || email;
+        const [account] = await db.insert(accounts).values({
+          name: accountName + "'s Team",
+          subscriptionStatus: initialSubscriptionStatus,
+          trialEndsAt: initialTrialEndsAt,
+        }).returning();
+        accountId = account.id;
+        role = "admin";
+        newAccountName = account.name;
+      }
+
+      const user = await authStorage.upsertUser({
+        email,
+        password: hashedPassword,
+        firstName,
+        lastName,
+        role,
+        accountId,
+        emailVerified: false,
+        subscriptionStatus: initialSubscriptionStatus,
+        trialEndsAt: initialTrialEndsAt,
+        termsAcceptedAt: new Date(),
+        termsVersion: CURRENT_TERMS_VERSION,
+        // Invitees skip mobile onboarding (their account is already
+        // configured); self-serve stays null so the app gates on it.
+        profileCompletedAt: inviteToken ? new Date() : null,
+      });
+
+      if (!inviteToken) {
+        await db.update(accounts).set({ ownerId: user.id }).where(eq(accounts.id, accountId));
+      }
+
+      await persistSignupAttribution(req, user.id);
+
+      if (invitationForAssignment) {
+        await applyInvitationAcceptance(invitationForAssignment, user.id);
+      }
+
+      // Side effects — identical gating to /api/register's branches.
+      if (!inviteToken && !isCompAccount(user.email)) {
+        const name = [user.firstName, user.lastName].filter(Boolean).join(" ").trim() || "(no name)";
+        sendSlackNotification(`🎉 New signup (email mobile): ${user.email} — ${name}`).catch(() => {});
+      } else if (inviteToken && !isCompAccount(user.email)) {
+        notifyTeamMemberJoined(user);
+      }
+
+      if (!inviteToken && !isCompAccount(user.email)) {
+        const ghlAttr = resolveSignupAttribution(req);
+        sendGhlEvent("partial_signup", {
+          email: user.email,
+          app_user_id: user.id,
+          company_name: newAccountName,
+          trial_ends_at: initialTrialEndsAt,
+          partial_signup_date: new Date().toISOString().slice(0, 10),
+          signup_source: ghlAttr.utm_source ?? "direct",
+          utm_medium: ghlAttr.utm_medium ?? null,
+          utm_campaign: ghlAttr.utm_campaign ?? null,
+          signup_method: "email_mobile",
+        });
+        // Fresh UUID for the Meta CAPI eventId — no browser pixel on mobile
+        // to dedupe against (same as the mobile OAuth endpoints).
+        sendMetaCapiEvent({
+          eventName: "Lead",
+          eventId: crypto.randomUUID(),
+          email: user.email!,
+          clientIp: req.ip,
+          userAgent: req.headers?.["user-agent"],
+          fbp: req.cookies?._fbp ?? (user as any).signupFbp,
+          fbc: req.cookies?._fbc ?? (user as any).signupFbc,
+        });
+      }
+
+      // Invitee verification code + email — same as /api/register's invitee
+      // branch. Self-serve verification email stays deferred to the
+      // profileCompletedAt transition in PATCH /api/auth/me.
+      if (inviteToken) {
+        const code = crypto.randomInt(0, 1000000).toString().padStart(6, "0");
+        const codeExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
+        await db.update(users).set({
+          verificationCode: code,
+          verificationCodeExpiresAt: codeExpiresAt,
+          verificationCodeAttempts: 0,
+          verificationCodeSentAt: new Date(),
+        }).where(eq(users.id, user.id));
+
+        try {
+          await sendEmailVerificationEmail(user.email!, code, user.firstName);
+        } catch (emailErr) {
+          console.error("[register-mobile] verification email send failed:", emailErr);
+        }
+      }
+
+      // BOTH branches auto-login — deliberate divergence from web's invitee
+      // branch (201 + "check your email", no session). On a phone that flow
+      // means leaving the app, finding a code in Mail, coming back to no
+      // session, and retyping a just-created password. The security posture
+      // is identical: emailVerified stays false, the 6-digit code is still
+      // generated and emailed, and gating unverified users in-app is a
+      // separate concern.
+      req.login(user, (loginErr: any) => {
+        if (loginErr) {
+          console.error("[register-mobile] req.login failed:", loginErr);
+          return res.status(500).json({ error: "registration_failed", message: "Registration succeeded but sign-in failed. Please sign in." });
+        }
+        req.session.save(async (saveErr: any) => {
+          if (saveErr) {
+            console.error("[register-mobile] session save failed:", saveErr);
+            return res.status(500).json({ error: "registration_failed", message: "Registration succeeded but sign-in failed. Please sign in." });
+          }
+          try {
+            return res.status(201).json(await serializeUserForAuthResponse(user, req));
+          } catch (serErr) {
+            // sid already rotated — NEVER non-2xx now (see the mobile OAuth
+            // serialization note). Degrade the body; mobile falls back to
+            // GET /api/auth/user with a valid cookie.
+            console.error("[register-mobile] serialization failed (degrading, NOT 500):", serErr);
+            const { password: _pw, ...safeUser } = user as any;
+            return res.status(201).json(safeUser);
+          }
+        });
+      });
+    } catch (error) {
+      console.error("[register-mobile] failed:", error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: "registration_failed", message: "Registration failed" });
+      }
+    }
+  });
+
   // Tells the frontend which OAuth providers are enabled
   app.get("/api/auth/providers", (_req, res) => {
     res.json({

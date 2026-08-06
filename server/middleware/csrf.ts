@@ -57,6 +57,10 @@ const PATH_BYPASS = [
   // carry no browser Origin). Same precedent as /api/login.
   "/api/auth/apple/mobile",
   "/api/auth/google/mobile",
+  // Mobile email/password registration: same rationale as the mobile OAuth
+  // endpoints — unauthenticated entry point, no browser Origin on native
+  // requests, no ambient session to forge.
+  "/api/auth/register/mobile",
   "/api/login",
   "/api/register",
   "/api/forgot-password",
