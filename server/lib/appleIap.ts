@@ -421,7 +421,9 @@ export async function processApplePurchase(
   } catch (e) {
     if (e instanceof AppleIapVerificationError) {
       console.error(`${LOG} ${eventLabel} verification failed: ${e.message}`);
-      return { status: 401, body: { error: "Verification failed" } };
+      // code lets the mobile client distinguish a terminal verification
+      // failure (stop retrying the transaction) from a session/auth 401.
+      return { status: 401, body: { error: "verification_failed", message: "Verification failed" } };
     }
     throw e;
   }
@@ -435,7 +437,7 @@ export async function processApplePurchase(
   }
   if (txn.bundleId !== expectedBundleId) {
     console.error(`${LOG} ${eventLabel} bundleId mismatch — rejected`);
-    return { status: 401, body: { error: "Verification failed" } };
+    return { status: 401, body: { error: "verification_failed", message: "Verification failed" } };
   }
 
   const originalTransactionId: string | undefined = txn.originalTransactionId;
