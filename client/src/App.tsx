@@ -33,6 +33,11 @@ import ResetPasswordPage from "@/pages/reset-password";
 import VerifyEmailPage from "@/pages/verify-email";
 import SubscribePage from "@/pages/subscribe";
 import ChoosePlanPage, { hasSkippedChoosePlan } from "@/pages/choose-plan";
+
+// /choose-plan paywall launch cutoff — only accounts created AFTER this
+// moment see the paywall; the ~65 pre-existing trialing admin accounts
+// (incl. active prospects) never do.
+const PAYWALL_LAUNCH_AT = new Date("2026-08-06T18:00:00Z");
 import DashboardPage from "@/pages/dashboard";
 import ProjectsPage from "@/pages/projects";
 import ProjectDetailPage from "@/pages/project-detail";
@@ -454,30 +459,33 @@ function AppContent() {
   // excludes invitees, including invited admins) while trialing with no
   // Stripe subscription, unless skipped this browser session
   // (sessionStorage). "Skip this step" routes to / and the trial continues.
+  // Launch cutoff: only accounts created after this ships see the paywall —
+  // existing trialing accounts (incl. active prospects) are grandfathered
+  // out. accountCreatedAt rides the /api/auth/user payload as an ISO string;
+  // missing/unparsable → treated as pre-launch (fail closed, no paywall).
   const subStatus = (user as any).subscriptionStatus;
+  const accountCreatedAtMs = Date.parse((user as any).accountCreatedAt ?? "");
   const needsChoosePlan =
     !checkoutReturnRef.current &&
     (user as any).role === "admin" &&
     (user as any).isOwner === true &&
     (subStatus === "trialing" || subStatus === "trial") &&
     !(user as any).stripeSubscriptionId &&
+    Number.isFinite(accountCreatedAtMs) &&
+    accountCreatedAtMs > PAYWALL_LAUNCH_AT.getTime() &&
     !hasSkippedChoosePlan();
   if (needsChoosePlan) {
     if (location !== "/choose-plan") {
-      console.log("[appcontent] gate=needs-choose-plan → redirect /choose-plan", { location });
       return <Redirect to="/choose-plan" />;
     }
-    console.log("[appcontent] gate=needs-choose-plan → render ChoosePlanPage");
     return <ChoosePlanPage />;
   }
   if (location === "/choose-plan") {
     // Skipped / not eligible (non-owner, already subscribed) — never strand
     // anyone on the paywall route.
-    console.log("[appcontent] gate=choose-plan-not-needed → redirect /");
     return <Redirect to="/" />;
   }
 
-  console.log("[appcontent] gate=passthrough → SubscriptionGate");
   return <SubscriptionGate />;
 }
 
