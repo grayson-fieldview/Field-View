@@ -82,8 +82,10 @@ export async function cleanupTestAccounts(): Promise<void> {
     const ids = ACCOUNT_IDS;
 
     const exists = async (table: string): Promise<boolean> => {
+      // Table may be schema-qualified (e.g. "stripe.customers"); default public.
+      const qualified = table.includes(".") ? table : "public." + table;
       const r: any = await tx.execute(
-        sql`SELECT to_regclass(${"public." + table}) IS NOT NULL AS present`,
+        sql`SELECT to_regclass(${qualified}) IS NOT NULL AS present`,
       );
       return !!r.rows?.[0]?.present;
     };
@@ -151,7 +153,44 @@ export async function cleanupTestAccounts(): Promise<void> {
     // 5 — auth leaves + sessions (no FK; sess->passport->user is the sid owner)
     await del("email_verification_tokens", sql`user_id IN ${uids}`);
     await del("password_reset_tokens", sql`user_id IN ${uids}`);
-    await del("sessions", sql`sess->'passport'->>'user' IN ${uids}`);
+    // Cast to text: sess->>... yields text, users.id is uuid in prod.
+    await del(
+      "sessions",
+      sql`sess->'passport'->>'user' IN (SELECT id::text FROM users WHERE account_id = ANY(${ids}))`,
+    );
+
+    // 5b — Stripe-connector mirror tables (stripe schema). All FK accounts.id
+    // with NO ACTION, so surviving rows block the accounts delete. All
+    // optional (to_regclass-checked) — absent tables just skip. Data column
+    // is _account_id except the two connector-internal tables.
+    const stripeMirrorTables = [
+      "stripe.checkout_session_line_items",
+      "stripe.checkout_sessions",
+      "stripe.subscription_items",
+      "stripe.subscription_schedules",
+      "stripe.subscriptions",
+      "stripe.invoices",
+      "stripe.credit_notes",
+      "stripe.charges",
+      "stripe.refunds",
+      "stripe.disputes",
+      "stripe.early_fraud_warnings",
+      "stripe.reviews",
+      "stripe.payment_intents",
+      "stripe.payment_methods",
+      "stripe.setup_intents",
+      "stripe.tax_ids",
+      "stripe.customers",
+      "stripe.plans",
+      "stripe.prices",
+      "stripe.products",
+      "stripe.features",
+    ];
+    for (const t of stripeMirrorTables) {
+      await del(t, sql`_account_id = ANY(${ids})`);
+    }
+    await del("stripe._managed_webhooks", inAccounts("account_id"));
+    await del("stripe._sync_status", inAccounts("account_id"));
 
     // 6 — parents last
     await del("projects", inAccounts("account_id"), { core: true });
