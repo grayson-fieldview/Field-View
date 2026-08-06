@@ -594,6 +594,39 @@ export function getSession() {
   });
 }
 
+// Serialize exactly like GET /api/auth/user (routes.ts): password strip,
+// billing overlay, isOwner + account install-prompt fields, sanitize.
+// Module-scoped + exported so EVERY auth-mutation response (mobile OAuth,
+// register/mobile, PATCH /api/auth/me, verify-email-code) returns the exact
+// GET /api/auth/user shape — the mobile AuthGate makes its paywall decision
+// from these POST bodies with no follow-up GET (deliberate: avoids the
+// req.login() session-id rotation race), so shape drift breaks the gate.
+export async function serializeUserForAuthResponse(user: User, req: any) {
+  const { password: _pw, ...safeUser } = user as any;
+  const safeUserWithBilling = await overlayAccountBillingOnUser(safeUser, req);
+  let isOwner = false;
+  let accountFirstMobileUploadAt: Date | null = null;
+  let accountCreatedAt: Date | null = null;
+  if (user.accountId) {
+    const [account] = await db
+      .select({
+        ownerId: accounts.ownerId,
+        firstMobileUploadAt: accounts.firstMobileUploadAt,
+        createdAt: accounts.createdAt,
+      })
+      .from(accounts)
+      .where(eq(accounts.id, user.accountId))
+      .limit(1);
+    isOwner = !!account && account.ownerId === user.id;
+    accountFirstMobileUploadAt = account?.firstMobileUploadAt ?? null;
+    accountCreatedAt = account?.createdAt ?? null;
+  }
+  return sanitizeUserForViewer(
+    { ...safeUserWithBilling, isOwner, accountFirstMobileUploadAt, accountCreatedAt },
+    user,
+  );
+}
+
 export async function setupAuth(app: Express) {
   app.set("trust proxy", 1);
   // S46 — cookie-parser mounts first so req.cookies (incl. _fbp/_fbc) is
@@ -1503,33 +1536,8 @@ export async function setupAuth(app: Express) {
   // /api/auth/user) so AuthContext.signIn never needs a follow-up fetch
   // that would race passport's session-id rotation.
 
-  // Serialize exactly like GET /api/auth/user (routes.ts): password strip,
-  // billing overlay, isOwner + account install-prompt fields, sanitize.
-  const serializeUserForAuthResponse = async (user: User, req: any) => {
-    const { password: _pw, ...safeUser } = user as any;
-    const safeUserWithBilling = await overlayAccountBillingOnUser(safeUser, req);
-    let isOwner = false;
-    let accountFirstMobileUploadAt: Date | null = null;
-    let accountCreatedAt: Date | null = null;
-    if (user.accountId) {
-      const [account] = await db
-        .select({
-          ownerId: accounts.ownerId,
-          firstMobileUploadAt: accounts.firstMobileUploadAt,
-          createdAt: accounts.createdAt,
-        })
-        .from(accounts)
-        .where(eq(accounts.id, user.accountId))
-        .limit(1);
-      isOwner = !!account && account.ownerId === user.id;
-      accountFirstMobileUploadAt = account?.firstMobileUploadAt ?? null;
-      accountCreatedAt = account?.createdAt ?? null;
-    }
-    return sanitizeUserForViewer(
-      { ...safeUserWithBilling, isOwner, accountFirstMobileUploadAt, accountCreatedAt },
-      user,
-    );
-  };
+  // serializeUserForAuthResponse hoisted to module scope (exported above) so
+  // PATCH /api/auth/me and /api/verify-email-code (auth/routes.ts) reuse it.
 
   // Map findOrCreateOAuthUser's known throws to distinct client-safe 4xx
   // responses (mobile shows different copy per case). Unknown errors → null
@@ -2244,9 +2252,11 @@ export async function setupAuth(app: Express) {
       // failure, degrade the body instead of erroring.
       const respondWithUser = async () => {
         try {
-          const { password: _pw, ...safeUser } = verifiedUser as any;
-          const safeUserWithBilling = await overlayAccountBillingOnUser(safeUser, req);
-          res.json(sanitizeUserForViewer(safeUserWithBilling, verifiedUser));
+          // Full GET /api/auth/user shape via the shared serializer (billing
+          // overlay + isOwner + account fields) — previously hand-rolled
+          // here WITHOUT isOwner/accountCreatedAt, which diverged from the
+          // GET payload the comment above promises.
+          res.json(await serializeUserForAuthResponse(verifiedUser, req));
         } catch (overlayErr) {
           console.error(
             "[verify-email-code] billing overlay failed (degrading, NOT 500):",

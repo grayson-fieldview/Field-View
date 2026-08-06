@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import crypto from "crypto";
 import { authStorage } from "./storage";
-import { isAuthenticated } from "./replitAuth";
+import { isAuthenticated, serializeUserForAuthResponse } from "./replitAuth";
 import { overlayAccountBillingOnUser } from "../../lib/billing";
 import { sanitizeUserForViewer } from "../../lib/userVisibility";
 import { db } from "../../db";
@@ -261,9 +261,10 @@ export function registerAuthRoutes(app: Express): void {
         }
       }
 
-      const { password: _, ...safeUser } = updated;
-      const safeUserWithBilling = await overlayAccountBillingOnUser(safeUser, req);
-      const responseUser = sanitizeUserForViewer(safeUserWithBilling, req.user);
+      // Full GET /api/auth/user shape (billing overlay + isOwner + account
+      // fields) — the mobile AuthGate decides from this POST body with no
+      // follow-up GET, so it must match the GET payload exactly.
+      const responseUser = await serializeUserForAuthResponse(updated, req);
       // Meta dedup pairing: tell the client whether the server-side CAPI
       // StartTrial actually fired (owner-only, first-completion, non-comp),
       // so the browser pixel fires ONLY when it has a server twin with the
