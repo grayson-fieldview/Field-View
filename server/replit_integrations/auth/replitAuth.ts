@@ -600,6 +600,48 @@ export async function setupAuth(app: Express) {
   // session cookie, which express-session parses internally.
   app.use(cookieParser());
   app.use(getSession());
+  // TEMP DIAGNOSTIC 2026-08-06 [authdiag-session] — silent-401 investigation.
+  // Runs right after express-session for every /api/* request. express-session
+  // does not expose "newly created vs loaded" directly; determination method:
+  // parse the incoming connect.sid cookie ("s:<sid>.<sig>", URL-encoded) and
+  // compare its sid to req.sessionID. express-session keeps the incoming sid
+  // only when the store returned a row for it; on a store miss (or no cookie)
+  // it generates a fresh sid. So cookieSid === req.sessionID ⇒ loaded from
+  // store; mismatch/absent ⇒ newly created. Never throws; zero behavior
+  // change. Remove when investigation closes.
+  app.use((req: any, _res, next) => {
+    try {
+      if (req.path?.startsWith("/api/")) {
+        let cookieSid8: string | null = null;
+        let cookieArrived = false;
+        try {
+          const rawCookieHeader = req.headers?.cookie || "";
+          const match = /(?:^|;\s*)connect\.sid=([^;]+)/.exec(rawCookieHeader);
+          if (match) {
+            cookieArrived = true;
+            let val = decodeURIComponent(match[1]);
+            if (val.startsWith("s:")) val = val.slice(2);
+            const dot = val.indexOf(".");
+            cookieSid8 = (dot > 0 ? val.slice(0, dot) : val).slice(0, 8);
+          }
+        } catch {}
+        const sid8 = typeof req.sessionID === "string" ? req.sessionID.slice(0, 8) : null;
+        const loadedFromStore = cookieArrived && cookieSid8 !== null && cookieSid8 === sid8;
+        console.info(
+          "[authdiag-session]",
+          JSON.stringify({
+            path: req.path,
+            sidCookieArrived: cookieArrived,
+            cookieSid8,
+            sessionID8: sid8,
+            storeReturnedRow: loadedFromStore,
+            sessionState: !req.session ? "missing" : loadedFromStore ? "loaded" : "newly_created",
+          }),
+        );
+      }
+    } catch {}
+    next();
+  });
   // S46 — first-touch marketing attribution. Mounts immediately after
   // getSession() so req.session exists, but BEFORE passport/auth/csrf so
   // landing-page hits from logged-out browsers (including hits that would
@@ -832,25 +874,61 @@ export async function setupAuth(app: Express) {
 
   passport.serializeUser((user: any, cb) => cb(null, user.id));
   passport.deserializeUser(async (id: string, cb) => {
+    // TEMP DIAGNOSTIC 2026-08-06 [authdiag-deser] — silent-401 investigation.
+    // Records every invocation + which exit was taken. Logging failures are
+    // swallowed; zero behavior change. Remove when investigation closes.
+    const diag: any = {
+      userId8: typeof id === "string" ? id.slice(0, 8) : String(id).slice(0, 8),
+      gotUser: false,
+      userDeletedAt: null as string | null,
+      accountLookupRan: false,
+      accountDeletedAt: null as string | null,
+      exit: "unknown",
+    };
+    const diagLog = () => {
+      try {
+        console.info("[authdiag-deser]", JSON.stringify(diag));
+      } catch {}
+    };
     try {
       const user = await authStorage.getUser(id);
-      if (!user) return cb(null, null);
+      diag.gotUser = !!user; // TEMP DIAGNOSTIC 2026-08-06
+      if (!user) {
+        diag.exit = "cb_null_no_user"; // TEMP DIAGNOSTIC 2026-08-06
+        diagLog();
+        return cb(null, null);
+      }
+      diag.userDeletedAt = user.deletedAt ? String(user.deletedAt) : null; // TEMP DIAGNOSTIC 2026-08-06
       // Soft-delete gate: treat soft-deleted users as not authenticated for all API calls.
       // Defense in depth: also check account.deleted_at in case the two get out of sync.
-      if (user.deletedAt) return cb(null, null);
+      if (user.deletedAt) {
+        diag.exit = "cb_null_user_deleted"; // TEMP DIAGNOSTIC 2026-08-06
+        diagLog();
+        return cb(null, null);
+      }
       if (user.accountId) {
+        diag.accountLookupRan = true; // TEMP DIAGNOSTIC 2026-08-06
         const [account] = await db
           .select({ deletedAt: accounts.deletedAt, ownerId: accounts.ownerId })
           .from(accounts)
           .where(eq(accounts.id, user.accountId));
-        if (account?.deletedAt) return cb(null, null);
+        diag.accountDeletedAt = account?.deletedAt ? String(account.deletedAt) : null; // TEMP DIAGNOSTIC 2026-08-06
+        if (account?.deletedAt) {
+          diag.exit = "cb_null_account_deleted"; // TEMP DIAGNOSTIC 2026-08-06
+          diagLog();
+          return cb(null, null);
+        }
         // Attach account ownership so requireOwnerAdmin can gate owner-only
         // routes (e.g. API-key management). deserializeUser is the single
         // place req.user is assembled on every authenticated request.
         (user as any).account = { ownerId: account?.ownerId ?? null };
       }
+      diag.exit = "cb_success"; // TEMP DIAGNOSTIC 2026-08-06
+      diagLog();
       cb(null, user);
     } catch (error) {
+      diag.exit = "cb_error"; // TEMP DIAGNOSTIC 2026-08-06
+      diagLog();
       cb(error);
     }
   });
@@ -2237,8 +2315,36 @@ export async function setupAuth(app: Express) {
   });
 }
 
+// TEMP DIAGNOSTIC 2026-08-06 [authdiag-guard] — silent-401 investigation.
+// Called only when a guard is about to return 401. Synchronous, never throws,
+// never logs full sids/cookies (first 8 chars of identifiers only).
+// Remove when investigation closes.
+function authdiagGuardLog(req: any, guard: string, reason: string) {
+  try {
+    const sess: any = req.session;
+    const passportUser = sess?.passport?.user;
+    console.info(
+      "[authdiag-guard]",
+      JSON.stringify({
+        guard,
+        reason,
+        path: req.path,
+        hasCookieHeader: !!req.headers?.cookie,
+        hasSessionID: !!req.sessionID,
+        sessionID8: typeof req.sessionID === "string" ? req.sessionID.slice(0, 8) : null,
+        hasSession: !!sess,
+        hasPassport: !!sess?.passport,
+        hasPassportUser: passportUser !== undefined && passportUser !== null,
+        passportUser8: typeof passportUser === "string" ? passportUser.slice(0, 8) : null,
+        client: req.headers?.["x-fieldview-client"] ?? null,
+      }),
+    );
+  } catch {}
+}
+
 export const isAuthenticated: RequestHandler = async (req, res, next) => {
   if (!req.isAuthenticated()) {
+    authdiagGuardLog(req, "isAuthenticated", "not_authenticated"); // TEMP DIAGNOSTIC 2026-08-06
     return res.status(401).json({ message: "Unauthorized" });
   }
   next();
@@ -2246,11 +2352,13 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
 
 export const requireActiveSubscription: RequestHandler = async (req: any, res, next) => {
   if (!req.isAuthenticated()) {
+    authdiagGuardLog(req, "requireActiveSubscription", "not_authenticated"); // TEMP DIAGNOSTIC 2026-08-06
     return res.status(401).json({ message: "Unauthorized" });
   }
 
   const user = req.user;
   if (!user) {
+    authdiagGuardLog(req, "requireActiveSubscription", "no_req_user"); // TEMP DIAGNOSTIC 2026-08-06
     return res.status(401).json({ message: "Unauthorized" });
   }
 
@@ -2282,10 +2390,12 @@ export const requireActiveSubscription: RequestHandler = async (req: any, res, n
 
 export const requireReadAccess: RequestHandler = async (req: any, res, next) => {
   if (!req.isAuthenticated()) {
+    authdiagGuardLog(req, "requireReadAccess", "not_authenticated"); // TEMP DIAGNOSTIC 2026-08-06
     return res.status(401).json({ message: "Unauthorized" });
   }
   const user = req.user;
   if (!user) {
+    authdiagGuardLog(req, "requireReadAccess", "no_req_user"); // TEMP DIAGNOSTIC 2026-08-06
     return res.status(401).json({ message: "Unauthorized" });
   }
   const billing = await getAccountBilling(req);
@@ -2302,10 +2412,12 @@ export const requireReadAccess: RequestHandler = async (req: any, res, next) => 
 
 export const requireWriteAccess: RequestHandler = async (req: any, res, next) => {
   if (!req.isAuthenticated()) {
+    authdiagGuardLog(req, "requireWriteAccess", "not_authenticated"); // TEMP DIAGNOSTIC 2026-08-06
     return res.status(401).json({ message: "Unauthorized" });
   }
   const user = req.user;
   if (!user) {
+    authdiagGuardLog(req, "requireWriteAccess", "no_req_user"); // TEMP DIAGNOSTIC 2026-08-06
     return res.status(401).json({ message: "Unauthorized" });
   }
   const billing = await getAccountBilling(req);
