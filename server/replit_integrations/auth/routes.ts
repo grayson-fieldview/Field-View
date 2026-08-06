@@ -7,7 +7,7 @@ import { sanitizeUserForViewer } from "../../lib/userVisibility";
 import { db } from "../../db";
 import { accounts, users } from "@shared/models/auth";
 import { eq } from "drizzle-orm";
-import { INDUSTRY_VALUES, COMPANY_SIZE_VALUES, JOB_ROLE_VALUES } from "@shared/constants";
+import { INDUSTRY_VALUES, COMPANY_SIZE_VALUES, JOB_ROLE_VALUES, HEARD_ABOUT_US_VALUES } from "@shared/constants";
 import { sendEmailVerificationEmail } from "../../services/email";
 import { sendGhlEvent, estimatedMrrFromCompanySize } from "../../lib/ghl";
 import { sendMetaCapiEvent } from "../../lib/metaCapi";
@@ -58,7 +58,7 @@ export function registerAuthRoutes(app: Express): void {
 
   app.patch("/api/auth/me", isAuthenticated, async (req: any, res) => {
     try {
-      const { firstName, lastName, phone, industry, companySize, jobRole, tcpaAccepted } = req.body || {};
+      const { firstName, lastName, phone, industry, companySize, jobRole, heardAboutUs, tcpaAccepted } = req.body || {};
 
       const userUpdate: Record<string, any> = {};
 
@@ -129,6 +129,18 @@ export function registerAuthRoutes(app: Express): void {
         }
         accountUpdate.companySize = companySize;
       }
+      // "How did you hear about us?" — acquisition attribute. DELIBERATE
+      // divergence from jobRole: admin-gated alongside the account-level
+      // fields (it describes how the account was acquired, so only the
+      // admin completing setup sets it). Stored on users.heard_about_us.
+      // Non-admins silently ignored, consistent with industry/companySize.
+      // Never read in any authorization path.
+      if (isAdmin && heardAboutUs !== undefined && heardAboutUs !== null && heardAboutUs !== "") {
+        if (typeof heardAboutUs !== "string" || !HEARD_ABOUT_US_VALUES.includes(heardAboutUs)) {
+          return res.status(400).json({ message: "Invalid heard-about-us value" });
+        }
+        userUpdate.heardAboutUs = heardAboutUs;
+      }
 
       // Read the existing user FIRST so we can detect the null→now() transition
       // on profileCompletedAt — that's the moment a trial signup finishes Step 2
@@ -191,6 +203,7 @@ export function registerAuthRoutes(app: Express): void {
             phone: updated.phone,
             sms_consent: updated.smsConsentAt != null,
             job_role: updated.jobRole ?? null,
+            heard_about_us: updated.heardAboutUs ?? null,
             trade_type: acctIndustry,
             crew_size: acctCompanySize,
             trial_ends_at: updated.trialEndsAt,

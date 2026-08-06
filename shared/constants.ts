@@ -45,3 +45,19 @@ export const JOB_ROLES = [
 ] as const;
 
 export const JOB_ROLE_VALUES = JOB_ROLES.map((r) => r.value) as readonly string[];
+
+// "How did you hear about us?" — account-level acquisition attribute
+// collected during onboarding (users.heard_about_us, admin-set). Never used
+// in any authorization path.
+export const HEARD_ABOUT_US = [
+  { value: "google_search", label: "Google Search" },
+  { value: "social_media", label: "Social Media" },
+  { value: "paid_social_ad", label: "Facebook / Instagram Ad" },
+  { value: "referral", label: "Referral from a friend" },
+  { value: "trade_show", label: "Trade Show / Event" },
+  { value: "podcast", label: "Podcast" },
+  { value: "youtube", label: "YouTube" },
+  { value: "other", label: "Other" },
+] as const;
+
+export const HEARD_ABOUT_US_VALUES = HEARD_ABOUT_US.map((r) => r.value) as readonly string[];

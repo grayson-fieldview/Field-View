@@ -91,6 +91,10 @@ export const users = pgTable("users", {
   // NOT a permission — `role` above is the authorization enum; job_role
   // must never be read in any authorization path.
   jobRole: varchar("job_role"),
+  // "How did you hear about us?" — acquisition attribute from onboarding
+  // (HEARD_ABOUT_US in shared/constants.ts). Nullable, no default: the
+  // onboarding field is optional. Never read in any authorization path.
+  heardAboutUs: varchar("heard_about_us"),
   profileCompletedAt: timestamp("profile_completed_at"),
   // S46 GHL: A2P/TCPA SMS consent timestamp. Set when the user checks the
   // consent box on the Complete Setup page (tcpaAccepted in PATCH

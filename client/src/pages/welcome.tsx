@@ -15,7 +15,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Loader2, Star } from "lucide-react";
-import { INDUSTRIES, COMPANY_SIZES, JOB_ROLES } from "@shared/constants";
+import { INDUSTRIES, COMPANY_SIZES, JOB_ROLES, HEARD_ABOUT_US } from "@shared/constants";
 import faviconImg from "@assets/Favicon-01-brand_1778259672.png";
 import { trackEvent } from "@/lib/google-analytics";
 
@@ -49,6 +49,7 @@ export default function WelcomePage() {
   const [industry, setIndustry] = useState("");
   const [jobRole, setJobRole] = useState("");
   const [companySize, setCompanySize] = useState("");
+  const [heardAboutUs, setHeardAboutUs] = useState("");
   const [tcpaAccepted, setTcpaAccepted] = useState(false);
 
   // Meta CAPI dedup: UUID generated per submit, sent as metaEventId so the
@@ -75,6 +76,10 @@ export default function WelcomePage() {
       if (isAdmin) {
         body.industry = industry;
         body.companySize = companySize;
+        // Optional acquisition attribute — admin-gated server-side.
+        if (heardAboutUs) {
+          body.heardAboutUs = heardAboutUs;
+        }
       }
       const res = await apiRequest("PATCH", "/api/auth/me", body);
       return res.json();
@@ -309,6 +314,22 @@ export default function WelcomePage() {
                       <SelectContent>
                         {COMPANY_SIZES.map((opt) => (
                           <SelectItem key={opt.value} value={opt.value} data-testid={`option-company-size-${opt.value}`}>
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="heardAboutUs">How did you hear about us? (optional)</Label>
+                    <Select value={heardAboutUs} onValueChange={setHeardAboutUs}>
+                      <SelectTrigger id="heardAboutUs" className={FIELD_CLASS} data-testid="select-heard-about-us">
+                        <SelectValue placeholder="Select an option" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {HEARD_ABOUT_US.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value} data-testid={`option-heard-about-us-${opt.value}`}>
                             {opt.label}
                           </SelectItem>
                         ))}
