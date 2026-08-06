@@ -1800,13 +1800,14 @@ export async function setupAuth(app: Express) {
       } else {
         initialSubscriptionStatus = "trialing";
         initialTrialEndsAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
-        // Account name synthesized like findOrCreateOAuthUser: no names are
-        // collected on this endpoint, so the "<First Last>" branch never
-        // applies — always "<email>'s Team". Renamed later via
-        // PATCH /api/account/name during mobile onboarding.
-        const accountName = [firstName, lastName].filter(Boolean).join(" ") || email;
+        // Names are not collected on this endpoint, so unlike
+        // findOrCreateOAuthUser there is no real name to build a
+        // "<First Last>'s Team" from. A neutral placeholder is used because
+        // accounts.name is user-visible on PDF covers/footers and public
+        // share pages if onboarding is abandoned — never the email address.
+        // Mobile onboarding renames it via PATCH /api/account/name.
         const [account] = await db.insert(accounts).values({
-          name: accountName + "'s Team",
+          name: "My Company",
           subscriptionStatus: initialSubscriptionStatus,
           trialEndsAt: initialTrialEndsAt,
         }).returning();
