@@ -3101,6 +3101,69 @@ export async function registerRoutes(
     }
   });
 
+  // Read-only billing summary for the mobile app. Admin-only: seat counts
+  // and billing state are account-level admin information. Composes ONLY
+  // locally-stored data — deliberately NO live Stripe or App Store Server
+  // API calls (no renewal date: not stored for either provider). No plan
+  // name / project cap / video gating — none of those concepts exist.
+  app.get("/api/account/billing-summary", requireAdmin, async (req: any, res) => {
+    try {
+      const accountId = req.user.accountId;
+      if (!accountId) {
+        return res.status(404).json({ message: "Account not found" });
+      }
+
+      const [accountRow] = await db
+        .select({ name: accounts.name, seatCount: accounts.seatCount })
+        .from(accounts)
+        .where(eq(accounts.id, accountId))
+        .limit(1);
+      if (!accountRow) {
+        return res.status(404).json({ message: "Account not found" });
+      }
+
+      // status / trialEndsAt / billingProvider from the same source of
+      // truth the auth overlay uses (accounts row, user-row fallback).
+      const billing = await getAccountBilling(req);
+      const status = billing.subscriptionStatus ?? "none";
+      const isTrial = status === "trialing" || status === "trial";
+
+      // Seats — mirrors GET /api/account/seats exactly.
+      const total = accountRow.seatCount ?? 3;
+      const usage = await computeSeatUsage(db, accountId);
+
+      // activeProjects — same filter as analytics totalProjects: ALL
+      // projects for the account (no archived/status filter exists there).
+      // photoCount — same source as analytics totalPhotos: media joined to
+      // the account's projects, mimeType LIKE 'image/%'. Single count()
+      // query each, no N+1.
+      const [[projRow], [photoRow]] = await Promise.all([
+        db
+          .select({ c: count() })
+          .from(projects)
+          .where(eq(projects.accountId, accountId)),
+        db
+          .select({ c: count() })
+          .from(media)
+          .innerJoin(projects, eq(media.projectId, projects.id))
+          .where(and(eq(projects.accountId, accountId), sql`${media.mimeType} LIKE 'image/%'`)),
+      ]);
+
+      res.json({
+        accountName: accountRow.name,
+        status,
+        trialEndsAt: isTrial && billing.trialEndsAt ? billing.trialEndsAt.toISOString() : null,
+        billingProvider: billing.billingProvider,
+        seats: { used: usage.used, total },
+        activeProjects: Number(projRow?.c ?? 0),
+        photoCount: Number(photoRow?.c ?? 0),
+      });
+    } catch (error) {
+      console.error("Billing summary error:", error);
+      res.status(500).json({ message: "Failed to fetch billing summary" });
+    }
+  });
+
   // Account seat usage
   app.get("/api/account/seats", requireAdmin, async (req: any, res) => {
     try {
