@@ -217,3 +217,22 @@ export async function overlayAccountBillingOnUser<T extends Record<string, any>>
     accessLevel,
   };
 }
+
+// Single source of truth for "card on file" / usable Stripe subscription.
+// Mirrors the original inline condition from POST /api/account/seats so the
+// three seat-cap sites (GET seats, POST seats, invite) can't drift. Moved
+// here from routes.ts so the Apple IAP purchase path (lib/appleIap.ts) can
+// use it as its double-charge guard without a routes.ts import cycle.
+const BLOCKED_SUBSCRIPTION_STATUSES = ["canceled", "incomplete_expired", "unpaid"];
+export function hasUsableSubscription(acct: {
+  stripeCustomerId?: string | null;
+  stripeSubscriptionId?: string | null;
+  subscriptionStatus?: string | null;
+}): boolean {
+  return (
+    !!acct.stripeCustomerId &&
+    !!acct.stripeSubscriptionId &&
+    !(acct.subscriptionStatus &&
+      BLOCKED_SUBSCRIPTION_STATUSES.includes(acct.subscriptionStatus))
+  );
+}

@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import crypto from "crypto";
 import { storage } from "./storage";
 import { setupAuth, registerAuthRoutes, isAuthenticated, requireReadAccess, requireWriteAccess } from "./replit_integrations/auth";
-import { getAccountBilling, isAccountBillingEnabled, overlayAccountBillingOnUser, isSeatAddonItem, getSeatAddonPriceId } from "./lib/billing";
+import { getAccountBilling, isAccountBillingEnabled, overlayAccountBillingOnUser, isSeatAddonItem, getSeatAddonPriceId, hasUsableSubscription } from "./lib/billing";
 import { requireAdmin, requireAdminOrManager, requireOwnerAdmin } from "./middleware/auth";
 import { generateApiKey } from "./lib/apiKeys";
 import { normalizeEmail } from "./lib/normalizeEmail";
@@ -106,22 +106,8 @@ async function streamReportPdfById(id: number, res: any): Promise<void> {
   stream.pipe(res);
 }
 
-// Single source of truth for "card on file" / usable Stripe subscription.
-// Mirrors the original inline condition from POST /api/account/seats so the
-// three seat-cap sites (GET seats, POST seats, invite) can't drift.
-const BLOCKED_SUBSCRIPTION_STATUSES = ["canceled", "incomplete_expired", "unpaid"];
-function hasUsableSubscription(acct: {
-  stripeCustomerId?: string | null;
-  stripeSubscriptionId?: string | null;
-  subscriptionStatus?: string | null;
-}): boolean {
-  return (
-    !!acct.stripeCustomerId &&
-    !!acct.stripeSubscriptionId &&
-    !(acct.subscriptionStatus &&
-      BLOCKED_SUBSCRIPTION_STATUSES.includes(acct.subscriptionStatus))
-  );
-}
+// hasUsableSubscription moved to ./lib/billing (imported above) so the Apple
+// IAP purchase path can share it without a routes.ts import cycle.
 
 // S46 GHL activation_milestone. Called fire-and-forget after every media
 // batch insert. Threshold: ≥1 project AND ≥5 photos (image mime types) for

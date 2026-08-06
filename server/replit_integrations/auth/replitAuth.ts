@@ -16,6 +16,7 @@ import { passwordResetTokens, users, accounts, invitations, type User } from "@s
 import { projectAssignments } from "@shared/schema";
 import { sendPasswordResetEmail, sendEmailVerificationEmail, sendAccountRestoredEmail } from "../../services/email";
 import { getAccountBilling, overlayAccountBillingOnUser, computeAccessLevel } from "../../lib/billing";
+import { processApplePurchase } from "../../lib/appleIap";
 import { sanitizeUserForViewer } from "../../lib/userVisibility";
 import { verifyRecaptchaToken } from "../../services/recaptcha";
 import { CURRENT_TERMS_VERSION } from "@shared/constants";
@@ -1718,6 +1719,39 @@ export async function setupAuth(app: Express) {
     } catch (err: any) {
       console.error("[apple-mobile] failed:", err?.message || err);
       if (!res.headersSent) res.status(500).json({ message: "Sign-in failed" });
+    }
+  });
+
+  // ----- Apple IAP purchase submission (StoreKit 2 signed transaction) -----
+  // Mobile POSTs expo-iap's purchaseToken (the signed transaction JWS) here
+  // after a purchase / restore / relaunch-with-unfinished-transaction.
+  // Verification + account resolution + billing write all live in
+  // lib/appleIap.ts (processApplePurchase — shared pipeline with the ASSN V2
+  // handler). Idempotent: a repeat JWS re-resolves via the already-bound
+  // originalTransactionId and returns 200 with the current user. Registered
+  // here (not routes.ts) because the response reuses the closure-scoped
+  // serializeUserForAuthResponse — same pattern as the mobile auth endpoints.
+  app.post("/api/billing/apple/purchase", isAuthenticated, async (req: any, res) => {
+    try {
+      const { jws } = req.body || {};
+      if (typeof jws !== "string" || !jws) {
+        return res.status(400).json({ message: "Missing jws" });
+      }
+      const result = await processApplePurchase(jws, req.user?.accountId ?? null);
+      if (result.status !== 200) {
+        return res.status(result.status).json(result.body ?? { message: "Purchase not applied" });
+      }
+      // Re-fetch AFTER the billing write so the serialized payload reflects
+      // the new provider/status/seatCount (billing overlay reads the account
+      // row live).
+      const fresh = await authStorage.getUser(req.user.id);
+      if (!fresh) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      return res.json(await serializeUserForAuthResponse(fresh, req));
+    } catch (err: any) {
+      console.error("[apple-iap] purchase endpoint failed:", err?.message || err);
+      if (!res.headersSent) res.status(500).json({ message: "Failed to apply purchase" });
     }
   });
 
