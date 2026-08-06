@@ -37,7 +37,7 @@ import ChoosePlanPage, { hasSkippedChoosePlan } from "@/pages/choose-plan";
 // /choose-plan paywall launch cutoff — only accounts created AFTER this
 // moment see the paywall; the ~65 pre-existing trialing admin accounts
 // (incl. active prospects) never do.
-const PAYWALL_LAUNCH_AT = new Date("2026-08-06T18:00:00Z");
+const PAYWALL_LAUNCH_AT = new Date("2026-08-06T17:20:00Z");
 import DashboardPage from "@/pages/dashboard";
 import ProjectsPage from "@/pages/projects";
 import ProjectDetailPage from "@/pages/project-detail";
