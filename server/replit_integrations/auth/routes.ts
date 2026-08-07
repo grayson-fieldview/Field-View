@@ -2,8 +2,6 @@ import type { Express } from "express";
 import crypto from "crypto";
 import { authStorage } from "./storage";
 import { isAuthenticated, serializeUserForAuthResponse } from "./replitAuth";
-import { overlayAccountBillingOnUser } from "../../lib/billing";
-import { sanitizeUserForViewer } from "../../lib/userVisibility";
 import { db } from "../../db";
 import { accounts, users } from "@shared/models/auth";
 import { eq } from "drizzle-orm";
@@ -21,35 +19,12 @@ export function registerAuthRoutes(app: Express): void {
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
-      const { password: _, ...safeUser } = user;
-      const safeUserWithBilling = await overlayAccountBillingOnUser(safeUser, req);
-      // Account ownership flag for client gating (e.g. "Delete account" UI).
-      // Defensive defaults: missing accountId or missing account row → false.
-      let isOwner = false;
-      // App-install-prompt gating fields, exposed alongside the billing
-      // overlay fields (same "account state rides on the user payload"
-      // pattern as trialEndsAt/subscriptionStatus).
-      let accountFirstMobileUploadAt: Date | null = null;
-      let accountCreatedAt: Date | null = null;
-      if (user.accountId) {
-        const [account] = await db
-          .select({
-            ownerId: accounts.ownerId,
-            firstMobileUploadAt: accounts.firstMobileUploadAt,
-            createdAt: accounts.createdAt,
-          })
-          .from(accounts)
-          .where(eq(accounts.id, user.accountId))
-          .limit(1);
-        isOwner = !!account && account.ownerId === user.id;
-        accountFirstMobileUploadAt = account?.firstMobileUploadAt ?? null;
-        accountCreatedAt = account?.createdAt ?? null;
-      }
-      const sanitized = sanitizeUserForViewer(
-        { ...safeUserWithBilling, isOwner, accountFirstMobileUploadAt, accountCreatedAt },
-        user,
-      );
-      res.json(sanitized);
+      // Shared serializer — the single source of the auth-response shape
+      // (password strip, billing overlay, isOwner + account fields incl.
+      // accountPaywallSkippedAt, sanitize). This handler previously
+      // duplicated that logic inline and silently drifted when
+      // accountPaywallSkippedAt was added to the serializer only.
+      res.json(await serializeUserForAuthResponse(user, req));
     } catch (error) {
       console.error("Error fetching user:", error);
       res.status(500).json({ message: "Failed to fetch user" });
