@@ -2,7 +2,7 @@ import express, { type Express } from "express";
 import { createServer, type Server } from "http";
 import crypto from "crypto";
 import { storage } from "./storage";
-import { setupAuth, registerAuthRoutes, isAuthenticated, requireReadAccess, requireWriteAccess } from "./replit_integrations/auth";
+import { setupAuth, registerAuthRoutes, isAuthenticated, requireReadAccess, requireWriteAccess, serializeUserForAuthResponse } from "./replit_integrations/auth";
 import { getAccountBilling, isAccountBillingEnabled, overlayAccountBillingOnUser, isSeatAddonItem, getSeatAddonPriceId, hasUsableSubscription } from "./lib/billing";
 import { requireAdmin, requireAdminOrManager, requireOwnerAdmin } from "./middleware/auth";
 import { generateApiKey } from "./lib/apiKeys";
@@ -3044,6 +3044,30 @@ export async function registerRoutes(
     } catch (error) {
       console.error("[account/name PATCH] error:", error);
       res.status(500).json({ message: "Failed to update account name" });
+    }
+  });
+
+  // Body-less, set-once: stamps accounts.paywall_skipped_at so the
+  // /choose-plan paywall stays suppressed across sessions/devices (replaces
+  // the per-session sessionStorage flag). Owner-only: the paywall renders
+  // only for the owner, and only the owner may permanently suppress it.
+  // requireOwnerAdmin is a pure role+ownership gate (no billing lookup), so
+  // it has no ACCOUNT_BILLING_ENABLED-off 402 exposure. Idempotent — a
+  // repeat call matches zero rows and still returns 200 with the user.
+  app.post("/api/account/skip-paywall", requireOwnerAdmin, async (req: any, res) => {
+    try {
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      await db
+        .update(accounts)
+        .set({ paywallSkippedAt: new Date() })
+        .where(and(eq(accounts.id, accountId), isNull(accounts.paywallSkippedAt)));
+      // Full GET /api/auth/user shape so clients can setQueryData directly;
+      // includes the freshly stamped accountPaywallSkippedAt.
+      res.json(await serializeUserForAuthResponse(req.user, req));
+    } catch (error) {
+      console.error("[account/skip-paywall POST] error:", error);
+      res.status(500).json({ message: "Failed to skip paywall" });
     }
   });
 

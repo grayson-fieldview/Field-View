@@ -607,12 +607,14 @@ export async function serializeUserForAuthResponse(user: User, req: any) {
   let isOwner = false;
   let accountFirstMobileUploadAt: Date | null = null;
   let accountCreatedAt: Date | null = null;
+  let accountPaywallSkippedAt: Date | null = null;
   if (user.accountId) {
     const [account] = await db
       .select({
         ownerId: accounts.ownerId,
         firstMobileUploadAt: accounts.firstMobileUploadAt,
         createdAt: accounts.createdAt,
+        paywallSkippedAt: accounts.paywallSkippedAt,
       })
       .from(accounts)
       .where(eq(accounts.id, user.accountId))
@@ -620,9 +622,10 @@ export async function serializeUserForAuthResponse(user: User, req: any) {
     isOwner = !!account && account.ownerId === user.id;
     accountFirstMobileUploadAt = account?.firstMobileUploadAt ?? null;
     accountCreatedAt = account?.createdAt ?? null;
+    accountPaywallSkippedAt = account?.paywallSkippedAt ?? null;
   }
   return sanitizeUserForViewer(
-    { ...safeUserWithBilling, isOwner, accountFirstMobileUploadAt, accountCreatedAt },
+    { ...safeUserWithBilling, isOwner, accountFirstMobileUploadAt, accountCreatedAt, accountPaywallSkippedAt },
     user,
   );
 }
