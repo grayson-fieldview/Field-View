@@ -112,6 +112,17 @@ function BillingBanner() {
 
   if (!mode) return null;
 
+  // Card already on file (usable Stripe sub or Apple-billed): the
+  // trial-active "Add a card" nudge is noise — hide it entirely.
+  // trial-expired and past-due are unaffected.
+  if (mode === "trial-active" && (user as any)?.accountHasPaymentOnFile === true) {
+    return null;
+  }
+
+  // Only the owner-admin can act on the Add Card CTA; everyone else still
+  // sees the banner text, just without the button.
+  const canAddCard = (user as any)?.isOwner === true && (user as any)?.role === "admin";
+
   if (mode === "trial-active") {
     const label = daysLeft === 1 ? "1 day remaining" : `${daysLeft} days remaining`;
     return (
@@ -126,16 +137,18 @@ function BillingBanner() {
           <span className="font-medium">Trial: {label}.</span>{" "}
           Add a card now to keep your team running after your trial ends.
         </p>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={goToSubscribe}
-          className="border-orange-300 dark:border-orange-700 bg-white dark:bg-orange-900 hover:bg-orange-100 dark:hover:bg-orange-800 text-orange-900 dark:text-orange-100"
-          data-testid="button-add-card-trial"
-        >
-          <CreditCard className="h-4 w-4 mr-1.5" />
-          Add Card
-        </Button>
+        {canAddCard && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={goToSubscribe}
+            className="border-orange-300 dark:border-orange-700 bg-white dark:bg-orange-900 hover:bg-orange-100 dark:hover:bg-orange-800 text-orange-900 dark:text-orange-100"
+            data-testid="button-add-card-trial"
+          >
+            <CreditCard className="h-4 w-4 mr-1.5" />
+            Add Card
+          </Button>
+        )}
       </div>
     );
   }
@@ -153,16 +166,18 @@ function BillingBanner() {
           <span className="font-medium">Your trial has ended.</span>{" "}
           Your account is read-only — add a card to continue creating and editing.
         </p>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={goToSubscribe}
-          className="border-red-300 dark:border-red-700 bg-white dark:bg-red-900 hover:bg-red-100 dark:hover:bg-red-800 text-red-900 dark:text-red-100"
-          data-testid="button-add-card-expired"
-        >
-          <CreditCard className="h-4 w-4 mr-1.5" />
-          Add Card
-        </Button>
+        {canAddCard && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={goToSubscribe}
+            className="border-red-300 dark:border-red-700 bg-white dark:bg-red-900 hover:bg-red-100 dark:hover:bg-red-800 text-red-900 dark:text-red-100"
+            data-testid="button-add-card-expired"
+          >
+            <CreditCard className="h-4 w-4 mr-1.5" />
+            Add Card
+          </Button>
+        )}
       </div>
     );
   }

@@ -15,7 +15,7 @@ import { eq, and, isNull, isNotNull, gt, desc, sql } from "drizzle-orm";
 import { passwordResetTokens, users, accounts, invitations, type User } from "@shared/models/auth";
 import { projectAssignments } from "@shared/schema";
 import { sendPasswordResetEmail, sendEmailVerificationEmail, sendAccountRestoredEmail } from "../../services/email";
-import { getAccountBilling, overlayAccountBillingOnUser, computeAccessLevel } from "../../lib/billing";
+import { getAccountBilling, overlayAccountBillingOnUser, computeAccessLevel, hasUsableSubscription } from "../../lib/billing";
 import { processApplePurchase } from "../../lib/appleIap";
 import { sanitizeUserForViewer } from "../../lib/userVisibility";
 import { verifyRecaptchaToken } from "../../services/recaptcha";
@@ -608,6 +608,12 @@ export async function serializeUserForAuthResponse(user: User, req: any) {
   let accountFirstMobileUploadAt: Date | null = null;
   let accountCreatedAt: Date | null = null;
   let accountPaywallSkippedAt: Date | null = null;
+  // "Payment on file": usable Stripe subscription (pure predicate over the
+  // row below — no extra query) OR an Apple-billed account. Read directly
+  // from the accounts row in BOTH ACCOUNT_BILLING_ENABLED states — the
+  // billing overlay can't carry this because its flag-off path falls back
+  // to the user row. Defaults false with no accountId / no account row.
+  let accountHasPaymentOnFile = false;
   if (user.accountId) {
     const [account] = await db
       .select({
@@ -615,6 +621,10 @@ export async function serializeUserForAuthResponse(user: User, req: any) {
         firstMobileUploadAt: accounts.firstMobileUploadAt,
         createdAt: accounts.createdAt,
         paywallSkippedAt: accounts.paywallSkippedAt,
+        stripeCustomerId: accounts.stripeCustomerId,
+        stripeSubscriptionId: accounts.stripeSubscriptionId,
+        subscriptionStatus: accounts.subscriptionStatus,
+        billingProvider: accounts.billingProvider,
       })
       .from(accounts)
       .where(eq(accounts.id, user.accountId))
@@ -623,9 +633,12 @@ export async function serializeUserForAuthResponse(user: User, req: any) {
     accountFirstMobileUploadAt = account?.firstMobileUploadAt ?? null;
     accountCreatedAt = account?.createdAt ?? null;
     accountPaywallSkippedAt = account?.paywallSkippedAt ?? null;
+    accountHasPaymentOnFile =
+      !!account &&
+      (hasUsableSubscription(account) || account.billingProvider === "apple");
   }
   return sanitizeUserForViewer(
-    { ...safeUserWithBilling, isOwner, accountFirstMobileUploadAt, accountCreatedAt, accountPaywallSkippedAt },
+    { ...safeUserWithBilling, isOwner, accountFirstMobileUploadAt, accountCreatedAt, accountPaywallSkippedAt, accountHasPaymentOnFile },
     user,
   );
 }
