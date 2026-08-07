@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -95,8 +95,18 @@ export default function ChoosePlanPage() {
     },
   });
 
-  const skip = () => {
+  const skip = async () => {
+    // sessionStorage flag first: immediate effect so the redirect below
+    // can't race the auth refetch and bounce back here. The server field
+    // (accountPaywallSkippedAt) is the durable cross-session source.
     markChoosePlanSkipped();
+    try {
+      await apiRequest("POST", "/api/account/skip-paywall");
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+    } catch {
+      // Soft nudge — a failed persist must never trap the user here; the
+      // session-scoped flag still suppresses the paywall for this session.
+    }
     setLocation("/");
   };
 

@@ -473,6 +473,10 @@ function AppContent() {
     !(user as any).stripeSubscriptionId &&
     Number.isFinite(accountCreatedAtMs) &&
     accountCreatedAtMs > PAYWALL_LAUNCH_AT.getTime() &&
+    // Durable server-side skip (accountPaywallSkippedAt, stamped by
+    // POST /api/account/skip-paywall). Missing field on an older response
+    // is treated as not-skipped so it can't permanently suppress the paywall.
+    !(user as any).accountPaywallSkippedAt &&
     !hasSkippedChoosePlan();
   if (needsChoosePlan) {
     if (location !== "/choose-plan") {
