@@ -20,7 +20,14 @@
  *     paying customer their purchase is invalid — it should 500 and alert.
  */
 import { JWT } from "google-auth-library";
+import { waitUntil } from "@vercel/functions";
+import { and, eq } from "drizzle-orm";
+import { db } from "../db";
+import { accounts } from "@shared/models/auth";
 import { seatCountFromProductId } from "./appleIap";
+import { hasUsableSubscription } from "./billing";
+import { writeAccountBillingById } from "./stripeWebhook";
+import { Sentry } from "./sentry";
 
 // Re-export so future Google-path callers import the single parser from
 // here without a second appleIap dependency (do NOT duplicate the parser).
@@ -126,12 +133,27 @@ async function mintAccessTokenOrAuthFailed(
   }
 }
 
+// Config failures (missing/unparseable service-account key or package name)
+// are OUR problem, exactly like an OAuth credential failure — normalize them
+// to "auth_failed" so callers return the retryable 503, never a client error.
+function getClientAndPackageOrAuthFailed():
+  | { ok: true; client: JWT; packageName: string }
+  | { ok: false; error: "auth_failed"; status: number; detail: string } {
+  try {
+    return { ok: true, client: getJwtClient(), packageName: getPackageName() };
+  } catch (e: any) {
+    console.error(`${LOG} AUTH FAILED — configuration error: ${e?.message}`);
+    return { ok: false, error: "auth_failed", status: 0, detail: e?.message ?? "configuration error" };
+  }
+}
+
 export async function verifyGooglePlayPurchase(
   purchaseToken: string,
   productId: string,
 ): Promise<GooglePlayVerifyResult> {
-  const client = getJwtClient();
-  const packageName = getPackageName();
+  const cfg = getClientAndPackageOrAuthFailed();
+  if (!cfg.ok) return cfg;
+  const { client, packageName } = cfg;
   const url = `${API_BASE}/applications/${encodeURIComponent(packageName)}/purchases/subscriptionsv2/tokens/${encodeURIComponent(purchaseToken)}`;
 
   const minted = await mintAccessTokenOrAuthFailed(client);
@@ -211,8 +233,9 @@ export async function acknowledgeGooglePlayPurchase(
   purchaseToken: string,
   productId: string,
 ): Promise<GooglePlayAcknowledgeResult> {
-  const client = getJwtClient();
-  const packageName = getPackageName();
+  const cfg = getClientAndPackageOrAuthFailed();
+  if (!cfg.ok) return cfg;
+  const { client, packageName } = cfg;
   const url = `${API_BASE}/applications/${encodeURIComponent(packageName)}/purchases/subscriptions/${encodeURIComponent(productId)}/tokens/${encodeURIComponent(purchaseToken)}:acknowledge`;
 
   const minted = await mintAccessTokenOrAuthFailed(client);
@@ -244,4 +267,340 @@ export async function acknowledgeGooglePlayPurchase(
     }
     throw e;
   }
+}
+
+function trunc(id: unknown): string {
+  return typeof id === "string" && id.length > 0 ? `${id.slice(0, 8)}…` : "(none)";
+}
+
+// ---------------------------------------------------------------------------
+// Account resolution — mirrors resolveAppleAccountByTransaction, with ONE
+// structural addition: the LINKED-TOKEN lookup. Google ROTATES the
+// purchaseToken on upgrade/downgrade/resubscribe (Apple's
+// originalTransactionId is stable, so it has no equivalent); the new token's
+// SubscriptionPurchaseV2 carries linkedPurchaseToken pointing at the token it
+// replaced. A linked hit is the SAME subscriber changing tiers — migrate the
+// row to the new token and treat it as a primary match (no claim refusals).
+// ---------------------------------------------------------------------------
+export interface GooglePlayResolvedAccount {
+  id: string;
+  billingProvider: string | null;
+  subscriptionLapsedAt: Date | null;
+}
+
+export type GooglePlayAccountResolution =
+  | {
+      outcome: "resolved";
+      account: GooglePlayResolvedAccount;
+      /**
+       * Set when the account was found via linkedPurchaseToken (token
+       * rotation). The DB row still holds fromToken — NO write has happened.
+       * The caller must run applyGooglePlayTokenMigration AFTER its
+       * authorization checks pass, so an attacker submitting someone else's
+       * rotated token can never mutate that account's stored token.
+       */
+      pendingMigration?: { fromToken: string; toToken: string };
+    }
+  | { outcome: "no-match-no-claim" }
+  | { outcome: "claim-token-missing" }
+  | { outcome: "claim-account-not-found" }
+  | { outcome: "claim-bound-elsewhere" }
+  // Double-charge guard (purchase path only): the claim target still has a
+  // usable Stripe subscription — claiming it for google would bill twice.
+  | { outcome: "stripe-conflict" };
+
+export async function resolveGooglePlayAccountByToken(
+  purchaseToken: string,
+  linkedPurchaseToken: string | null,
+  claimAccountId: string | null,
+  opts: { allowClaim: boolean; guardStripeDoubleCharge: boolean },
+): Promise<GooglePlayAccountResolution> {
+  const { allowClaim, guardStripeDoubleCharge } = opts;
+  const eventLabel = "google:PURCHASE";
+
+  // PRIMARY: current token.
+  const [account] = await db
+    .select({
+      id: accounts.id,
+      billingProvider: accounts.billingProvider,
+      subscriptionLapsedAt: accounts.subscriptionLapsedAt,
+    })
+    .from(accounts)
+    .where(eq(accounts.googlePlayPurchaseToken, purchaseToken))
+    .limit(1);
+
+  if (account) {
+    if (claimAccountId && claimAccountId !== account.id) {
+      console.warn(
+        `${LOG} ${eventLabel} purchaser accountId ${trunc(claimAccountId)} != account ${account.id} resolved via purchaseToken ${trunc(purchaseToken)} — using purchaseToken match`,
+      );
+    }
+    return { outcome: "resolved", account };
+  }
+
+  // LINKED-TOKEN LOOKUP: token rotation (upgrade/downgrade/resubscribe).
+  // Same subscriber — migrate the row to the new token, no claim refusals.
+  if (linkedPurchaseToken) {
+    const [linked] = await db
+      .select({
+        id: accounts.id,
+        billingProvider: accounts.billingProvider,
+        subscriptionLapsedAt: accounts.subscriptionLapsedAt,
+      })
+      .from(accounts)
+      .where(eq(accounts.googlePlayPurchaseToken, linkedPurchaseToken))
+      .limit(1);
+    if (linked) {
+      // SIDE-EFFECT-FREE: the migration is returned as intent, not applied
+      // here — the caller must authorize the purchaser against this account
+      // BEFORE calling applyGooglePlayTokenMigration. (A pre-authorization
+      // write here would let anyone holding a rotated token mutate the
+      // victim account's stored token even though the request 409s.)
+      console.log(
+        `${LOG} ${eventLabel} token rotation detected: account ${linked.id} matched via linkedPurchaseToken ${trunc(linkedPurchaseToken)} — migration to ${trunc(purchaseToken)} pending authorization`,
+      );
+      return {
+        outcome: "resolved",
+        account: linked,
+        pendingMigration: { fromToken: linkedPurchaseToken, toToken: purchaseToken },
+      };
+    }
+  }
+
+  if (!allowClaim) return { outcome: "no-match-no-claim" };
+  // (fallback claim path continues below)
+  if (!claimAccountId) return { outcome: "claim-token-missing" };
+
+  const [candidate] = await db
+    .select({
+      id: accounts.id,
+      billingProvider: accounts.billingProvider,
+      googlePlayPurchaseToken: accounts.googlePlayPurchaseToken,
+      subscriptionLapsedAt: accounts.subscriptionLapsedAt,
+      stripeCustomerId: accounts.stripeCustomerId,
+      stripeSubscriptionId: accounts.stripeSubscriptionId,
+      subscriptionStatus: accounts.subscriptionStatus,
+    })
+    .from(accounts)
+    .where(eq(accounts.id, claimAccountId))
+    .limit(1);
+  if (!candidate) return { outcome: "claim-account-not-found" };
+
+  // Defensive: never remap an account already bound to a DIFFERENT Google
+  // Play token — that would silently rebind someone else's subscription.
+  // (A rotation of THIS account's token is handled by the linked lookup
+  // above; reaching here with a bound token means the tokens are unrelated.)
+  if (candidate.googlePlayPurchaseToken && candidate.googlePlayPurchaseToken !== purchaseToken) {
+    console.warn(
+      `${LOG} UNMAPPABLE: ${eventLabel} account ${candidate.id} (via purchaser accountId) is already bound to a different purchaseToken ${trunc(candidate.googlePlayPurchaseToken)} — refusing to remap`,
+    );
+    return { outcome: "claim-bound-elsewhere" };
+  }
+
+  // Double-charge guard (mirror of the Apple purchase path): never claim an
+  // account that still has a usable Stripe subscription.
+  if (guardStripeDoubleCharge && candidate.billingProvider !== "google" && hasUsableSubscription(candidate)) {
+    console.warn(
+      `${LOG} ${eventLabel} account ${candidate.id} still has a usable Stripe subscription — refusing google claim (double-charge guard)`,
+    );
+    return { outcome: "stripe-conflict" };
+  }
+
+  // Initial purchase: stamp provider + token FIRST — writeAccountBillingById's
+  // gate requires billing_provider='google' before it accepts the write.
+  await db
+    .update(accounts)
+    .set({ billingProvider: "google", googlePlayPurchaseToken: purchaseToken })
+    .where(eq(accounts.id, candidate.id));
+  console.log(
+    `${LOG} ${eventLabel} initial purchase: account ${candidate.id} claimed for google (purchaseToken ${trunc(purchaseToken)}, previous provider ${candidate.billingProvider})`,
+  );
+  return {
+    outcome: "resolved",
+    account: {
+      id: candidate.id,
+      billingProvider: "google",
+      subscriptionLapsedAt: candidate.subscriptionLapsedAt,
+    },
+  };
+}
+
+/**
+ * Apply a pending token-rotation migration — call ONLY after the caller has
+ * authorized the purchaser against the resolved account. Conditional UPDATE
+ * guards the old token so a concurrent migration/claim can't be clobbered.
+ */
+export async function applyGooglePlayTokenMigration(
+  accountId: string,
+  migration: { fromToken: string; toToken: string },
+): Promise<void> {
+  await db
+    .update(accounts)
+    .set({ googlePlayPurchaseToken: migration.toToken })
+    .where(and(eq(accounts.id, accountId), eq(accounts.googlePlayPurchaseToken, migration.fromToken)));
+  console.log(
+    `${LOG} token rotation: account ${accountId} migrated from ${trunc(migration.fromToken)} to ${trunc(migration.toToken)}`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Purchase submission pipeline — POST /api/billing/google/purchase.
+// Mirrors processApplePurchase: verify → seat derivation from the VERIFIED
+// line item → resolve (claim allowed, Stripe double-charge guard) →
+// cross-account authorization → provider-gated billing write → deferred
+// acknowledge. Idempotent by construction: a repeat token re-resolves via the
+// already-bound google_play_purchase_token and re-writes identical values.
+// ---------------------------------------------------------------------------
+export interface GooglePlayPurchaseResult {
+  status: number;
+  /** Error body for non-200; on 200 the route responds with the serialized user instead. */
+  body?: Record<string, any>;
+}
+
+const USABLE_SUBSCRIPTION_STATES = new Set([
+  "SUBSCRIPTION_STATE_ACTIVE",
+  "SUBSCRIPTION_STATE_IN_GRACE_PERIOD",
+]);
+
+export async function processGooglePlayPurchase(
+  purchaseToken: string,
+  productId: string,
+  purchaserAccountId: string | null,
+): Promise<GooglePlayPurchaseResult> {
+  const eventLabel = "google:PURCHASE";
+
+  const verified = await verifyGooglePlayPurchase(purchaseToken, productId);
+  if (!verified.ok) {
+    if (verified.error === "auth_failed") {
+      // OUR credential problem — retryable, never blame the purchase.
+      Sentry.captureMessage("[google-play] verification unavailable — service-account auth failed", {
+        level: "error",
+        tags: { source: "google_play_purchase" },
+      });
+      return {
+        status: 503,
+        body: { error: "verification_unavailable", message: "Purchase verification is temporarily unavailable. Please retry." },
+      };
+    }
+    // invalid_token / product_mismatch — terminal; client should stop
+    // retrying this token (same code the Apple path uses).
+    return { status: 401, body: { error: "verification_failed", message: "Verification failed" } };
+  }
+
+  // Seat count from the VERIFIED line item's productId — never the client's.
+  const seats = seatCountFromProductId(verified.productId);
+  if (seats == null) {
+    console.warn(`${LOG} ${eventLabel} unknown productId ${verified.productId} — rejected`);
+    return { status: 400, body: { error: "unknown_product" } };
+  }
+
+  if (!verified.subscriptionState || !USABLE_SUBSCRIPTION_STATES.has(verified.subscriptionState)) {
+    console.warn(`${LOG} ${eventLabel} subscriptionState ${verified.subscriptionState} not usable — rejected`);
+    return {
+      status: 400,
+      body: { error: "subscription_not_active", message: "This subscription is not active." },
+    };
+  }
+
+  const resolution = await resolveGooglePlayAccountByToken(
+    purchaseToken,
+    verified.linkedPurchaseToken,
+    purchaserAccountId,
+    { allowClaim: true, guardStripeDoubleCharge: true },
+  );
+  if (resolution.outcome !== "resolved") {
+    switch (resolution.outcome) {
+      case "stripe-conflict":
+        return {
+          status: 409,
+          body: {
+            error: "stripe_subscription_active",
+            message:
+              "This account already has an active subscription billed through Stripe. Manage it from the web app.",
+          },
+        };
+      case "claim-bound-elsewhere":
+        return {
+          status: 409,
+          body: {
+            error: "account_bound_to_other_subscription",
+            message: "This account is already linked to a different Google Play subscription.",
+          },
+        };
+      case "claim-token-missing":
+      case "claim-account-not-found":
+        return { status: 400, body: { error: "no_account", message: "No account to attach this purchase to." } };
+      default:
+        // no-match-no-claim is unreachable (allowClaim: true).
+        return { status: 400, body: { error: "unmappable" } };
+    }
+  }
+  const account = resolution.account;
+
+  // AUTHORIZATION: the purchaser may only apply a token to their OWN account
+  // (mirror of the Apple cross-account check — a token already bound to a
+  // different account must not let an authenticated user mutate it).
+  if (!purchaserAccountId || account.id !== purchaserAccountId) {
+    console.warn(
+      `${LOG} ${eventLabel} resolved account ${account.id} != purchaser account ${trunc(purchaserAccountId)} — rejected (cross-account write blocked)`,
+    );
+    return {
+      status: 409,
+      body: {
+        error: "transaction_bound_to_other_account",
+        message: "This Google Play purchase is linked to a different Field View account.",
+      },
+    };
+  }
+
+  // Token-rotation migration — applied ONLY now, after the cross-account
+  // authorization above passed (resolution itself is side-effect-free).
+  if (resolution.pendingMigration) {
+    await applyGooglePlayTokenMigration(account.id, resolution.pendingMigration);
+  }
+
+  // Same field mapping as the Apple purchase path.
+  const fields: { subscriptionStatus: string; seatCount: number; subscriptionLapsedAt?: Date | null } = {
+    subscriptionStatus: "active",
+    seatCount: seats,
+  };
+  if (account.subscriptionLapsedAt != null) fields.subscriptionLapsedAt = null;
+
+  const written = await writeAccountBillingById(eventLabel, account.id, "google", fields);
+  if (!written) {
+    // Provider gate rejected — logged inside writeAccountBillingById.
+    return { status: 409, body: { error: "provider_conflict", message: "Account billing is owned by another provider." } };
+  }
+
+  console.log(`${LOG} ${eventLabel} account ${account.id}: wrote ${Object.keys(fields).join(",")}`);
+
+  // ACKNOWLEDGE after the successful billing write — Google refunds
+  // unacknowledged purchases after 3 days, so failure here is serious, but it
+  // must never fail the customer's 200 (the billing state is already
+  // written; ack is retried on the next submission/restore since verify+ack
+  // are idempotent). Deferred via waitUntil on Vercel; outside a Vercel
+  // request context waitUntil can throw — fall back to a dangling promise
+  // (same pattern as lib/ghl.ts).
+  const ackPromise = acknowledgeGooglePlayPurchase(purchaseToken, verified.productId!)
+    .then((ack) => {
+      if (!ack.ok) {
+        console.error(`${LOG} ${eventLabel} acknowledge FAILED (${ack.error}, HTTP ${ack.status}): ${ack.detail}`);
+        Sentry.captureMessage("[google-play] acknowledge failed after billing write", {
+          level: "error",
+          tags: { source: "google_play_purchase" },
+          extra: { accountId: account.id, error: ack.error, status: ack.status },
+        });
+      }
+    })
+    .catch((e: any) => {
+      console.error(`${LOG} ${eventLabel} acknowledge threw: ${e?.message}`);
+      Sentry.captureException(e, { tags: { source: "google_play_purchase_ack" } });
+    });
+  try {
+    waitUntil(ackPromise);
+  } catch {
+    // Local dev / non-Vercel: dangling promise with its own error handling.
+  }
+
+  return { status: 200 };
 }

@@ -17,6 +17,7 @@ import { projectAssignments } from "@shared/schema";
 import { sendPasswordResetEmail, sendEmailVerificationEmail, sendAccountRestoredEmail } from "../../services/email";
 import { getAccountBilling, overlayAccountBillingOnUser, computeAccessLevel, hasUsableSubscription } from "../../lib/billing";
 import { processApplePurchase } from "../../lib/appleIap";
+import { processGooglePlayPurchase } from "../../lib/googlePlay";
 import { sanitizeUserForViewer } from "../../lib/userVisibility";
 import { verifyRecaptchaToken } from "../../services/recaptcha";
 import { CURRENT_TERMS_VERSION } from "@shared/constants";
@@ -1775,6 +1776,42 @@ export async function setupAuth(app: Express) {
       return res.json(await serializeUserForAuthResponse(fresh, req));
     } catch (err: any) {
       console.error("[apple-iap] purchase endpoint failed:", err?.message || err);
+      if (!res.headersSent) res.status(500).json({ message: "Failed to apply purchase" });
+    }
+  });
+
+  // ----- Google Play purchase submission (purchaseToken) -----
+  // Mirror of the Apple endpoint above: mobile POSTs expo-iap's Android
+  // purchaseToken + productId after a purchase / restore. Verification
+  // (Android Publisher subscriptionsv2) + account resolution + billing write
+  // + deferred acknowledge all live in lib/googlePlay.ts
+  // (processGooglePlayPurchase). Idempotent: a repeat token re-resolves via
+  // the already-bound google_play_purchase_token and returns 200 with the
+  // current user. Registered here (not routes.ts) because the response
+  // reuses the closure-scoped serializeUserForAuthResponse.
+  app.post("/api/billing/google/purchase", isAuthenticated, async (req: any, res) => {
+    try {
+      const { purchaseToken, productId } = req.body || {};
+      if (typeof purchaseToken !== "string" || !purchaseToken) {
+        return res.status(400).json({ message: "Missing purchaseToken" });
+      }
+      if (typeof productId !== "string" || !productId) {
+        return res.status(400).json({ message: "Missing productId" });
+      }
+      const result = await processGooglePlayPurchase(purchaseToken, productId, req.user?.accountId ?? null);
+      if (result.status !== 200) {
+        return res.status(result.status).json(result.body ?? { message: "Purchase not applied" });
+      }
+      // Re-fetch AFTER the billing write so the serialized payload reflects
+      // the new provider/status/seatCount (billing overlay reads the account
+      // row live).
+      const fresh = await authStorage.getUser(req.user.id);
+      if (!fresh) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      return res.json(await serializeUserForAuthResponse(fresh, req));
+    } catch (err: any) {
+      console.error("[google-play] purchase endpoint failed:", err?.message || err);
       if (!res.headersSent) res.status(500).json({ message: "Failed to apply purchase" });
     }
   });
