@@ -38,6 +38,11 @@ export const accounts = pgTable("accounts", {
   // declared in the table config below, so the many NULL (Stripe) rows are
   // exempt.
   appleOriginalTransactionId: varchar("apple_original_transaction_id"),
+  // Google Play purchase token — the per-subscription key for Google Play
+  // Billing (Android IAP) accounts. Uniqueness enforced via a PARTIAL unique
+  // index (WHERE NOT NULL), declared in the table config below, mirroring
+  // apple_original_transaction_id. Schema-only prep; no code reads this yet.
+  googlePlayPurchaseToken: varchar("google_play_purchase_token"),
   industry: varchar("industry"),
   companySize: varchar("company_size"),
   // S46 GHL: idempotency guard for the activation_milestone lifecycle event
@@ -64,6 +69,10 @@ export const accounts = pgTable("accounts", {
   uniqueIndex("accounts_apple_original_transaction_id_unique")
     .on(table.appleOriginalTransactionId)
     .where(sql`apple_original_transaction_id IS NOT NULL`),
+  // Partial unique: only non-NULL Google Play purchase tokens must be unique.
+  uniqueIndex("accounts_google_play_purchase_token_unique")
+    .on(table.googlePlayPurchaseToken)
+    .where(sql`google_play_purchase_token IS NOT NULL`),
 ]);
 
 export const users = pgTable("users", {
