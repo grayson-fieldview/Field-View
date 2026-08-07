@@ -48,6 +48,10 @@ export const accounts = pgTable("accounts", {
   // IS NULL) when any team member persists media with the mobile app's
   // X-FieldView-Client header. Suppresses the "get the mobile app" prompt/banner.
   firstMobileUploadAt: timestamp("first_mobile_upload_at"),
+  // Set once when the account owner skips the /choose-plan paywall —
+  // suppresses it thereafter. UX-suppression timestamp like
+  // firstMobileUploadAt; never read in any authorization path.
+  paywallSkippedAt: timestamp("paywall_skipped_at"),
   companyLogoUrl: varchar("company_logo_url"),
   companyLegalName: text("company_legal_name"),
   companyAddress: text("company_address"),
