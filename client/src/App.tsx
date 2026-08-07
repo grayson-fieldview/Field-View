@@ -194,15 +194,17 @@ function BillingBanner() {
       <p className="flex-1 text-sm" data-testid="text-subscription-lapsed-message">
         Payment failed. Your account is in read-only mode. Update your payment method to restore full access.
       </p>
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={openPortal}
-        className="border-amber-300 dark:border-amber-700 bg-white dark:bg-amber-900 hover:bg-amber-100 dark:hover:bg-amber-800 text-amber-900 dark:text-amber-100"
-        data-testid="button-update-payment-method"
-      >
-        Update payment method
-      </Button>
+      {canAddCard && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={openPortal}
+          className="border-amber-300 dark:border-amber-700 bg-white dark:bg-amber-900 hover:bg-amber-100 dark:hover:bg-amber-800 text-amber-900 dark:text-amber-100"
+          data-testid="button-update-payment-method"
+        >
+          Update payment method
+        </Button>
+      )}
     </div>
   );
 }
