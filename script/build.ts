@@ -96,6 +96,23 @@ async function buildAll() {
     logLevel: "info",
   });
 
+  console.log("building google play notifications standalone function...");
+  await esbuild({
+    entryPoints: ["server/vercelPlayNotifications.ts"],
+    platform: "node",
+    target: "node20",
+    bundle: true,
+    format: "cjs",
+    outfile: "api/google/notifications.js",
+    jsx: "automatic",
+    define: {
+      "process.env.NODE_ENV": '"production"',
+    },
+    minify: true,
+    external: externals,
+    logLevel: "info",
+  });
+
   console.log("building stripe webhook standalone function...");
   await esbuild({
     entryPoints: ["server/vercelStripeWebhook.ts"],

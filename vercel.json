@@ -13,11 +13,15 @@
     },
     "api/apple/notifications.js": {
       "maxDuration": 30
+    },
+    "api/google/notifications.js": {
+      "maxDuration": 30
     }
   },
   "rewrites": [
     { "source": "/api/stripe/webhook", "destination": "/api/stripe/webhook" },
     { "source": "/api/apple/notifications", "destination": "/api/apple/notifications" },
+    { "source": "/api/google/notifications", "destination": "/api/google/notifications" },
     { "source": "/api/(.*)", "destination": "/api/index" },
     { "source": "/p/(.*)", "destination": "/api/index" },
     { "source": "/((?!api).*)", "destination": "/index.html" }

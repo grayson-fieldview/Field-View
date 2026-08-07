@@ -24,6 +24,7 @@ import { waitUntil } from "@vercel/functions";
 import { and, eq } from "drizzle-orm";
 import { db } from "../db";
 import { accounts } from "@shared/models/auth";
+import { processedStripeEvents } from "@shared/schema";
 import { seatCountFromProductId } from "./appleIap";
 import { hasUsableSubscription } from "./billing";
 import { writeAccountBillingById } from "./stripeWebhook";
@@ -147,9 +148,18 @@ function getClientAndPackageOrAuthFailed():
   }
 }
 
+/**
+ * @param productId Product hint. When a NONEMPTY hint is supplied (client
+ *   purchase submissions), the verified line items MUST include it —
+ *   mismatch is rejected. When null/empty (RTDN notifications, which may
+ *   omit subscriptionId), no matching is enforced and the verified product
+ *   is derived solely from the Publisher API line items: the single item,
+ *   else the first item with a parseable fieldview.seats.* productId, else
+ *   the first item (downstream seat derivation handles unknown products).
+ */
 export async function verifyGooglePlayPurchase(
   purchaseToken: string,
-  productId: string,
+  productId: string | null,
 ): Promise<GooglePlayVerifyResult> {
   const cfg = getClientAndPackageOrAuthFailed();
   if (!cfg.ok) return cfg;
@@ -183,24 +193,33 @@ export async function verifyGooglePlayPurchase(
     throw e;
   }
 
-  // ENTITLEMENT CHECK: the token verified, but never trust the CLIENT's
-  // claimed productId — the seat count must derive from what Google says
-  // this subscription actually contains. Reject if no line item matches.
+  // ENTITLEMENT: the verified product derives from what Google says this
+  // subscription actually contains — never from client input.
   const lineItems: any[] = Array.isArray(body.lineItems) ? body.lineItems : [];
-  const matched = lineItems.find((li) => li?.productId === productId);
-  if (!matched) {
-    const found = lineItems.map((li) => li?.productId).filter(Boolean).join(",") || "(none)";
-    console.warn(`${LOG} verify: product mismatch — client claimed ${productId}, subscription contains [${found}]`);
-    return {
-      ok: false,
-      error: "product_mismatch",
-      status: 200,
-      detail: `Subscription line items do not include ${productId}`,
-    };
+  let lineItem: any;
+  if (productId) {
+    // Nonempty hint (client purchase submission): the line items MUST
+    // include the claimed product — reject a mismatch.
+    lineItem = lineItems.find((li) => li?.productId === productId);
+    if (!lineItem) {
+      const found = lineItems.map((li) => li?.productId).filter(Boolean).join(",") || "(none)";
+      console.warn(`${LOG} verify: product mismatch — client claimed ${productId}, subscription contains [${found}]`);
+      return {
+        ok: false,
+        error: "product_mismatch",
+        status: 200,
+        detail: `Subscription line items do not include ${productId}`,
+      };
+    }
+  } else {
+    // No hint (RTDN may omit subscriptionId): derive from the verified line
+    // items alone. Single item, else first with a parseable seat product,
+    // else first — downstream seat derivation rejects unknown products.
+    lineItem =
+      lineItems.length === 1
+        ? lineItems[0]
+        : lineItems.find((li) => seatCountFromProductId(li?.productId) != null) ?? lineItems[0];
   }
-
-  // SubscriptionPurchaseV2: the MATCHED line item carries productId + expiryTime.
-  const lineItem = matched;
   return {
     ok: true,
     subscriptionState: body.subscriptionState ?? null,
@@ -603,4 +622,207 @@ export async function processGooglePlayPurchase(
   }
 
   return { status: 200 };
+}
+
+// ---------------------------------------------------------------------------
+// RTDN (Real-Time Developer Notifications) pipeline — mirrors
+// processAppleNotification. Input is the DECODED DeveloperNotification JSON
+// (the Vercel function handles Pub/Sub envelope parsing + JWT verification)
+// plus the Pub/Sub messageId for dedupe. Returns the HTTP status/body the
+// route should send:
+//   200 — success AND every handled-but-unwritable case (unknown type,
+//         unmappable token, unknown productId): Google must not retry.
+//   (Unexpected errors are NOT caught here — the route maps them to 500 so
+//   Pub/Sub retries.)
+// ---------------------------------------------------------------------------
+export interface GooglePlayNotificationResult {
+  status: number;
+  body: Record<string, any>;
+}
+
+const ok = (note: string): GooglePlayNotificationResult => ({ status: 200, body: { received: true, note } });
+
+// notificationType → semantic (Google Play RTDN subscriptionNotification).
+const RTDN_TYPE_NAMES: Record<number, string> = {
+  1: "SUBSCRIPTION_RECOVERED",
+  2: "SUBSCRIPTION_RENEWED",
+  3: "SUBSCRIPTION_CANCELED",
+  4: "SUBSCRIPTION_PURCHASED",
+  5: "SUBSCRIPTION_ON_HOLD",
+  6: "SUBSCRIPTION_IN_GRACE_PERIOD",
+  7: "SUBSCRIPTION_RESTARTED",
+  12: "SUBSCRIPTION_REVOKED",
+  13: "SUBSCRIPTION_EXPIRED",
+};
+
+const ACTIVE_TYPES = new Set([1, 2, 4, 7]); // RECOVERED, RENEWED, PURCHASED, RESTARTED
+const PAST_DUE_TYPES = new Set([5, 6]); // ON_HOLD, IN_GRACE_PERIOD
+const CANCELED_TYPES = new Set([12, 13]); // REVOKED, EXPIRED
+
+export async function processGooglePlayNotification(
+  developerNotification: Record<string, any>,
+  messageId: string | null,
+): Promise<GooglePlayNotificationResult> {
+  const subNotif = developerNotification?.subscriptionNotification;
+  const notificationType: number | undefined = subNotif?.notificationType;
+  const typeName =
+    notificationType != null ? RTDN_TYPE_NAMES[notificationType] ?? `TYPE_${notificationType}` : "NO_TYPE";
+  const eventLabel = `google:${typeName}`;
+
+  // -------------------------------------------------------------------------
+  // Dedupe on Pub/Sub messageId, reusing processed_stripe_events with a
+  // "google:" prefix (same pattern as "apple:"). Checked FIRST; recorded only
+  // after a successful outcome so a 500 leaves the id unrecorded and Pub/Sub's
+  // retry is NOT skipped.
+  // -------------------------------------------------------------------------
+  const dedupeId = messageId ? `google:${messageId}` : null;
+  if (dedupeId) {
+    const [existing] = await db
+      .select({ eventId: processedStripeEvents.eventId })
+      .from(processedStripeEvents)
+      .where(eq(processedStripeEvents.eventId, dedupeId))
+      .limit(1);
+    if (existing) {
+      console.log(`${LOG} ${eventLabel} duplicate messageId — skipping redelivery`);
+      return ok("duplicate");
+    }
+  }
+  const recordProcessed = async () => {
+    if (!dedupeId) return;
+    await db
+      .insert(processedStripeEvents)
+      .values({ eventId: dedupeId, eventType: eventLabel })
+      .onConflictDoNothing();
+  };
+
+  if (!subNotif) {
+    // testNotification / oneTimeProductNotification / voidedPurchase etc.
+    console.log(`${LOG} notification carries no subscriptionNotification — ignored`);
+    await recordProcessed();
+    return ok("no-subscription-notification");
+  }
+
+  const purchaseToken: string | undefined = subNotif.purchaseToken;
+  const subscriptionId: string | undefined = subNotif.subscriptionId;
+  if (typeof notificationType !== "number" || !purchaseToken) {
+    console.log(`${LOG} ${eventLabel} missing notificationType/purchaseToken — ignored`);
+    await recordProcessed();
+    return ok("malformed-subscription-notification");
+  }
+
+  // CANCELED (3): log-only — the subscription runs to expiry; EXPIRED (13)
+  // will do the write later.
+  if (notificationType === 3) {
+    console.log(`${LOG} ${eventLabel} — log-only, subscription runs to expiry, no write`);
+    await recordProcessed();
+    return ok("log-only");
+  }
+
+  if (!ACTIVE_TYPES.has(notificationType) && !PAST_DUE_TYPES.has(notificationType) && !CANCELED_TYPES.has(notificationType)) {
+    console.log(`${LOG} unhandled notificationType ${notificationType} (${typeName}) — ignored`);
+    await recordProcessed();
+    return ok("unhandled-type");
+  }
+
+  // -------------------------------------------------------------------------
+  // Re-verify the purchaseToken against the Publisher API — never trust the
+  // notification payload (mirrors Apple's pinned-chain re-verification).
+  // subscriptionId from the payload is only a hint; verification matches it
+  // against the REAL line items.
+  // -------------------------------------------------------------------------
+  // Pass the payload's subscriptionId as a HINT only — RTDN may omit it, in
+  // which case verification derives the product from the line items alone.
+  const verified = await verifyGooglePlayPurchase(purchaseToken, subscriptionId || null);
+  if (!verified.ok) {
+    if (verified.error === "product_mismatch") {
+      // Token verified, but the payload's subscriptionId hint didn't match
+      // the real line items — the hint is untrusted, so no write.
+      console.warn(`${LOG} ${eventLabel} payload subscriptionId ${subscriptionId} does not match verified line items — no write`);
+      await recordProcessed();
+      return ok("product-mismatch");
+    }
+    if (verified.error === "invalid_token") {
+      console.warn(`${LOG} UNMAPPABLE: ${eventLabel} purchaseToken ${trunc(purchaseToken)} rejected by Publisher API — returning 200`);
+      await recordProcessed();
+      return ok("invalid-token");
+    }
+    // auth_failed — OUR credential problem; throw so the route returns 500
+    // and Pub/Sub retries once the credential is fixed.
+    throw new Error(`Google Play verification unavailable (auth_failed): ${verified.detail}`);
+  }
+  const verifiedProductId = verified.productId;
+  const linkedPurchaseToken = verified.linkedPurchaseToken;
+
+  const resolution = await resolveGooglePlayAccountByToken(
+    purchaseToken,
+    linkedPurchaseToken,
+    null,
+    {
+      // Claiming is restricted to SUBSCRIPTION_PURCHASED (4) — but with no
+      // claimAccountId available from RTDN (no obfuscatedAccountId wiring
+      // yet), a claim can never actually fire; the flag mirrors Apple's
+      // SUBSCRIBED-only posture for when a claim key is added.
+      allowClaim: notificationType === 4,
+      // Google has already charged by notification time — the Stripe guard
+      // applies only to the purchase path (same reasoning as Apple).
+      guardStripeDoubleCharge: false,
+    },
+  );
+  if (resolution.outcome !== "resolved") {
+    console.warn(
+      `${LOG} UNMAPPABLE: ${eventLabel} purchaseToken ${trunc(purchaseToken)} matches no account (${resolution.outcome}) — returning 200`,
+    );
+    await recordProcessed();
+    return ok("unmappable");
+  }
+  const account = resolution.account;
+
+  // Token rotation from a notification is server-observed (Google-verified
+  // linkage), not client-claimed — safe to apply without a purchaser check.
+  if (resolution.pendingMigration) {
+    await applyGooglePlayTokenMigration(account.id, resolution.pendingMigration);
+  }
+
+  // -------------------------------------------------------------------------
+  // Map notificationType -> billing fields (mirrors the Apple mapping).
+  // -------------------------------------------------------------------------
+  const fields: {
+    subscriptionStatus?: string;
+    seatCount?: number;
+    subscriptionLapsedAt?: Date | null;
+  } = {};
+
+  if (ACTIVE_TYPES.has(notificationType)) {
+    const seats = seatCountFromProductId(verifiedProductId);
+    if (seats == null) {
+      console.warn(`${LOG} ${eventLabel} unknown productId ${verifiedProductId} — no write, returning 200`);
+      await recordProcessed();
+      return ok("unknown-product");
+    }
+    fields.subscriptionStatus = "active";
+    fields.seatCount = seats;
+    // Mirror the Stripe/Apple lapse-clear: recovering to active clears a
+    // previously-set subscriptionLapsedAt.
+    if (account.subscriptionLapsedAt != null) fields.subscriptionLapsedAt = null;
+  } else if (PAST_DUE_TYPES.has(notificationType)) {
+    fields.subscriptionStatus = "past_due";
+    // Only stamp the FIRST failure so the 14-day read-only window anchors to
+    // the original lapse (mirrors Apple DID_FAIL_TO_RENEW).
+    if (account.subscriptionLapsedAt == null) fields.subscriptionLapsedAt = new Date();
+  } else {
+    // REVOKED / EXPIRED
+    fields.subscriptionStatus = "canceled";
+  }
+
+  const written = await writeAccountBillingById(eventLabel, account.id, "google", fields);
+  if (!written) {
+    // Provider gate rejected — do NOT mark the messageId processed: if the
+    // account is later claimed for google, a replay should land. 200
+    // regardless — retrying won't change the gate.
+    return ok("provider-gate-skip");
+  }
+
+  console.log(`${LOG} ${eventLabel} account ${account.id}: wrote ${Object.keys(fields).join(",")}`);
+  await recordProcessed();
+  return ok("written");
 }
