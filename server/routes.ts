@@ -23,6 +23,7 @@ import { sanitizeUserForViewer, sanitizeTimeEntryForViewer, isManagerRole } from
 import { z } from "zod";
 import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, deleteFromS3, getObjectStream, getS3Url, inlineContentDisposition } from "./s3";
 import { queueThumbnailGeneration } from "./lib/thumbnails";
+import { queueCaptionGeneration } from "./lib/aiCaptions";
 import archiver from "archiver";
 import { sendInvitationEmail, sendAccountDeletionEmail } from "./services/email";
 import { sendGhlEvent, syncUsageToGhl } from "./lib/ghl";
@@ -744,6 +745,12 @@ export async function registerRoutes(
       // null in this response and fills in shortly after (clients handle
       // null by rendering the full url / on-device cache).
       queueThumbnailGeneration(created);
+
+      // AI captions — same deferral contract as thumbnails: fire-and-forget,
+      // never in the request path, ai_caption null in this response and
+      // filled shortly after (or by the backfill). Independent of thumbnail
+      // success on purpose.
+      queueCaptionGeneration(created);
 
       // S46 GHL activation_milestone — account crosses ≥1 project AND ≥5
       // photos. Fully fire-and-forget (doesn't delay the upload response).

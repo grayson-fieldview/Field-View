@@ -64,6 +64,12 @@ export const media = pgTable("media", {
   // shortly after registration by deferred generation, or by the backfill.
   // Clients render thumbUrl ?? url.
   thumbUrl: text("thumb_url"),
+  // AI-generated caption (Claude vision). Nullable: filled shortly after
+  // registration by deferred generation, or by the backfill. Distinct from
+  // `caption` (user-authored, batch-shared) — never write one to the other.
+  aiCaption: text("ai_caption"),
+  aiCaptionGeneratedAt: timestamp("ai_caption_generated_at"),
+  aiCaptionModel: text("ai_caption_model"),
   caption: text("caption"),
   latitude: real("latitude"),
   longitude: real("longitude"),
