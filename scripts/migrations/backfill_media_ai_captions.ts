@@ -88,6 +88,30 @@ export async function backfillMediaAiCaptions(): Promise<void> {
 
   const { db } = await import("../../server/db");
 
+  // One-off sentinel normalization (idempotent, runs every invocation): a
+  // prompt-drift bug let the model append reasoning prose after "UNCLEAR",
+  // so some rows hold a multi-line string instead of the bare sentinel.
+  if (dryRun) {
+    const wouldNormalize = await db.execute(sql`
+      SELECT COUNT(*)::int AS n
+      FROM media
+      WHERE ai_caption IS NOT NULL
+        AND upper(ai_caption) LIKE 'UNCLEAR%'
+        AND ai_caption <> 'UNCLEAR'
+    `);
+    const n: number = ((wouldNormalize as any).rows ?? (wouldNormalize as any))[0]?.n ?? 0;
+    console.log(`[backfill_ai_captions] --dry-run: ${n} row(s) WOULD be normalized to bare 'UNCLEAR'`);
+  } else {
+    const normalized = await db.execute(sql`
+      UPDATE media SET ai_caption = 'UNCLEAR'
+      WHERE ai_caption IS NOT NULL
+        AND upper(ai_caption) LIKE 'UNCLEAR%'
+        AND ai_caption <> 'UNCLEAR'
+    `);
+    const count = (normalized as any).rowCount ?? (normalized as any).count ?? 0;
+    console.log(`[backfill_ai_captions] normalized ${count} row(s) to bare 'UNCLEAR'`);
+  }
+
   // heic/heif rows are only captionable via their JPEG thumbnail rendition,
   // so they require thumb_url IS NOT NULL; native vision mimes use url.
   const pending = await db.execute(sql`

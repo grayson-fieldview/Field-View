@@ -48,7 +48,7 @@ export function isHeicMime(mimeType: string): boolean {
   return HEIC_MIME_TYPES.has(mimeType);
 }
 
-export const AI_CAPTION_SYSTEM_PROMPT = `You caption trade contractor job site photos. Respond with exactly one plain sentence of 20-40 words describing the work visible in the photo: the materials, surfaces, and equipment, in plain trade language. Do not describe or attempt to identify people. No preamble, no "This image shows", no marketing adjectives — just the sentence. If the photo is a document, receipt, whiteboard, or equipment label, transcribe the key visible text instead of describing the scene. If the photo is unusable (blurry, dark, featureless), return exactly: UNCLEAR`;
+export const AI_CAPTION_SYSTEM_PROMPT = `You caption photos uploaded by trade contractors. Respond with exactly one plain sentence of 20-40 words describing what is visible: materials, surfaces, and equipment, in plain trade language. Do not describe or attempt to identify people. No preamble, no "This image shows", no marketing adjectives — just the sentence. Caption EVERY photo: contractors photograph finished rooms, empty spaces, renderings, product shots, paint swatches, driveways, equipment, invoices, and screenshots — not just active work. All of these get a normal descriptive sentence. Never return UNCLEAR because a photo isn't active trade work, isn't a construction scene, or seems unrelated to a job — describe what is actually visible. If the photo is a document, receipt, whiteboard, equipment label, or screenshot, transcribe the key visible text instead of describing the scene. UNCLEAR is ONLY for images with no discernible content: fully black, fully blank, or so blurred or overexposed that nothing can be made out. When returning UNCLEAR, return exactly that one word and nothing else — no explanation, no reasoning, no additional sentence.`;
 
 // Module-scope lazy client (mirrors the cached-client pattern elsewhere):
 // import never throws; a missing key fails per-row inside generateCaption.
@@ -120,7 +120,7 @@ export async function generateCaption(row: CaptionSource): Promise<boolean> {
       ],
     });
 
-    const text = response.content
+    let text = response.content
       .filter((b): b is Anthropic.TextBlock => b.type === "text")
       .map((b) => b.text)
       .join(" ")
@@ -140,6 +140,19 @@ export async function generateCaption(row: CaptionSource): Promise<boolean> {
         // Sentry must never break the never-throws contract.
       }
       return false;
+    }
+
+    // Normalize the sentinel: the model sometimes appends reasoning prose
+    // after UNCLEAR despite the prompt — store the bare sentinel and keep
+    // prompt drift visible in logs.
+    if (text.toUpperCase().startsWith("UNCLEAR")) {
+      const trailing = text.slice("UNCLEAR".length).trim();
+      if (text !== "UNCLEAR") {
+        console.warn(
+          `[ai-captions] media ${row.id}: normalized UNCLEAR sentinel, discarded trailing text: ${JSON.stringify(trailing)}`,
+        );
+      }
+      text = "UNCLEAR";
     }
 
     // "UNCLEAR" is written too, so unusable photos are not retried forever.
