@@ -88,21 +88,49 @@ export async function backfillMediaAiCaptions(): Promise<void> {
 
   const { db } = await import("../../server/db");
 
+  // heic/heif rows are only captionable via their JPEG thumbnail rendition,
+  // so they require thumb_url IS NOT NULL; native vision mimes use url.
   const pending = await db.execute(sql`
-    SELECT id, url, mime_type
+    SELECT id, url, mime_type, thumb_url
     FROM media
     WHERE ai_caption IS NULL
-      AND mime_type IN ('image/jpeg', 'image/png', 'image/gif', 'image/webp')
+      AND (
+        mime_type IN ('image/jpeg', 'image/png', 'image/gif', 'image/webp')
+        OR (mime_type IN ('image/heic', 'image/heif') AND thumb_url IS NOT NULL)
+      )
     ORDER BY id
     LIMIT ${sql.raw(String(limit))}
   `);
-  const rows: Array<{ id: number; url: string; mime_type: string }> =
+  const rows: Array<{ id: number; url: string; mime_type: string; thumb_url: string | null }> =
     (pending as any).rows ?? (pending as any);
+
+  // Pre-run summary: rows to caption by mime type, plus how many heic/heif
+  // rows are being skipped for a missing thumbnail rendition.
+  const skippedHeic = await db.execute(sql`
+    SELECT COUNT(*)::int AS n
+    FROM media
+    WHERE ai_caption IS NULL
+      AND mime_type IN ('image/heic', 'image/heif')
+      AND thumb_url IS NULL
+  `);
+  const skippedHeicCount: number =
+    ((skippedHeic as any).rows ?? (skippedHeic as any))[0]?.n ?? 0;
+  const byMime = new Map<string, number>();
+  for (const r of rows) byMime.set(r.mime_type, (byMime.get(r.mime_type) ?? 0) + 1);
   console.log(`[backfill_ai_captions] pending this run: ${rows.length} rows (capped at ${limit})`);
+  for (const [mime, n] of [...byMime.entries()].sort()) {
+    console.log(`[backfill_ai_captions]   ${mime}: ${n}`);
+  }
+  console.log(
+    `[backfill_ai_captions]   heic/heif skipped for null thumb_url (all pending, not just this run): ${skippedHeicCount}`,
+  );
 
   if (dryRun) {
     for (const r of rows) {
-      console.log(`[backfill_ai_captions] would caption media ${r.id} (${r.mime_type}) ${r.url}`);
+      const src = r.mime_type === "image/heic" || r.mime_type === "image/heif" ? "thumbUrl" : "url";
+      console.log(
+        `[backfill_ai_captions] would caption media ${r.id} (${r.mime_type}) from ${src}: ${src === "thumbUrl" ? r.thumb_url : r.url}`,
+      );
     }
     console.log(
       `[backfill_ai_captions] --dry-run — no writes/API calls. Estimated spend for these ${rows.length} rows: ~$${(rows.length * EST_COST_PER_PHOTO_USD).toFixed(2)}`,
@@ -129,6 +157,7 @@ export async function backfillMediaAiCaptions(): Promise<void> {
           id: r.id,
           url: r.url,
           mimeType: r.mime_type,
+          thumbUrl: r.thumb_url,
           aiCaption: null,
         });
         const elapsed = Date.now() - rowStarted;

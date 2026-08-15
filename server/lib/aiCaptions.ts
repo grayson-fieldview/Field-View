@@ -17,8 +17,14 @@
  * public unsigned CloudFront URL, so Anthropic fetches the bytes directly
  * and no image download/base64 happens in our process.
  *
- * HEIC is NOT supported by the vision API — logged and skipped in this
- * phase (no conversion attempt). Supported: jpeg/png/gif/webp only.
+ * HEIC/HEIF is NOT supported by the vision API directly, but the thumbnail
+ * pipeline already WASM-decodes HEIC to a 400px JPEG at thumbUrl — so for
+ * heic/heif rows the caption is generated from thumbUrl instead of url.
+ * A heic/heif row with a null thumbUrl (thumbnail not generated yet — an
+ * expected transient state on live upload) is skipped silently; the
+ * thumbnail pipeline triggers the caption itself once thumbUrl is written
+ * (see generateThumbnail). Other unsupported mimes (avif, video/*) are
+ * still skipped. Native vision inputs: jpeg/png/gif/webp.
  */
 import Anthropic from "@anthropic-ai/sdk";
 import { waitUntil } from "@vercel/functions";
@@ -35,6 +41,13 @@ export const AI_CAPTION_CONCURRENCY = 5;
 // Mime types the Anthropic vision API accepts as URL image sources.
 const SUPPORTED_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 
+// HEIC/HEIF: not a native vision input, but captionable via the JPEG
+// thumbnail rendition once thumbUrl exists.
+const HEIC_MIME_TYPES = new Set(["image/heic", "image/heif"]);
+export function isHeicMime(mimeType: string): boolean {
+  return HEIC_MIME_TYPES.has(mimeType);
+}
+
 export const AI_CAPTION_SYSTEM_PROMPT = `You caption trade contractor job site photos. Respond with exactly one plain sentence of 20-40 words describing the work visible in the photo: the materials, surfaces, and equipment, in plain trade language. Do not describe or attempt to identify people. No preamble, no "This image shows", no marketing adjectives — just the sentence. If the photo is a document, receipt, whiteboard, or equipment label, transcribe the key visible text instead of describing the scene. If the photo is unusable (blurry, dark, featureless), return exactly: UNCLEAR`;
 
 // Module-scope lazy client (mirrors the cached-client pattern elsewhere):
@@ -49,7 +62,13 @@ function getClient(): Anthropic {
   return cachedClient;
 }
 
-export type CaptionSource = { id: number; url: string; mimeType: string; aiCaption?: string | null };
+export type CaptionSource = {
+  id: number;
+  url: string;
+  mimeType: string;
+  aiCaption?: string | null;
+  thumbUrl?: string | null;
+};
 
 /**
  * Generate + store the AI caption for one media row. Returns true on
@@ -60,10 +79,31 @@ export async function generateCaption(row: CaptionSource): Promise<boolean> {
   try {
     // Idempotent: already captioned (incl. "UNCLEAR") — nothing to do.
     if (row.aiCaption != null) return false;
-    if (!SUPPORTED_MIME_TYPES.has(row.mimeType)) {
-      console.log(`[ai-captions] media ${row.id}: unsupported mime ${row.mimeType} (HEIC/video etc.), skipping`);
+
+    // Pick the image source. HEIC/HEIF: the vision API can't read the
+    // original, but the thumbnail pipeline's 400px JPEG rendition can be
+    // used instead once it exists.
+    let imageUrl: string;
+    let imageSource: "url" | "thumbUrl";
+    if (SUPPORTED_MIME_TYPES.has(row.mimeType)) {
+      imageUrl = row.url;
+      imageSource = "url";
+    } else if (isHeicMime(row.mimeType)) {
+      if (!row.thumbUrl) {
+        // Expected transient state on live upload (thumbnail not written
+        // yet) — the thumbnail pipeline will trigger the caption itself.
+        // Debug-level only; NOT an error, no Sentry.
+        console.debug(`[ai-captions] media ${row.id}: heic without thumbUrl yet, deferring to thumbnail pipeline`);
+        return false;
+      }
+      imageUrl = row.thumbUrl;
+      imageSource = "thumbUrl";
+    } else {
+      console.log(`[ai-captions] media ${row.id}: unsupported mime ${row.mimeType} (avif/video etc.), skipping`);
       return false;
     }
+    // Auditable source line (backfill output shows url-vs-thumbUrl).
+    console.log(`[ai-captions] media ${row.id}: captioning from ${imageSource} (${row.mimeType})`);
 
     const response = await getClient().messages.create({
       model: AI_CAPTION_MODEL,
@@ -73,7 +113,7 @@ export async function generateCaption(row: CaptionSource): Promise<boolean> {
         {
           role: "user",
           content: [
-            { type: "image", source: { type: "url", url: row.url } },
+            { type: "image", source: { type: "url", url: imageUrl } },
             { type: "text", text: "Caption this job site photo." },
           ],
         },
@@ -128,6 +168,10 @@ export async function generateCaption(row: CaptionSource): Promise<boolean> {
  * network-bound API calls, not local sharp pipelines.
  */
 export function queueCaptionGeneration(rows: CaptionSource[]): void {
+  // Native vision mimes only. HEIC/HEIF is deliberately NOT queued here:
+  // at route time thumbUrl is still null, and the thumbnail pipeline
+  // triggers the caption itself right after writing thumbUrl (see
+  // generateThumbnail) — queueing it here too would double-fire.
   const images = rows.filter((r) => SUPPORTED_MIME_TYPES.has(r.mimeType));
   if (images.length === 0) return;
   const limit = pLimit(AI_CAPTION_CONCURRENCY);

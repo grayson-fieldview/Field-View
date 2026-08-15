@@ -26,6 +26,7 @@ import { Readable } from "stream";
 import { db } from "../db";
 import { media } from "@shared/schema";
 import { getObjectStream, putObject, getS3Url, extractS3KeyFromUrl } from "../s3";
+import { isHeicMime } from "./aiCaptions";
 
 export const THUMB_WIDTH = 400;
 export const THUMB_JPEG_QUALITY = 70;
@@ -86,7 +87,28 @@ export async function generateThumbnail(row: ThumbSource): Promise<boolean> {
     const thumbKey = `${THUMB_PREFIX}${basename}.jpg`;
     await putObject(thumbKey, thumb, "image/jpeg", THUMB_CACHE_CONTROL);
 
-    await db.update(media).set({ thumbUrl: getS3Url(thumbKey) }).where(eq(media.id, row.id));
+    const thumbUrl = getS3Url(thumbKey);
+    await db.update(media).set({ thumbUrl }).where(eq(media.id, row.id));
+
+    // HEIC/HEIF only: the route-level queueCaptionGeneration skips these
+    // (no vision-readable source exists until this thumbUrl was just
+    // written), so the caption is triggered here instead. Non-HEIC mimes
+    // are already captioned from the route — adding them here would
+    // double-fire. Own try/catch: a caption failure must never affect the
+    // thumbnail result (generateCaption never throws, but do not rely on
+    // that here).
+    // NOTE: deliberately keyed on MIME only (isHeicMime), NOT isHeic(key,...):
+    // the caption pipeline's source selection is MIME-based, so a .heic key
+    // mislabeled image/jpeg is already queued at the route as native —
+    // triggering it here too would double-fire a paid API call.
+    if (isHeicMime(row.mimeType)) {
+      try {
+        const { generateCaption } = await import("./aiCaptions");
+        await generateCaption({ id: row.id, url: row.url, mimeType: row.mimeType, thumbUrl, aiCaption: null });
+      } catch (err) {
+        console.warn(`[thumbs] media ${row.id}: heic caption trigger failed (thumbnail unaffected):`, (err as Error)?.message);
+      }
+    }
     return true;
   } catch (err) {
     console.warn(`[thumbs] generation failed for media ${row.id} (thumb_url stays null):`, (err as Error)?.message);
