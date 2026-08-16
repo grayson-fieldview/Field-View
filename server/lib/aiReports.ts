@@ -170,14 +170,31 @@ const SUBMIT_REPORT_TOOL: Anthropic.Tool = {
   },
 };
 
+// "M:SS" from a millisecond offset into a recording (e.g. 83000 → "1:23").
+function formatOffsetMs(offsetMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(offsetMs / 1000));
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+// Appended to the system prompt ONLY for walkthrough narration transcripts.
+const NARRATION_ADDENDUM = `
+
+The contractor's note is a transcript of them narrating while walking the site and taking these photos. Each photo shows roughly when it was taken relative to the recording. Use that timing as a HINT for which part of the narration describes which photo, but do not trust it blindly — people often describe a photo several seconds after taking it, or describe what they are about to shoot. When the narration content clearly matches a different photo than the timing suggests, follow the content.`;
+
 export async function generateReportContent(input: {
   reportId: number;
   projectId: number;
   mediaIds: number[];
   note?: string;
   reportType: ReportType;
+  /** mediaId → ms from recording start (walkthrough timing HINTS). */
+  photoOffsets?: Map<number, number>;
+  /** When true, the note is a walkthrough narration transcript. */
+  transcriptIsNarration?: boolean;
 }): Promise<GeneratedReportContent> {
-  const { reportId, projectId, mediaIds, note, reportType } = input;
+  const { reportId, projectId, mediaIds, note, reportType, photoOffsets, transcriptIsNarration } = input;
 
   // Pull the photos; verify ALL belong to the report's project.
   const rows = await db
@@ -212,6 +229,8 @@ export async function generateReportContent(input: {
     if (cap) parts.push(`description: ${cap}`);
     const humanComments = commentsByMedia.get(r.id) ?? [];
     if (humanComments.length > 0) parts.push(`comments: ${humanComments.join(" | ")}`);
+    const offsetMs = photoOffsets?.get(r.id);
+    if (offsetMs !== undefined) parts.push(`narrated around ${formatOffsetMs(offsetMs)}`);
     return `- ${parts.join(" — ")}`;
   });
 
@@ -236,7 +255,7 @@ export async function generateReportContent(input: {
     const response = await getClient().messages.create({
       model: AI_REPORT_MODEL,
       max_tokens: AI_REPORT_MAX_TOKENS,
-      system: buildSystemPrompt(reportType),
+      system: buildSystemPrompt(reportType) + (transcriptIsNarration ? NARRATION_ADDENDUM : ""),
       messages: [{ role: "user", content: [{ type: "text", text: userText }] }],
       tools: [SUBMIT_REPORT_TOOL],
       // Force the tool call — structured output guaranteed, not requested.

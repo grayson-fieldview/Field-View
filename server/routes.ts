@@ -46,6 +46,7 @@ import bcrypt from "bcryptjs";
 import { registerShowcaseRoutes } from "./showcases";
 import { Sentry } from "./lib/sentry";
 import { sendPushNotification } from "./lib/push";
+import { waitUntil } from "@vercel/functions";
 import {
   RewardfulError,
   REWARDFUL_CAMPAIGN_ID,
@@ -2826,6 +2827,94 @@ export async function registerRoutes(
     }
   });
 
+  // Shared generate-then-persist path for the sync project generate
+  // endpoint AND the async walkthrough endpoint. Order matters: the caller
+  // reserves a slot FIRST, then this generates and only THEN creates the
+  // report row + content in one transaction. Any failure here releases the
+  // slot (feature must match the reservation) and rethrows — a generation
+  // failure must never leave an orphan blank draft.
+  async function generateAndPersistReport(opts: {
+    projectId: number;
+    accountId: string;
+    userId: string;
+    mediaIds: number[];
+    note?: string;
+    reportType: ReportType;
+    photoOffsets?: Map<number, number>;
+    transcriptIsNarration?: boolean;
+    /** From the caller's tryReserveReportGeneration call. */
+    periodMonth: string;
+    /** Must match the feature the slot was reserved under. */
+    feature?: string;
+  }): Promise<{ report: { id: number; title: string }; content: Awaited<ReturnType<typeof generateReportContent>> }> {
+    const { projectId, accountId, userId, mediaIds, note, reportType, photoOffsets, transcriptIsNarration, periodMonth, feature } = opts;
+
+    // 1. Generate BEFORE creating anything. Any failure releases the
+    // slot and rethrows — no report row exists yet.
+    let content: Awaited<ReturnType<typeof generateReportContent>>;
+    try {
+      content = await generateReportContent({
+        reportId: 0, // no report row yet — Sentry context only
+        projectId,
+        mediaIds,
+        note,
+        reportType,
+        photoOffsets,
+        transcriptIsNarration,
+      });
+    } catch (err) {
+      await releaseReportGeneration(accountId, periodMonth, feature);
+      throw err;
+    }
+
+    // 2. Create report + sections + photos in ONE transaction.
+    try {
+      const report = await db.transaction(async (tx) => {
+        const created = await storage.createReport({
+          projectId,
+          accountId,
+          title: content.title,
+          description: content.coverDescription,
+          coverConfig: {
+            showCoverPhoto: true,
+            showCompanyLogo: true,
+            showCompanyName: true,
+            showCreatorName: true,
+            showPhotoCount: true,
+            showDateCreated: true,
+            coverPhotoMediaId: null as number | null,
+          },
+          status: "draft",
+          createdById: userId,
+        }, tx);
+        for (let i = 0; i < content.sections.length; i++) {
+          const s = content.sections[i];
+          const section = await storage.createReportSection(
+            { reportId: created.id, title: s.title, summary: s.summary, sortOrder: i },
+            tx,
+          );
+          if (s.photos.length > 0) {
+            await tx.insert(reportSectionPhotos).values(
+              s.photos.map((p, j) => ({
+                sectionId: section.id,
+                mediaId: p.mediaId,
+                caption: p.caption,
+                description: p.description,
+                sortOrder: j,
+              })),
+            );
+          }
+        }
+        return created;
+      });
+      return { report, content };
+    } catch (err) {
+      // Write failure — release the slot; transaction rollback means no report row.
+      await releaseReportGeneration(accountId, periodMonth, feature);
+      throw err;
+    }
+  }
+
   // Create + generate a report in one action from the project Reports tab.
   // Order matters: reserve slot → generate → only THEN create the report
   // row + content in one transaction. A generation failure must never
@@ -2846,71 +2935,24 @@ export async function registerRoutes(
         });
       }
 
-      // 2. Generate BEFORE creating anything. Any failure releases the
-      // slot and returns the error — no report row exists yet.
-      let content: Awaited<ReturnType<typeof generateReportContent>>;
+      // 2+3. Generate then persist (slot released on any failure inside).
+      let result: Awaited<ReturnType<typeof generateAndPersistReport>>;
       try {
-        content = await generateReportContent({
-          reportId: 0, // no report row yet — Sentry context only
+        result = await generateAndPersistReport({
           projectId,
+          accountId: req.user.accountId,
+          userId: req.user.id,
           mediaIds: parsed.data.mediaIds,
           note: parsed.data.note,
           reportType: parsed.data.reportType,
+          periodMonth,
         });
       } catch (err: any) {
-        await releaseReportGeneration(req.user.accountId, periodMonth);
         if (err?.statusCode === 400) return res.status(400).json({ message: err.message });
         throw err;
       }
 
-      // 3. Create report + sections + photos in ONE transaction.
-      let report;
-      try {
-        report = await db.transaction(async (tx) => {
-          const created = await storage.createReport({
-            projectId,
-            accountId: req.user.accountId,
-            title: content.title,
-            description: content.coverDescription,
-            coverConfig: {
-              showCoverPhoto: true,
-              showCompanyLogo: true,
-              showCompanyName: true,
-              showCreatorName: true,
-              showPhotoCount: true,
-              showDateCreated: true,
-              coverPhotoMediaId: null as number | null,
-            },
-            status: "draft",
-            createdById: req.user.id,
-          }, tx);
-          for (let i = 0; i < content.sections.length; i++) {
-            const s = content.sections[i];
-            const section = await storage.createReportSection(
-              { reportId: created.id, title: s.title, summary: s.summary, sortOrder: i },
-              tx,
-            );
-            if (s.photos.length > 0) {
-              await tx.insert(reportSectionPhotos).values(
-                s.photos.map((p, j) => ({
-                  sectionId: section.id,
-                  mediaId: p.mediaId,
-                  caption: p.caption,
-                  description: p.description,
-                  sortOrder: j,
-                })),
-              );
-            }
-          }
-          return created;
-        });
-      } catch (err) {
-        // Write failure — release the slot; transaction rollback means no report row.
-        await releaseReportGeneration(req.user.accountId, periodMonth);
-        throw err;
-      }
-
-      res.status(201).json({ reportId: report.id, excludedCount: content.excludedMediaIds.length });
+      res.status(201).json({ reportId: result.report.id, excludedCount: result.content.excludedMediaIds.length });
     } catch (error) {
       console.error("[projects/reports/generate] error:", error);
       // Anthropic API errors (slot already released by the inner catch):
@@ -2922,6 +2964,128 @@ export async function registerRoutes(
           ? error.message
           : "Failed to generate report",
       });
+    }
+  });
+
+  const walkthroughBodySchema = z.object({
+    transcript: z.string().min(1).max(20000),
+    // Same 75-photo ceiling as generateReportBodySchema.
+    mediaIds: z.array(z.number().int().positive()).min(1).max(75),
+    // Timing HINTS (ms from recording start) — optional, never validated
+    // against mediaIds membership; unknown ids are simply never matched.
+    photoOffsets: z
+      .array(z.object({ mediaId: z.number().int(), offsetMs: z.number().int().nonnegative() }))
+      .optional(),
+  });
+
+  // Mobile walkthrough sessions: transcript of continuous narration + the
+  // session's photos. First async-generate-then-notify flow: respond 202
+  // immediately, generate via the waitUntil deferral pattern (same as
+  // aiCaptions/thumbnails), then push-notify the requesting user.
+  app.post("/api/projects/:id/walkthrough", requireWriteAccess, async (req: any, res) => {
+    try {
+      const projectId = parseInt(req.params.id as string);
+      if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
+      if (!(await userCanAccessProject(req, projectId))) return res.status(403).json({ message: "Access denied" });
+      const parsed = walkthroughBodySchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+
+      // Usage gate FIRST — on denial nothing is created, nothing deferred.
+      const { admitted, periodMonth } = await tryReserveReportGeneration(
+        req.user.accountId,
+        "walkthrough_generation",
+      );
+      if (!admitted) {
+        return res.status(429).json({
+          message: `Monthly AI report limit reached (${AI_REPORT_MONTHLY_LIMIT} generations). The limit resets at the start of next month.`,
+        });
+      }
+
+      // Capture request-scoped values BEFORE responding — req must not be
+      // touched from the deferred closure.
+      const accountId: string = req.user.accountId;
+      const userId: string = req.user.id;
+      const { transcript, mediaIds, photoOffsets } = parsed.data;
+
+      // 202 BEFORE generation starts — the client does not wait.
+      res.status(202).json({ status: "generating" });
+
+      const work = (async () => {
+        let report: { id: number; title: string };
+        try {
+          ({ report } = await generateAndPersistReport({
+            projectId,
+            accountId,
+            userId,
+            mediaIds,
+            note: transcript,
+            reportType: "progress_recap",
+            photoOffsets: photoOffsets?.length
+              ? new Map(photoOffsets.map((o) => [o.mediaId, o.offsetMs]))
+              : undefined,
+            transcriptIsNarration: true,
+            periodMonth,
+            feature: "walkthrough_generation",
+          }));
+        } catch (err) {
+          // Slot already released by generateAndPersistReport on every
+          // failure path. A silent failure is the worst outcome — the user
+          // is waiting on a push either way.
+          console.error("[walkthrough] generation failed:", err);
+          try {
+            Sentry.captureException(err, {
+              tags: { source: "walkthrough" },
+              extra: { projectId, accountId, mediaCount: mediaIds.length },
+            });
+          } catch {
+            // Sentry must never mask the notification below.
+          }
+          try {
+            await sendPushNotification({
+              userId,
+              title: "Couldn't generate your walkthrough report",
+              body: "Your photos were saved.",
+              data: { type: "walkthrough_report_failed", projectId },
+            });
+          } catch (pushErr) {
+            console.error("[walkthrough] failure notification failed:", pushErr);
+          }
+          return;
+        }
+
+        // Report committed — a ready-push failure must NOT trigger the
+        // generation-failed handler (the report is fine); log/capture only.
+        try {
+          await sendPushNotification({
+            userId,
+            title: "Your walkthrough report is ready",
+            body: report.title,
+            // Deep-link: same convention as the only existing notification —
+            // a `type` discriminator plus entity ids in `data`.
+            data: { type: "walkthrough_report_ready", reportId: report.id, projectId },
+          });
+        } catch (pushErr) {
+          console.error("[walkthrough] ready notification failed:", pushErr);
+          try {
+            Sentry.captureException(pushErr, {
+              tags: { source: "walkthrough" },
+              extra: { projectId, reportId: report.id, stage: "ready_push" },
+            });
+          } catch {
+            // Never rethrow from the deferred closure.
+          }
+        }
+      })();
+      try {
+        // On Vercel, keep the instance alive until generation finishes.
+        waitUntil(work);
+      } catch {
+        // Local dev / non-Vercel request context: dangling promise is fine —
+        // `work` handles all its own rejections.
+      }
+    } catch (error) {
+      console.error("[projects/walkthrough] error:", error);
+      if (!res.headersSent) res.status(500).json({ message: "Failed to start walkthrough report" });
     }
   });
 
