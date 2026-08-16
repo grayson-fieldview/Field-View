@@ -39,6 +39,7 @@ import {
   EyeOff,
   Eraser,
   Type,
+  Sparkles,
 } from "lucide-react";
 import type { Media, Comment, Task, Project, MediaAnnotation, AnnotationStroke } from "@shared/schema";
 import { useAuth } from "@/hooks/use-auth";
@@ -1655,6 +1656,24 @@ export default function PhotoViewer({
               Comments
             </h3>
             <div className="space-y-3 max-h-[250px] overflow-y-auto">
+              {/* Synthetic AI caption entry — display only, sourced from
+                  media.ai_caption (NOT a comments row). Pinned first, no
+                  timestamp, no edit/delete affordances. "UNCLEAR" sentinel
+                  and null render nothing. Not counted as a comment: the
+                  empty state below still keys off human comments only. */}
+              {media.aiCaption && media.aiCaption !== "UNCLEAR" && (
+                <div className="flex gap-2 text-sm" data-testid="comment-ai-caption">
+                  <Avatar className="h-6 w-6 shrink-0">
+                    <AvatarFallback className="bg-[#f09004] text-white">
+                      <Sparkles className="h-3.5 w-3.5" />
+                    </AvatarFallback>
+                  </Avatar>
+                  <div>
+                    <span className="font-medium text-xs">Field View AI</span>
+                    <p className="text-muted-foreground text-xs mt-0.5">{media.aiCaption}</p>
+                  </div>
+                </div>
+              )}
               {(mediaComments || []).length === 0 ? (
                 <p className="text-sm text-muted-foreground">No comments yet.</p>
               ) : (
