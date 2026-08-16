@@ -25,6 +25,7 @@ import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, dele
 import { queueThumbnailGeneration } from "./lib/thumbnails";
 import { queueCaptionGeneration } from "./lib/aiCaptions";
 import { transcribeAudio } from "./lib/transcription";
+import { translateText } from "./lib/translation";
 import {
   generateReportContent,
   classifyAnthropicApiError,
@@ -734,6 +735,25 @@ export async function registerRoutes(
       }
     },
   );
+
+  // On-demand comment translation. Auto-target (English → Spanish, other →
+  // English), nothing persisted — the client caches per-entry in state.
+  const translateBodySchema = z.object({ text: z.string().min(1).max(2000) });
+  app.post("/api/translate", requireWriteAccess, async (req: any, res) => {
+    try {
+      const parsed = translateBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Provide 'text' between 1 and 2000 characters" });
+      }
+      const translation = await translateText(parsed.data.text);
+      res.json({ translation });
+    } catch (error: any) {
+      const apiErr = classifyAnthropicApiError(error);
+      if (apiErr) return res.status(apiErr.status).json({ message: apiErr.message });
+      console.error("Translation error:", error?.message || error);
+      res.status(503).json({ message: "Translation failed. Please try again." });
+    }
+  });
 
   app.post("/api/projects/:id/media", requireWriteAccess, async (req: any, res) => {
     try {

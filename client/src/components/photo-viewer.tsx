@@ -163,6 +163,13 @@ export default function PhotoViewer({
   const { user: currentUser } = useAuth();
   const [photoOnlyMode, setPhotoOnlyMode] = useState(false);
   const [newComment, setNewComment] = useState("");
+  // Per-entry translation cache — keys are String(comment.id) for human
+  // comments and the literal "ai" for the synthetic AI caption entry.
+  // Ephemeral, never persisted; translate once, toggle from cache.
+  const [translations, setTranslations] = useState<Record<string, string>>({});
+  const [showingTranslation, setShowingTranslation] = useState<Set<string>>(new Set());
+  const [translatingKey, setTranslatingKey] = useState<string | null>(null);
+  const [translateError, setTranslateError] = useState<string | null>(null);
   const [isAnnotating, setIsAnnotating] = useState(false);
   const [annotations, setAnnotations] = useState<AnnotationShape[]>([]);
   const [currentShape, setCurrentShape] = useState<AnnotationShape | null>(null);
@@ -248,6 +255,83 @@ export default function PhotoViewer({
       toast({ title: "Error", description: error.message, variant: "destructive" });
     },
   });
+
+  // Reset the ephemeral translation cache when navigating to another photo —
+  // the "ai" key is per-media, and stale comment translations shouldn't leak.
+  // translateGenRef is a navigation generation: any in-flight request captures
+  // it before awaiting and drops its result (success, failure, AND the
+  // loading-state cleanup) if a navigation bumped it in the meantime, so a
+  // late response for photo A can never touch photo B's state.
+  const translateGenRef = useRef(0);
+  useEffect(() => {
+    translateGenRef.current += 1;
+    setTranslations({});
+    setShowingTranslation(new Set());
+    setTranslatingKey(null);
+    setTranslateError(null);
+  }, [media.id]);
+
+  const requestTranslation = async (key: string, text: string) => {
+    if (translatingKey) return;
+    // Cached: no repeat API call — just show it again.
+    if (translations[key]) {
+      setShowingTranslation((prev) => new Set(prev).add(key));
+      return;
+    }
+    const gen = translateGenRef.current;
+    setTranslateError(null);
+    setTranslatingKey(key);
+    try {
+      const res = await apiRequest("POST", "/api/translate", { text });
+      const data = await res.json();
+      if (translateGenRef.current !== gen) return; // navigated away — discard
+      setTranslations((prev) => ({ ...prev, [key]: data.translation }));
+      setShowingTranslation((prev) => new Set(prev).add(key));
+    } catch {
+      if (translateGenRef.current !== gen) return; // navigated away — discard
+      setTranslateError(key);
+    } finally {
+      if (translateGenRef.current === gen) setTranslatingKey(null);
+    }
+  };
+
+  const toggleTranslation = (key: string) => {
+    setShowingTranslation((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  // Per-entry Translate/Show-original controls, rendered below the body <p>.
+  const renderTranslateControls = (key: string, text: string) => (
+    <>
+      {!translations[key] ? (
+        <button
+          type="button"
+          className="text-[10px] text-muted-foreground hover:text-foreground mt-0.5 disabled:opacity-60"
+          onClick={() => requestTranslation(key, text)}
+          disabled={translatingKey === key}
+          data-testid={`button-translate-${key}`}
+        >
+          {translatingKey === key ? "Translating..." : "Translate"}
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="text-[10px] text-muted-foreground hover:text-foreground mt-0.5"
+          onClick={() => toggleTranslation(key)}
+          data-testid={`button-toggle-translation-${key}`}
+        >
+          {showingTranslation.has(key) ? "Show original" : "Show translation"}
+        </button>
+      )}
+      {translateError === key && (
+        <p className="text-[10px] text-destructive mt-0.5">Couldn't translate.</p>
+      )}
+    </>
+  );
 
   const { data: savedAnnotations = [] } = useQuery<(MediaAnnotation & { user?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } })[]>({
     queryKey: ["/api/media", media.id.toString(), "annotations"],
@@ -1670,7 +1754,12 @@ export default function PhotoViewer({
                   </Avatar>
                   <div>
                     <span className="font-medium text-xs">Field View AI</span>
-                    <p className="text-muted-foreground text-xs mt-0.5">{media.aiCaption}</p>
+                    <p className="text-muted-foreground text-xs mt-0.5">
+                      {showingTranslation.has("ai") && translations["ai"]
+                        ? translations["ai"]
+                        : media.aiCaption}
+                    </p>
+                    {renderTranslateControls("ai", media.aiCaption)}
                   </div>
                 </div>
               )}
@@ -1702,7 +1791,12 @@ export default function PhotoViewer({
                           hour12: true,
                         })}
                       </span>
-                      <p className="text-muted-foreground text-xs mt-0.5">{comment.content}</p>
+                      <p className="text-muted-foreground text-xs mt-0.5">
+                        {showingTranslation.has(String(comment.id)) && translations[String(comment.id)]
+                          ? translations[String(comment.id)]
+                          : comment.content}
+                      </p>
+                      {renderTranslateControls(String(comment.id), comment.content)}
                     </div>
                   </div>
                 ))
