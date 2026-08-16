@@ -44,6 +44,9 @@ export type GeneratedSection = {
   photos: GeneratedPhoto[];
 };
 export type GeneratedReportContent = {
+  /** AI-suggested report title. Used only when CREATING a report from
+   * generation; existing reports keep their user-chosen title. */
+  title: string;
   coverDescription: string;
   sections: GeneratedSection[];
   /** Photos the model excluded as not showing project work. Per-generation
@@ -85,6 +88,7 @@ Rules:
 
 Return ONLY a JSON object — no markdown fences, no prose before or after — matching exactly:
 {
+  "title": "short report title, 3-6 words, names the work and site",
   "coverDescription": "one paragraph, 2-4 sentences",
   "excludedMediaIds": [123, 456],
   "sections": [
@@ -247,7 +251,10 @@ export async function generateReportContent(input: {
     });
   }
 
-  return { coverDescription: String(parsed.coverDescription).trim(), sections, excludedMediaIds };
+  const title =
+    typeof parsed.title === "string" && parsed.title.trim() ? parsed.title.trim() : "Project Report";
+
+  return { title, coverDescription: String(parsed.coverDescription).trim(), sections, excludedMediaIds };
 }
 
 /** 'YYYY-MM' for the current month (UTC). */

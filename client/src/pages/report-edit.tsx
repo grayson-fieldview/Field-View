@@ -32,6 +32,7 @@ import { CoverEditor } from "@/components/report-editor/cover-editor";
 import { SectionEditor } from "@/components/report-editor/section-editor";
 import { DEFAULT_COVER, type CoverConfig, type Section } from "@/components/report-editor/types";
 import ReportShareDialog from "@/components/report-share-dialog";
+import { AiGenerateDialog, type AiGenerateParams } from "@/components/report-editor/ai-generate-dialog";
 
 type Pane = { kind: "cover" } | { kind: "section"; id: number };
 
@@ -73,27 +74,8 @@ export default function ReportEditPage({ id }: { id: string }) {
   const [confirmDeletePhoto, setConfirmDeletePhoto] = useState<number | null>(null);
   const lastLoadedReportIdRef = useRef<number | null>(null);
 
-  // ─── AI generation dialog state (same Set-based selection pattern as
-  // project-detail.tsx selectedIds/toggleSelection/toggleSelectAll) ─────────
+  // AI generation dialog (shared component owns the selection/note state).
   const [isAiOpen, setIsAiOpen] = useState(false);
-  const [aiSelectedIds, setAiSelectedIds] = useState<Set<number>>(new Set());
-  const [aiNote, setAiNote] = useState("");
-  const [aiReportType, setAiReportType] = useState<"client_update" | "daily_log" | "progress_recap">("client_update");
-
-  function aiToggleSelection(id: number) {
-    setAiSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-  function aiToggleSelectAll(ids: number[]) {
-    setAiSelectedIds((prev) => (prev.size === ids.length ? new Set() : new Set(ids)));
-  }
-  function aiClearSelection() {
-    setAiSelectedIds(new Set());
-  }
 
   // Initialize draft from server payload exactly once per report id.
   useEffect(() => {
@@ -248,12 +230,8 @@ export default function ReportEditPage({ id }: { id: string }) {
   });
 
   const generateWithAi = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("POST", `/api/reports/${reportId}/generate`, {
-        mediaIds: Array.from(aiSelectedIds),
-        note: aiNote.trim() || undefined,
-        reportType: aiReportType,
-      });
+    mutationFn: async (params: AiGenerateParams) => {
+      const res = await apiRequest("POST", `/api/reports/${reportId}/generate`, params);
       return res.json() as Promise<ReportTree & { excludedCount?: number }>;
     },
     onSuccess: (data) => {
@@ -264,8 +242,6 @@ export default function ReportEditPage({ id }: { id: string }) {
       queryClient.invalidateQueries({ queryKey: ["/api/reports"] });
       setPane({ kind: "cover" });
       setIsAiOpen(false);
-      aiClearSelection();
-      setAiNote("");
       const excluded = data?.excludedCount ?? 0;
       toast({
         title: "Report generated",
@@ -628,139 +604,14 @@ export default function ReportEditPage({ id }: { id: string }) {
       </AlertDialog>
 
       {/* AI generation dialog */}
-      <Dialog
+      <AiGenerateDialog
         open={isAiOpen}
-        onOpenChange={(open) => {
-          if (generateWithAi.isPending) return; // don't close mid-generation
-          setIsAiOpen(open);
-        }}
-      >
-        <DialogContent className="max-w-3xl max-h-[85vh] overflow-hidden flex flex-col" data-testid="dialog-generate-ai">
-          <DialogHeader>
-            <DialogTitle>Generate report with AI</DialogTitle>
-            <DialogDescription>
-              Select photos, add a note, and pick a report type. Generation takes 10–30 seconds.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="flex-1 overflow-y-auto -mx-6 px-6 space-y-4">
-            {/* Warning */}
-            <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive" data-testid="text-ai-replace-warning">
-              Generating replaces ALL existing sections in this report. Your cover settings are kept, but the cover description is rewritten.
-            </div>
-
-            {/* Report type */}
-            <div>
-              <p className="text-sm font-medium mb-2">Report type</p>
-              <div className="flex flex-wrap gap-2">
-                {([
-                  { value: "client_update", label: "Client Update" },
-                  { value: "daily_log", label: "Daily Log" },
-                  { value: "progress_recap", label: "Progress Recap" },
-                ] as const).map((t) => (
-                  <Button
-                    key={t.value}
-                    type="button"
-                    size="sm"
-                    variant={aiReportType === t.value ? "default" : "outline"}
-                    onClick={() => setAiReportType(t.value)}
-                    data-testid={`button-report-type-${t.value}`}
-                  >
-                    {t.label}
-                  </Button>
-                ))}
-              </div>
-            </div>
-
-            {/* Note */}
-            <div>
-              <p className="text-sm font-medium mb-2">Note (optional)</p>
-              <Textarea
-                value={aiNote}
-                onChange={(e) => setAiNote(e.target.value)}
-                placeholder="Describe the work — what was done, anything worth flagging"
-                rows={3}
-                data-testid="input-ai-note"
-              />
-            </div>
-
-            {/* Photo multi-select */}
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-sm font-medium">
-                  Photos <span className="text-muted-foreground font-normal">({aiSelectedIds.size} selected, max 50)</span>
-                </p>
-                {projectMedia.length > 0 && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => aiToggleSelectAll(projectMedia.slice(0, 50).map((m) => m.id))}
-                    data-testid="button-ai-select-all"
-                  >
-                    {aiSelectedIds.size === Math.min(projectMedia.length, 50) ? "Clear all" : "Select all"}
-                  </Button>
-                )}
-              </div>
-              {projectMedia.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-8">This project has no photos yet.</p>
-              ) : (
-                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-                  {projectMedia.map((m) => {
-                    const checked = aiSelectedIds.has(m.id);
-                    return (
-                      <button
-                        key={m.id}
-                        type="button"
-                        onClick={() => aiToggleSelection(m.id)}
-                        className={`relative aspect-square rounded-md overflow-hidden border-2 transition-colors ${
-                          checked ? "border-primary" : "border-transparent"
-                        }`}
-                        data-testid={`button-ai-pick-media-${m.id}`}
-                      >
-                        <img src={m.url} alt="" className="object-cover w-full h-full" />
-                        {checked && (
-                          <div className="absolute top-1 right-1 bg-primary text-primary-foreground text-xs rounded-full h-5 w-5 flex items-center justify-center">
-                            ✓
-                          </div>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setIsAiOpen(false)}
-              disabled={generateWithAi.isPending}
-              data-testid="button-cancel-ai"
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={() => generateWithAi.mutate()}
-              disabled={aiSelectedIds.size === 0 || aiSelectedIds.size > 50 || generateWithAi.isPending}
-              data-testid="button-confirm-ai"
-            >
-              {generateWithAi.isPending ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-                  Generating... this takes 10–30s
-                </>
-              ) : (
-                <>
-                  <Sparkles className="h-4 w-4 mr-1.5" />
-                  Generate ({aiSelectedIds.size} photo{aiSelectedIds.size === 1 ? "" : "s"})
-                </>
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        onOpenChange={setIsAiOpen}
+        projectMedia={projectMedia}
+        isPending={generateWithAi.isPending}
+        showReplaceWarning
+        onGenerate={(params) => generateWithAi.mutate(params)}
+      />
 
       {/* Photo picker */}
       <Dialog open={isPickerOpen} onOpenChange={setIsPickerOpen}>

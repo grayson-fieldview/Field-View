@@ -2678,6 +2678,101 @@ export async function registerRoutes(
     }
   });
 
+  // Create + generate a report in one action from the project Reports tab.
+  // Order matters: reserve slot → generate → only THEN create the report
+  // row + content in one transaction. A generation failure must never
+  // leave an orphan blank draft.
+  app.post("/api/projects/:id/reports/generate", requireWriteAccess, async (req: any, res) => {
+    try {
+      const projectId = parseInt(req.params.id as string);
+      if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
+      if (!(await userCanAccessProject(req, projectId))) return res.status(403).json({ message: "Access denied" });
+      const parsed = generateReportBodySchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+
+      // 1. Usage gate FIRST — on denial nothing is created.
+      const { admitted, periodMonth } = await tryReserveReportGeneration(req.user.accountId);
+      if (!admitted) {
+        return res.status(429).json({
+          message: `Monthly AI report limit reached (${AI_REPORT_MONTHLY_LIMIT} generations). The limit resets at the start of next month.`,
+        });
+      }
+
+      // 2. Generate BEFORE creating anything. Any failure releases the
+      // slot and returns the error — no report row exists yet.
+      let content: Awaited<ReturnType<typeof generateReportContent>>;
+      try {
+        content = await generateReportContent({
+          reportId: 0, // no report row yet — Sentry context only
+          projectId,
+          mediaIds: parsed.data.mediaIds,
+          note: parsed.data.note,
+          reportType: parsed.data.reportType,
+        });
+      } catch (err: any) {
+        await releaseReportGeneration(req.user.accountId, periodMonth);
+        if (err?.statusCode === 400) return res.status(400).json({ message: err.message });
+        throw err;
+      }
+
+      // 3. Create report + sections + photos in ONE transaction.
+      let report;
+      try {
+        report = await db.transaction(async (tx) => {
+          const created = await storage.createReport({
+            projectId,
+            accountId: req.user.accountId,
+            title: content.title,
+            description: content.coverDescription,
+            coverConfig: {
+              showCoverPhoto: true,
+              showCompanyLogo: true,
+              showCompanyName: true,
+              showCreatorName: true,
+              showPhotoCount: true,
+              showDateCreated: true,
+              coverPhotoMediaId: null as number | null,
+            },
+            status: "draft",
+            createdById: req.user.id,
+          }, tx);
+          for (let i = 0; i < content.sections.length; i++) {
+            const s = content.sections[i];
+            const section = await storage.createReportSection(
+              { reportId: created.id, title: s.title, summary: s.summary, sortOrder: i },
+              tx,
+            );
+            if (s.photos.length > 0) {
+              await tx.insert(reportSectionPhotos).values(
+                s.photos.map((p, j) => ({
+                  sectionId: section.id,
+                  mediaId: p.mediaId,
+                  caption: p.caption,
+                  description: p.description,
+                  sortOrder: j,
+                })),
+              );
+            }
+          }
+          return created;
+        });
+      } catch (err) {
+        // Write failure — release the slot; transaction rollback means no report row.
+        await releaseReportGeneration(req.user.accountId, periodMonth);
+        throw err;
+      }
+
+      res.status(201).json({ reportId: report.id, excludedCount: content.excludedMediaIds.length });
+    } catch (error) {
+      console.error("[projects/reports/generate] error:", error);
+      res.status(500).json({
+        message: error instanceof Error && error.message.startsWith("AI returned")
+          ? error.message
+          : "Failed to generate report",
+      });
+    }
+  });
+
   app.post("/api/reports/:id/pdf", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);

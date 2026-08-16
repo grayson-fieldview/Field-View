@@ -100,7 +100,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useLocation, Link } from "wouter";
-import { LayoutTemplate } from "lucide-react";
+import { LayoutTemplate, Sparkles } from "lucide-react";
+import { AiGenerateDialog, type AiGenerateParams } from "@/components/report-editor/ai-generate-dialog";
 import ReportFormDialog from "@/components/report-form-dialog";
 import { AddressAutocomplete } from "@/components/address-autocomplete";
 import type { Project, Media, Comment, Task, Checklist, ChecklistItem, Report, ChecklistTemplate, ChecklistTemplateItem, MediaAnnotation, AnnotationStroke, ProjectFile } from "@shared/schema";
@@ -302,6 +303,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const [newChecklistTitle, setNewChecklistTitle] = useState("");
   const [createChecklistDialogOpen, setCreateChecklistDialogOpen] = useState(false);
   const [isCreateReportOpen, setIsCreateReportOpen] = useState(false);
+  const [isAiGenerateOpen, setIsAiGenerateOpen] = useState(false);
   const [expandedChecklist, setExpandedChecklist] = useState<number | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -631,6 +633,39 @@ export default function ProjectDetailPage({ id }: { id: string }) {
         return;
       }
       toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const generateAiReport = useMutation({
+    mutationFn: async (params: AiGenerateParams) => {
+      const res = await apiRequest("POST", `/api/projects/${id}/reports/generate`, params);
+      return res.json() as Promise<{ reportId: number; excludedCount: number }>;
+    },
+    onSuccess: (data) => {
+      setIsAiGenerateOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/reports"] });
+      const excluded = data.excludedCount ?? 0;
+      toast({
+        title: "Report generated",
+        description:
+          excluded > 0
+            ? `Sections were created from your photos. ${excluded} photo${excluded === 1 ? " wasn't" : "s weren't"} included because ${excluded === 1 ? "it" : "they"} didn't show project work.`
+            : "Sections were created from your photos. Review and edit as needed.",
+      });
+      navigate(`/reports/${data.reportId}/edit`);
+    },
+    onError: (e: Error) => {
+      // apiRequest throws "429: {json}" style messages; surface the server's
+      // message plainly (429 limit / 400 all-excluded) and stay put.
+      const msg = e.message.replace(/^\d+:\s*/, "");
+      let plain = msg;
+      try {
+        plain = JSON.parse(msg).message ?? msg;
+      } catch {
+        // not JSON — use as-is
+      }
+      toast({ title: "Couldn't generate report", description: plain, variant: "destructive" });
     },
   });
 
@@ -2116,8 +2151,12 @@ export default function ProjectDetailPage({ id }: { id: string }) {
 
           {activeTab === "reports" && (
             <div className="px-4 sm:px-6 py-4 space-y-4">
-              <div className="flex justify-end">
-                <Button onClick={() => setIsCreateReportOpen(true)} data-testid="button-add-report">
+              <div className="flex justify-end gap-2">
+                <Button onClick={() => setIsAiGenerateOpen(true)} data-testid="button-generate-ai-report">
+                  <Sparkles className="h-4 w-4 mr-2" />
+                  Generate with AI
+                </Button>
+                <Button variant="outline" onClick={() => setIsCreateReportOpen(true)} data-testid="button-add-report">
                   <Plus className="h-4 w-4 mr-2" />
                   Add Report
                 </Button>
@@ -2131,8 +2170,12 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                     </div>
                     <h3 className="text-lg font-semibold">No reports yet</h3>
                     <p className="text-sm text-muted-foreground max-w-sm mx-auto">
-                      Click Add Report to get started.
+                      Generate a report from your photos with AI, or click Add Report to start from scratch.
                     </p>
+                    <Button onClick={() => setIsAiGenerateOpen(true)} data-testid="button-generate-ai-report-empty">
+                      <Sparkles className="h-4 w-4 mr-2" />
+                      Generate with AI
+                    </Button>
                   </div>
                 </Card>
               ) : (
@@ -2548,6 +2591,14 @@ export default function ProjectDetailPage({ id }: { id: string }) {
         open={isCreateReportOpen}
         onOpenChange={setIsCreateReportOpen}
         projectId={parseInt(id)}
+      />
+
+      <AiGenerateDialog
+        open={isAiGenerateOpen}
+        onOpenChange={setIsAiGenerateOpen}
+        projectMedia={projectMedia}
+        isPending={generateAiReport.isPending}
+        onGenerate={(params) => generateAiReport.mutate(params)}
       />
 
       <ProjectShareDialog
