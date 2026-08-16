@@ -125,30 +125,50 @@ Rules:
 - Never create a section whose purpose is to explain that photos are irrelevant, unrelated, unidentified, or not part of the project.
 - Never write a photo caption like "Unidentified photo" or "Unknown image". If you cannot tell what a photo shows, exclude it.
 
-Return ONLY a JSON object — no markdown fences, no prose before or after — matching exactly:
-{
-  "title": "short report title, 3-6 words, names the work and site",
-  "coverDescription": "one paragraph, 2-4 sentences",
-  "excludedMediaIds": [123, 456],
-  "sections": [
-    {
-      "title": "short section heading in trade language",
-      "summary": "1-2 sentences, or null",
-      "photos": [
-        { "mediaId": 123, "caption": "short title, 3-8 words", "description": "one sentence, or null" }
-      ]
-    }
-  ]
-}
-Every photo must either appear exactly once in a section OR be listed in excludedMediaIds. Exclude a photo when it does not show work, materials, conditions, or the site for this job — for example screenshots, app or software interfaces, email or document captures, marketing images, or photos whose subject cannot be determined. Excluding is the correct choice for those; do not include them.`;
+Content guidance: title is a short report title, 3-6 words, naming the work and site. coverDescription is one paragraph, 2-4 sentences. Section titles are short headings in trade language; summaries are 1-2 sentences or null. Photo captions are short titles, 3-8 words; photo descriptions are one sentence or null.
+Every photo must either appear exactly once in a section OR be listed in excludedMediaIds. Exclude a photo when it does not show work, materials, conditions, or the site for this job — for example screenshots, app or software interfaces, email or document captures, marketing images, or photos whose subject cannot be determined. Excluding is the correct choice for those; do not include them.
+When you are done, call the submit_report tool with the report content.`;
 }
 
-/** Strip ```json fences if the model wrapped its output despite instructions. */
-function stripFences(text: string): string {
-  const t = text.trim();
-  const m = t.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
-  return m ? m[1].trim() : t;
-}
+// Tool-use is the supported way to force structured output on this model
+// (assistant prefill is rejected with a 400). tool_choice forces the call,
+// so the shape is guaranteed rather than requested.
+const SUBMIT_REPORT_TOOL: Anthropic.Tool = {
+  name: "submit_report",
+  description: "Submit the structured report content.",
+  input_schema: {
+    type: "object",
+    properties: {
+      title: { type: "string" },
+      coverDescription: { type: "string" },
+      excludedMediaIds: { type: "array", items: { type: "number" } },
+      sections: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            title: { type: "string" },
+            summary: { type: ["string", "null"] },
+            photos: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  mediaId: { type: "number" },
+                  caption: { type: "string" },
+                  description: { type: ["string", "null"] },
+                },
+                required: ["mediaId", "caption"],
+              },
+            },
+          },
+          required: ["title", "photos"],
+        },
+      },
+    },
+    required: ["title", "coverDescription", "excludedMediaIds", "sections"],
+  },
+};
 
 export async function generateReportContent(input: {
   reportId: number;
@@ -205,45 +225,43 @@ export async function generateReportContent(input: {
     .filter(Boolean)
     .join("\n\n");
 
-  // Call + parse, retrying ONCE on parse failure only. API errors (network,
-  // 429s, auth) propagate immediately — they are not retried here. A retry
-  // consumes a second API call but NOT a second usage slot; the reservation
-  // is per-request, made by the caller before this function runs.
+  // Call + extract, retrying ONCE on a missing/invalid tool_use block only.
+  // API errors (network, 429s, auth) propagate immediately — they are not
+  // retried here. A retry consumes a second API call but NOT a second usage
+  // slot; the reservation is per-request, made by the caller before this
+  // function runs.
   let parsed: any;
   for (let attempt = 0; ; attempt++) {
     const response = await getClient().messages.create({
       model: AI_REPORT_MODEL,
       max_tokens: AI_REPORT_MAX_TOKENS,
       system: buildSystemPrompt(reportType),
-      messages: [
-        { role: "user", content: [{ type: "text", text: userText }] },
-        // Assistant prefill: the model can only CONTINUE a JSON object.
-        { role: "assistant", content: [{ type: "text", text: "{" }] },
-      ],
+      messages: [{ role: "user", content: [{ type: "text", text: userText }] }],
+      tools: [SUBMIT_REPORT_TOOL],
+      // Force the tool call — structured output guaranteed, not requested.
+      tool_choice: { type: "tool", name: "submit_report" },
     });
 
-    // Truncated output cannot be valid JSON — name the stop_reason so the
-    // ensuing parse failure is diagnosable. Retry/error handling unchanged.
+    // Truncated output cannot be a complete tool call — name the stop_reason
+    // so the ensuing failure is diagnosable. Retry/error handling unchanged.
     if (response.stop_reason === "max_tokens") {
       console.warn(
-        `[ai-reports] response truncated at max_tokens (stop_reason=max_tokens, reportId=${reportId}, projectId=${projectId}, attempt=${attempt}) — JSON parse will likely fail`,
+        `[ai-reports] response truncated at max_tokens (stop_reason=max_tokens, reportId=${reportId}, projectId=${projectId}, attempt=${attempt}) — tool input will likely be missing or invalid`,
       );
     }
 
-    // The response omits the prefilled opening brace — prepend it (on the
-    // first attempt AND the retry) before parsing.
-    const raw = "{" + response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join(" ")
-      .trim();
+    // The tool_use block's .input IS the parsed object — no JSON.parse.
+    const toolBlock = response.content.find(
+      (b): b is Anthropic.ToolUseBlock => b.type === "tool_use" && b.name === "submit_report",
+    );
 
     try {
-      parsed = JSON.parse(stripFences(raw));
+      if (!toolBlock) throw new Error("no submit_report tool_use block in response");
+      parsed = toolBlock.input;
       if (typeof parsed?.coverDescription !== "string" || !Array.isArray(parsed?.sections)) {
         throw new Error("missing coverDescription or sections");
       }
-      break; // parsed OK
+      break; // extracted OK
     } catch (err) {
       if (attempt === 0) {
         console.warn(
@@ -255,7 +273,12 @@ export async function generateReportContent(input: {
       try {
         Sentry.captureException(err, {
           tags: { source: "ai_reports" },
-          extra: { reportId, projectId, stopReason: response.stop_reason, rawPreview: raw.slice(0, 500) },
+          extra: {
+            reportId,
+            projectId,
+            stopReason: response.stop_reason,
+            contentTypes: response.content.map((b) => b.type),
+          },
         });
       } catch {
         // Sentry must never mask the primary failure.
