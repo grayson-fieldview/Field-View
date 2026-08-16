@@ -159,39 +159,62 @@ export async function generateReportContent(input: {
     note?.trim() ? `Contractor's note about the work:\n${note.trim()}` : null,
     `Photos (${rows.length}):`,
     photoLines.join("\n"),
+    // Always give the turn an actual request — with an empty note the turn
+    // is otherwise a bare data dump and the model may reply conversationally.
+    "Produce the report JSON described in your instructions for the photos above.",
   ]
     .filter(Boolean)
     .join("\n\n");
 
-  const response = await getClient().messages.create({
-    model: AI_REPORT_MODEL,
-    max_tokens: AI_REPORT_MAX_TOKENS,
-    system: buildSystemPrompt(reportType),
-    messages: [{ role: "user", content: [{ type: "text", text: userText }] }],
-  });
-
-  const raw = response.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join(" ")
-    .trim();
-
+  // Call + parse, retrying ONCE on parse failure only. API errors (network,
+  // 429s, auth) propagate immediately — they are not retried here. A retry
+  // consumes a second API call but NOT a second usage slot; the reservation
+  // is per-request, made by the caller before this function runs.
   let parsed: any;
-  try {
-    parsed = JSON.parse(stripFences(raw));
-    if (typeof parsed?.coverDescription !== "string" || !Array.isArray(parsed?.sections)) {
-      throw new Error("missing coverDescription or sections");
-    }
-  } catch (err) {
+  for (let attempt = 0; ; attempt++) {
+    const response = await getClient().messages.create({
+      model: AI_REPORT_MODEL,
+      max_tokens: AI_REPORT_MAX_TOKENS,
+      system: buildSystemPrompt(reportType),
+      messages: [
+        { role: "user", content: [{ type: "text", text: userText }] },
+        // Assistant prefill: the model can only CONTINUE a JSON object.
+        { role: "assistant", content: [{ type: "text", text: "{" }] },
+      ],
+    });
+
+    // The response omits the prefilled opening brace — prepend it (on the
+    // first attempt AND the retry) before parsing.
+    const raw = "{" + response.content
+      .filter((b): b is Anthropic.TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join(" ")
+      .trim();
+
     try {
-      Sentry.captureException(err, {
-        tags: { source: "ai_reports" },
-        extra: { reportId, projectId, stopReason: response.stop_reason, rawPreview: raw.slice(0, 500) },
-      });
-    } catch {
-      // Sentry must never mask the primary failure.
+      parsed = JSON.parse(stripFences(raw));
+      if (typeof parsed?.coverDescription !== "string" || !Array.isArray(parsed?.sections)) {
+        throw new Error("missing coverDescription or sections");
+      }
+      break; // parsed OK
+    } catch (err) {
+      if (attempt === 0) {
+        console.warn(
+          `[ai-reports] parse failure, retrying once (reportId=${reportId}, projectId=${projectId}):`,
+          (err as Error)?.message,
+        );
+        continue; // one identical retry
+      }
+      try {
+        Sentry.captureException(err, {
+          tags: { source: "ai_reports" },
+          extra: { reportId, projectId, stopReason: response.stop_reason, rawPreview: raw.slice(0, 500) },
+        });
+      } catch {
+        // Sentry must never mask the primary failure.
+      }
+      throw new Error("AI returned an unreadable response — nothing was changed. Please try again.");
     }
-    throw new Error("AI returned an unreadable response — nothing was changed. Please try again.");
   }
 
   // Validate + normalize. Drop hallucinated mediaIds; dedupe repeats; append
