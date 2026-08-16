@@ -2,6 +2,10 @@ import { Image, Page, Text, View } from "@react-pdf/renderer";
 import { styles } from "./styles";
 import type { CoverPageData } from "../types";
 
+// Left-aligned letterhead cover: logo top-left, company name/address beneath,
+// thin accent rule, large left-aligned title, full-width cover photo,
+// meta block pinned bottom-left. Every coverConfig toggle behaves as before;
+// with everything off, the page is just the title (plus description).
 export function CoverPage({ data, images }: { data: CoverPageData; images: Map<string, Buffer> }) {
   const logoBuf = data.companyLogoKey ? images.get(data.companyLogoKey) : undefined;
   const coverBuf = data.coverPhotoKey ? images.get(data.coverPhotoKey) : undefined;
@@ -22,7 +26,7 @@ export function CoverPage({ data, images }: { data: CoverPageData; images: Map<s
       {showName && <Text style={styles.companyName}>{data.companyDisplayName}</Text>}
       {showAddress && <Text style={styles.companyAddress}>{data.companyAddress}</Text>}
 
-      {hasHeaderBlock && <View style={{ height: 24 }} />}
+      {hasHeaderBlock && <View style={styles.coverRule} />}
 
       <Text style={styles.coverTitle}>{data.title || "Untitled Report"}</Text>
       {data.description ? <Text style={styles.coverDescription}>{data.description}</Text> : null}

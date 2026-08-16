@@ -25,7 +25,9 @@ export function BodyPage({
       <Header title={reportTitle} dateText={dateText} />
       {chunk.isFirstOfSection ? (
         <>
-          <Text style={styles.sectionHeader}>{chunk.sectionTitle}</Text>
+          <View style={styles.sectionHeaderBlock}>
+            <Text style={styles.sectionHeader}>{chunk.sectionTitle}</Text>
+          </View>
           {chunk.sectionSummary ? (
             <Text style={styles.sectionSummary}>{chunk.sectionSummary}</Text>
           ) : null}

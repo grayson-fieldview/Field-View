@@ -2,6 +2,21 @@ import { StyleSheet } from "@react-pdf/renderer";
 
 export const PAGE_MARGIN = 54;
 
+// Accent used ONLY for the cover rule, section-heading rule, and footer rule.
+// TODO: plug in a per-account brand color here once one exists on the
+// accounts table (accounts has companyLogoUrl/LegalName/Address but no color;
+// showcase_settings.brandColor is a different, showcase-only feature).
+// Never Field View orange — this document represents the contractor.
+export const ACCENT = "#1a1a1a";
+
+const INK = "#1E1E1E";
+const BODY = "#3F3F3F";
+const MUTED = "#737373";
+const RULE = "#E5E5E5";
+
+// Typography scale:
+//   Report title 32 bold / Section heading 18 bold / Photo caption 10 semibold
+//   Body 9 regular (lineHeight 1.4) / Meta 8 muted
 export const styles = StyleSheet.create({
   page: {
     paddingTop: PAGE_MARGIN,
@@ -9,61 +24,66 @@ export const styles = StyleSheet.create({
     paddingLeft: PAGE_MARGIN,
     paddingRight: PAGE_MARGIN,
     fontFamily: "Helvetica",
-    fontSize: 10,
-    color: "#1E1E1E",
+    fontSize: 9,
+    color: INK,
   },
+
+  // ---- Cover page (left-aligned letterhead layout) ----
   coverPage: {
     paddingTop: PAGE_MARGIN,
     paddingBottom: PAGE_MARGIN,
     paddingLeft: PAGE_MARGIN,
     paddingRight: PAGE_MARGIN,
     fontFamily: "Helvetica",
-    color: "#1E1E1E",
-    alignItems: "center",
+    color: INK,
   },
-  letterheadLogo: { width: 72, height: 72, marginBottom: 12, objectFit: "contain" },
+  letterheadLogo: { width: 56, height: 56, marginBottom: 10, objectFit: "contain", alignSelf: "flex-start" },
   companyName: {
-    fontSize: 14,
+    fontSize: 11,
     fontFamily: "Helvetica-Bold",
-    color: "#1E1E1E",
-    textAlign: "center",
-    marginBottom: 4,
+    color: INK,
+    marginBottom: 2,
   },
-  companyAddress: { fontSize: 10, color: "#525252", textAlign: "center" },
+  companyAddress: { fontSize: 8, color: MUTED, lineHeight: 1.4 },
+  coverRule: {
+    borderBottomWidth: 1.5,
+    borderBottomColor: ACCENT,
+    marginTop: 20,
+  },
   coverTitle: {
-    fontSize: 28,
+    fontSize: 32,
     fontFamily: "Helvetica-Bold",
-    color: "#1E1E1E",
-    textAlign: "center",
-    marginBottom: 12,
+    color: INK,
+    marginTop: 48,
+    marginBottom: 10,
   },
   coverDescription: {
-    fontSize: 12,
-    color: "#3F3F3F",
-    lineHeight: 1.5,
+    fontSize: 9,
+    color: BODY,
+    lineHeight: 1.4,
     marginBottom: 24,
-    textAlign: "center",
-    maxWidth: "85%",
   },
   coverPhotoBox: {
     width: "100%",
     height: 252,
-    marginBottom: 24,
+    marginTop: 8,
   },
-  coverPhoto: { width: "100%", height: "100%", objectFit: "contain" },
-  coverMeta: { marginTop: 16, alignItems: "center" },
-  coverMetaLine: { fontSize: 10, color: "#525252", marginBottom: 4, textAlign: "center" },
+  coverPhoto: { width: "100%", height: "100%", objectFit: "cover" },
+  coverMeta: { marginTop: "auto", paddingTop: 16 },
+  coverMetaLine: { fontSize: 8, color: MUTED, marginBottom: 3 },
+
+  // ---- Body page header / footer ----
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingBottom: 8,
+    paddingBottom: 6,
     borderBottomWidth: 1,
-    borderBottomColor: "#E5E5E5",
+    borderBottomColor: RULE,
     marginBottom: 16,
   },
-  headerTitle: { fontSize: 11, fontFamily: "Helvetica-Bold", color: "#1E1E1E" },
-  headerDate: { fontSize: 10, color: "#525252" },
+  headerTitle: { fontSize: 8, fontFamily: "Helvetica-Bold", color: MUTED },
+  headerDate: { fontSize: 8, color: MUTED },
   footer: {
     position: "absolute",
     bottom: 18,
@@ -72,18 +92,31 @@ export const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    borderTopWidth: 1,
+    borderTopColor: ACCENT,
+    paddingTop: 6,
   },
-  footerText: { fontSize: 9, color: "#525252", flex: 1 },
-  footerCenter: { fontSize: 9, color: "#525252", flex: 1, textAlign: "center" },
+  footerText: { fontSize: 8, color: MUTED, flex: 1 },
+  footerCenter: { fontSize: 8, color: MUTED, flex: 1, textAlign: "center" },
   footerRight: { flex: 1, alignItems: "flex-end" },
-  footerLogo: { height: 24, width: 24, objectFit: "contain" },
-  sectionHeader: {
-    fontSize: 16,
-    fontFamily: "Helvetica-Bold",
-    color: "#1E1E1E",
-    marginBottom: 6,
+  footerLogo: { height: 14, width: 14, objectFit: "contain" },
+
+  // ---- Sections ----
+  sectionHeaderBlock: {
+    borderBottomWidth: 1.5,
+    borderBottomColor: ACCENT,
+    paddingBottom: 4,
+    marginBottom: 8,
   },
-  sectionSummary: { fontSize: 11, color: "#3F3F3F", lineHeight: 1.5, marginBottom: 14 },
+  sectionHeader: {
+    fontSize: 18,
+    fontFamily: "Helvetica-Bold",
+    color: INK,
+  },
+  sectionSummary: { fontSize: 9, color: BODY, lineHeight: 1.4, marginBottom: 14 },
+
+  // ---- Photo grid: fixed image height + cover so caption blocks in a row
+  // share a baseline; descriptions clamp (maxLines) so rows stay aligned ----
   grid: { flexDirection: "row", flexWrap: "wrap" },
   cell: {
     width: "48%",
@@ -95,12 +128,13 @@ export const styles = StyleSheet.create({
     height: 168,
     marginBottom: 6,
   },
-  cellPhoto: { width: "100%", height: "100%", objectFit: "contain" },
+  cellPhoto: { width: "100%", height: "100%", objectFit: "cover" },
   cellPhotoMissing: {
     width: "100%",
     height: "100%",
     backgroundColor: "#F0EDEA",
   },
-  cellCaption: { fontSize: 11, fontFamily: "Helvetica-Bold", color: "#1E1E1E", marginBottom: 2 },
-  cellDescription: { fontSize: 9, color: "#525252", lineHeight: 1.4 },
+  cellCaption: { fontSize: 10, fontFamily: "Helvetica-Bold", color: INK, marginBottom: 2 },
+  cellDescription: { fontSize: 9, color: BODY, lineHeight: 1.4 },
+  cellTimestamp: { fontSize: 8, color: MUTED, marginTop: 2 },
 });
