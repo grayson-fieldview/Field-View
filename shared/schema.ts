@@ -13,7 +13,7 @@ export const taskPriorityEnum = pgEnum("task_priority", ["low", "medium", "high"
 export const checklistStatusEnum = pgEnum("checklist_status", ["not_started", "in_progress", "completed"]);
 // Stage 1 ships yes_no/rating/text. multiple_choice is Stage 2 (ALTER TYPE ADD VALUE).
 export const checklistFieldTypeEnum = pgEnum("checklist_field_type", ["yes_no", "rating", "text", "multiple_choice"]);
-export const reportStatusEnum = pgEnum("report_status", ["draft", "submitted", "approved"]);
+export const reportStatusEnum = pgEnum("report_status", ["draft", "submitted", "approved", "generating", "failed"]);
 export const calendarProviderEnum = pgEnum("calendar_provider", ["google", "outlook", "apple", "ical"]);
 export const eventRepeatEnum = pgEnum("event_repeat", ["none", "daily", "weekly", "monthly", "yearly"]);
 export const eventSyncStatusEnum = pgEnum("event_sync_status", ["pending", "synced", "failed", "disabled"]);
