@@ -24,6 +24,14 @@ import { z } from "zod";
 import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, deleteFromS3, getObjectStream, getS3Url, inlineContentDisposition } from "./s3";
 import { queueThumbnailGeneration } from "./lib/thumbnails";
 import { queueCaptionGeneration } from "./lib/aiCaptions";
+import {
+  generateReportContent,
+  tryReserveReportGeneration,
+  releaseReportGeneration,
+  AI_REPORT_MONTHLY_LIMIT,
+  REPORT_TYPES,
+  type ReportType,
+} from "./lib/aiReports";
 import archiver from "archiver";
 import { sendInvitationEmail, sendAccountDeletionEmail } from "./services/email";
 import { sendGhlEvent, syncUsageToGhl } from "./lib/ghl";
@@ -2573,6 +2581,99 @@ export async function registerRoutes(
       res.json({ message: "Deleted" });
     } catch (error) {
       res.status(500).json({ message: "Failed to delete photo" });
+    }
+  });
+
+  // AI report generation — text-only Sonnet call over photo aiCaptions.
+  // Runs synchronously in the request path (well inside the 60s maxDuration).
+  // REPLACES all existing sections; does NOT generate a PDF.
+  const generateReportBodySchema = z.object({
+    mediaIds: z.array(z.number().int().positive()).min(1).max(50),
+    note: z.string().max(5000).optional(),
+    reportType: z.enum(REPORT_TYPES as [ReportType, ...ReportType[]]),
+  });
+
+  app.post("/api/reports/:id/generate", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid id" });
+      const access = await verifyReportFullAccess(req, id);
+      if (!access.ok || access.projectId === undefined) return res.status(403).json({ message: "Access denied" });
+      const parsed = generateReportBodySchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+
+      // 1. Usage gate — atomic reservation (conditional upsert increment).
+      // Concurrent requests can never push the month past the limit; on any
+      // failure below the slot is released so failed attempts aren't charged.
+      const admitted = await tryReserveReportGeneration(req.user.accountId);
+      if (!admitted) {
+        return res.status(429).json({
+          message: `Monthly AI report limit reached (${AI_REPORT_MONTHLY_LIMIT} generations). The limit resets at the start of next month.`,
+        });
+      }
+
+      try {
+        // 2. Generate content (throws on model/parse failure — nothing written).
+        let content;
+        try {
+          content = await generateReportContent({
+            reportId: id,
+            projectId: access.projectId,
+            mediaIds: parsed.data.mediaIds,
+            note: parsed.data.note,
+            reportType: parsed.data.reportType,
+          });
+        } catch (err: any) {
+          if (err?.statusCode === 400) {
+            await releaseReportGeneration(req.user.accountId);
+            return res.status(400).json({ message: err.message });
+          }
+          throw err;
+        }
+
+        // 3. Replace sections + cover description in one transaction.
+        await db.transaction(async (tx) => {
+          // Cascade removes report_section_photos.
+          await tx.delete(reportSections).where(eq(reportSections.reportId, id));
+          for (let i = 0; i < content.sections.length; i++) {
+            const s = content.sections[i];
+            const created = await storage.createReportSection(
+              { reportId: id, title: s.title, summary: s.summary, sortOrder: i },
+              tx,
+            );
+            if (s.photos.length > 0) {
+              await tx.insert(reportSectionPhotos).values(
+                s.photos.map((p, j) => ({
+                  sectionId: created.id,
+                  mediaId: p.mediaId,
+                  caption: p.caption,
+                  description: p.description,
+                  sortOrder: j,
+                })),
+              );
+            }
+          }
+          await tx
+            .update(reports)
+            .set({ description: content.coverDescription, updatedAt: new Date() })
+            .where(eq(reports.id, id));
+        });
+      } catch (err) {
+        // Model error or write failure — release the reserved slot.
+        await releaseReportGeneration(req.user.accountId);
+        throw err;
+      }
+
+      // 5. Return the regenerated report tree.
+      const tree = await storage.getReportTree(id);
+      res.json(tree);
+    } catch (error) {
+      console.error("[reports/generate] error:", error);
+      res.status(500).json({
+        message: error instanceof Error && error.message.startsWith("AI returned")
+          ? error.message
+          : "Failed to generate report content",
+      });
     }
   });
 

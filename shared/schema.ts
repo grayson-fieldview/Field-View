@@ -1079,6 +1079,23 @@ export const appInstallPromptEvents = pgTable("app_install_prompt_events", {
   index("app_install_prompt_events_account_created_idx").on(table.accountId, table.createdAt),
 ]);
 
+// AI usage metering — one row per (account, feature, month). Incremented via
+// INSERT ... ON CONFLICT DO UPDATE after each successful AI generation.
+export const aiUsage = pgTable("ai_usage", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  accountId: varchar("account_id").references(() => accounts.id, { onDelete: "cascade" }).notNull(),
+  feature: text("feature").notNull(), // 'report_generation'
+  periodMonth: text("period_month").notNull(), // 'YYYY-MM'
+  count: integer("count").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("ai_usage_account_feature_period_uniq").on(table.accountId, table.feature, table.periodMonth),
+  index("ai_usage_account_id_idx").on(table.accountId),
+]);
+
+export type AiUsage = typeof aiUsage.$inferSelect;
+
 export const showcaseViews = pgTable("showcase_views", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   accountId: varchar("account_id").references(() => accounts.id).notNull(),
