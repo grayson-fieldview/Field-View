@@ -2625,7 +2625,9 @@ export async function registerRoutes(
     title: z.string().trim().min(1).max(200).optional(),
     description: z.string().max(2000).nullable().optional(),
     coverConfig: z.record(z.any()).optional(),
-    status: z.enum(["draft", "submitted", "approved", "generating", "failed"]).optional(),
+    // 'generating' and 'failed' are deliberately NOT client-settable — those
+    // transitions are server-owned (walkthrough stub lifecycle).
+    status: z.enum(["draft", "submitted", "approved"]).optional(),
   });
 
   app.patch("/api/reports/:id", requireWriteAccess, async (req: any, res) => {
