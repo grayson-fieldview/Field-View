@@ -59,6 +59,17 @@ export async function getPresignedPutUrl(
   return { key, uploadUrl, publicUrl: getS3Url(key) };
 }
 
+/**
+ * Real presigned S3 GET (direct to the bucket, signature in the query) —
+ * unlike getPresignedUrl above, which returns a plain CloudFront URL. Used
+ * where a third party (e.g. Deepgram) must fetch a short-lived, non-public
+ * object such as transcription audio.
+ */
+export async function getPresignedGetUrl(key: string, expiresIn: number = 300): Promise<string> {
+  const command = new GetObjectCommand({ Bucket: BUCKET, Key: key });
+  return getSignedUrl(s3Client, command, { expiresIn });
+}
+
 export function isS3Url(url: string): boolean {
   if (!url) return false;
   if (url.includes(CLOUDFRONT_DOMAIN)) return true;

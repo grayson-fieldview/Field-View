@@ -21,10 +21,10 @@ import { db } from "./db";
 import { eq, sql, and, or, inArray, count, isNull, desc } from "drizzle-orm";
 import { sanitizeUserForViewer, sanitizeTimeEntryForViewer, isManagerRole } from "./lib/userVisibility";
 import { z } from "zod";
-import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, deleteFromS3, getObjectStream, getS3Url, inlineContentDisposition } from "./s3";
+import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, getPresignedGetUrl, deleteFromS3, getObjectStream, getS3Url, inlineContentDisposition } from "./s3";
 import { queueThumbnailGeneration } from "./lib/thumbnails";
 import { queueCaptionGeneration } from "./lib/aiCaptions";
-import { transcribeAudio } from "./lib/transcription";
+import { transcribeAudioFromUrl } from "./lib/transcription";
 import { translateText } from "./lib/translation";
 import { generateChecklistContent } from "./lib/aiChecklists";
 import {
@@ -462,6 +462,24 @@ function isAllowedDocumentUpload(originalName: string, mimeType: string): boolea
   return allowedMimes.includes(mimeType.toLowerCase());
 }
 
+// Voice-note audio allowlist (folder === "audio"). Same ext-AND-mime pattern
+// as ALLOWED_DOCUMENT_TYPES. MediaRecorder mime types may carry a codecs
+// suffix (audio/webm;codecs=opus) — strip it before the exact match.
+const ALLOWED_AUDIO_UPLOAD_TYPES: Record<string, string[]> = {
+  webm: ["audio/webm"],
+  mp4: ["audio/mp4"],
+  m4a: ["audio/mp4"],
+  ogg: ["audio/ogg"],
+};
+function isAllowedAudioUpload(originalName: string, mimeType: string): boolean {
+  const ext = originalName.split(".").pop()?.toLowerCase();
+  if (!ext || ext === originalName.toLowerCase()) return false; // no extension
+  const allowedMimes = ALLOWED_AUDIO_UPLOAD_TYPES[ext];
+  if (!allowedMimes) return false;
+  const baseType = mimeType.split(";")[0].trim().toLowerCase();
+  return allowedMimes.includes(baseType);
+}
+
 const APP_PROMPT_SURFACES = ["modal", "banner"];
 const APP_PROMPT_ACTIONS = ["shown", "clicked_ios", "clicked_android", "dismissed"];
 
@@ -665,6 +683,26 @@ export async function registerRoutes(
           if (!f?.originalName || !f?.mimeType) {
             throw new Error("Each file must include originalName and mimeType");
           }
+          // Voice-note audio (folder "audio") — uploaded to S3 so bytes never
+          // pass through Vercel (4.5MB serverless body cap). Strict exact-mime
+          // allowlist (the ALLOWED_DOCUMENT_TYPES ext-AND-mime pattern, NOT
+          // isAllowedUpload's extension-OR-mime hole). No size cap on purpose:
+          // walkthrough recordings run to 15 minutes and Vercel no longer sits
+          // in the path. Objects are deleted after transcription.
+          if (f.folder === "audio") {
+            if (!isAllowedAudioUpload(f.originalName, f.mimeType)) {
+              throw new Error(`Audio type not allowed: ${f.originalName}`);
+            }
+            if (typeof f.fileSize !== "number" || !Number.isFinite(f.fileSize) || f.fileSize <= 0) {
+              throw new Error(`File size must be a positive number: ${f.originalName}`);
+            }
+            const contentDisposition = inlineContentDisposition(f.originalName);
+            const signedAudio = await getPresignedPutUrl(f.originalName, f.mimeType, "audio", f.fileSize, contentDisposition);
+            // Deliberately NO publicUrl: audio is transient and must never
+            // be handed out as a CloudFront URL. The client only needs the
+            // key (for /api/transcribe) and the PUT URL.
+            return { key: signedAudio.key, uploadUrl: signedAudio.uploadUrl, contentDisposition };
+          }
           // Documents (folder "files") validate against their own, stricter
           // allowlist; the photo/video path below is untouched.
           if (f.folder === "files") {
@@ -703,41 +741,45 @@ export async function registerRoutes(
     }
   });
 
-  // Voice-note transcription. Audio is NOT stored: raw body in, Deepgram,
-  // transcript out, bytes discarded. Route-local raw parser — the global
-  // express.json() default (100kb) stays untouched and would reject audio.
-  // Strict exact-mime allowlist (the ALLOWED_DOCUMENT_TYPES pattern, not
-  // isAllowedUpload's extension-OR-mime hole).
-  const ALLOWED_AUDIO_TYPES = ["audio/webm", "audio/mp4", "audio/ogg"];
-  const MAX_AUDIO_SIZE = 10 * 1024 * 1024; // 10 MB — well above 5 min of Opus/AAC voice
-  app.post(
-    "/api/transcribe",
-    express.raw({ type: ALLOWED_AUDIO_TYPES, limit: "10mb" }),
-    requireWriteAccess,
-    async (req: any, res) => {
-      try {
-        // Content-Type may carry a codecs suffix (audio/webm;codecs=opus);
-        // validate the base type against the exact allowlist.
-        const baseType = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
-        if (!ALLOWED_AUDIO_TYPES.includes(baseType)) {
-          return res.status(400).json({ message: "Unsupported audio type. Use audio/webm, audio/mp4, or audio/ogg." });
+  // Voice-note transcription. Audio is NOT retained: the client uploads to
+  // S3 via the presign endpoint (folder "audio"), sends us the key, we hand
+  // Deepgram a short-lived presigned GET URL, and delete the object after —
+  // success OR failure. Bytes never pass through this function (Vercel caps
+  // serverless request bodies at 4.5MB, which capped recordings at ~4 min).
+  // Normal express.json path — no route-local raw parser.
+  const transcribeBodySchema = z.object({ key: z.string().min(1).max(512) });
+  app.post("/api/transcribe", requireWriteAccess, async (req: any, res) => {
+    const parsed = transcribeBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: "Provide the S3 'key' returned by the presign endpoint" });
+    }
+    const key = parsed.data.key;
+    // Only our audio prefix, no traversal. startsWith("audio/") also rules
+    // out a leading slash.
+    if (!key.startsWith("audio/") || key.includes("..") || key.includes("\\")) {
+      return res.status(400).json({ message: "Invalid audio key" });
+    }
+    try {
+      const url = await getPresignedGetUrl(key, 300); // 5 min is plenty
+      const transcript = await transcribeAudioFromUrl(url);
+      res.json({ transcript });
+    } catch (error: any) {
+      console.error("Transcription error:", error?.message || error);
+      res.status(503).json({ message: "Transcription failed. Please try again or type your note." });
+    } finally {
+      // Fire-and-forget cleanup on every path — a failed delete must never
+      // fail (or delay) the transcription response, but orphaned audio must
+      // be visible in Sentry rather than silent.
+      deleteFromS3(key).catch((err) => {
+        console.warn("[transcribe] audio delete failed:", (err as Error)?.message);
+        try {
+          Sentry.captureException(err, { tags: { source: "transcription" }, extra: { key } });
+        } catch {
+          // never rethrow from cleanup
         }
-        // If the parser didn't match (wrong type) req.body is {}; if it did,
-        // it's a Buffer. Reject empty or oversized bodies.
-        if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
-          return res.status(400).json({ message: "Empty audio body" });
-        }
-        if (req.body.length > MAX_AUDIO_SIZE) {
-          return res.status(400).json({ message: "Audio too large (max 10 MB)" });
-        }
-        const transcript = await transcribeAudio(req.body, baseType);
-        res.json({ transcript });
-      } catch (error: any) {
-        console.error("Transcription error:", error?.message || error);
-        res.status(503).json({ message: "Transcription failed. Please try again or type your note." });
-      }
-    },
-  );
+      });
+    }
+  });
 
   // On-demand comment translation. Auto-target (English → Spanish, other →
   // English), nothing persisted — the client caches per-entry in state.

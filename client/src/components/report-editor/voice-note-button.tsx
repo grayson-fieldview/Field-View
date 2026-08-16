@@ -2,9 +2,11 @@
  * Voice note recorder for the AI generate dialog — the app's first use of
  * getUserMedia/MediaRecorder.
  *
- * Records up to 5:00, POSTs the blob to /api/transcribe, hands the
- * transcript to the parent. Renders nothing when recording is unsupported;
- * the textarea alone still works.
+ * Records up to 5:00, uploads the blob straight to S3 (presigned PUT —
+ * audio must not pass through Vercel's 4.5MB serverless body cap), then
+ * POSTs the S3 key to /api/transcribe and hands the transcript to the
+ * parent. Renders nothing when recording is unsupported; the textarea
+ * alone still works.
  *
  * MediaStream tracks are stopped on EVERY exit path (stop, cap, error,
  * permission failure, unmount, forced stop via stopSignal) — a leaked track
@@ -206,13 +208,44 @@ export function VoiceNoteButton({
   async function transcribe(blob: Blob, mimeType: string, gen: number) {
     setState("transcribing");
     try {
+      // 1. Presign: server returns { key, uploadUrl, contentDisposition }.
+      const ext = mimeType === "audio/mp4" ? "m4a" : mimeType === "audio/ogg" ? "ogg" : "webm";
+      const signRes = await fetch("/api/uploads/sign", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          files: [{ originalName: `voice-note.${ext}`, mimeType, fileSize: blob.size, folder: "audio" }],
+        }),
+      });
+      if (gen !== genRef.current) return; // dialog closed/reset — drop result
+      if (!signRes.ok) {
+        const body = await signRes.json().catch(() => ({}));
+        throw new Error(body.message || "Transcription failed. Please try again or type your note.");
+      }
+      const [signed] = await signRes.json();
+
+      // 2. PUT straight to S3. The contentDisposition value is baked into
+      // the signature — send it verbatim or S3 rejects the upload.
+      const putHeaders: Record<string, string> = { "Content-Type": mimeType };
+      if (signed.contentDisposition) putHeaders["Content-Disposition"] = signed.contentDisposition;
+      const putRes = await fetch(signed.uploadUrl, { method: "PUT", headers: putHeaders, body: blob });
+      if (!putRes.ok) {
+        throw new Error("Transcription failed. Please try again or type your note.");
+      }
+
+      // 3. Transcribe from the key (server deletes the object after —
+      // success or failure). NOTE: no staleness check between PUT and this
+      // call. Once the object exists in S3, /api/transcribe is also its
+      // cleanup trigger, so it must fire even if the dialog was closed;
+      // staleness only decides whether the RESULT is applied below.
       const res = await fetch("/api/transcribe", {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": mimeType },
-        body: blob,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: signed.key }),
       });
-      if (gen !== genRef.current) return; // dialog closed/reset — drop result
+      if (gen !== genRef.current) return;
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.message || "Transcription failed. Please try again or type your note.");
