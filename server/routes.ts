@@ -2625,7 +2625,7 @@ export async function registerRoutes(
     title: z.string().trim().min(1).max(200).optional(),
     description: z.string().max(2000).nullable().optional(),
     coverConfig: z.record(z.any()).optional(),
-    status: z.enum(["draft", "submitted", "approved"]).optional(),
+    status: z.enum(["draft", "submitted", "approved", "generating", "failed"]).optional(),
   });
 
   app.patch("/api/reports/:id", requireWriteAccess, async (req: any, res) => {
@@ -2663,6 +2663,13 @@ export async function registerRoutes(
     try {
       const reportId = parseInt(req.params.id as string);
       if (!(await verifyReportFullAccess(req, reportId)).ok) return res.status(403).json({ message: "Access denied" });
+      // A generating stub's content is owned by the pending walkthrough job —
+      // manual sections would be mixed into (or clobbered by) its write.
+      const parentReport = await storage.getReport(reportId);
+      if (!parentReport) return res.status(404).json({ message: "Report not found" });
+      if (parentReport.status === "generating") {
+        return res.status(409).json({ message: "Report is still generating" });
+      }
       const parsed = createSectionBodySchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
       const section = await storage.createReportSection({
@@ -2786,6 +2793,14 @@ export async function registerRoutes(
       if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid id" });
       const access = await verifyReportFullAccess(req, id);
       if (!access.ok || access.projectId === undefined) return res.status(403).json({ message: "Access denied" });
+      // A generating stub is owned by the pending walkthrough job — a
+      // concurrent regenerate would race its transactional write (duplicate
+      // or clobbered sections) and charge a second generation.
+      const targetReport = await storage.getReport(id);
+      if (!targetReport) return res.status(404).json({ message: "Report not found" });
+      if (targetReport.status === "generating") {
+        return res.status(409).json({ message: "Report is still generating" });
+      }
       const parsed = generateReportBodySchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
 
@@ -2888,15 +2903,23 @@ export async function registerRoutes(
     periodMonth: string;
     /** Must match the feature the slot was reserved under. */
     feature?: string;
+    /**
+     * Walkthrough path: a stub report row (status 'generating') already
+     * exists — fill it in and flip it to 'draft' instead of inserting a new
+     * row. On failure the slot is released and the error rethrown as usual;
+     * marking the stub 'failed' is the CALLER's job (it owns the row).
+     */
+    existingReportId?: number;
   }): Promise<{ report: { id: number; title: string }; content: Awaited<ReturnType<typeof generateReportContent>> }> {
-    const { projectId, accountId, userId, mediaIds, note, reportType, photoOffsets, transcriptIsNarration, periodMonth, feature } = opts;
+    const { projectId, accountId, userId, mediaIds, note, reportType, photoOffsets, transcriptIsNarration, periodMonth, feature, existingReportId } = opts;
 
-    // 1. Generate BEFORE creating anything. Any failure releases the
-    // slot and rethrows — no report row exists yet.
+    // 1. Generate BEFORE writing content. Any failure releases the
+    // slot and rethrows — sync path: no report row exists yet;
+    // walkthrough path: the caller marks its stub 'failed'.
     let content: Awaited<ReturnType<typeof generateReportContent>>;
     try {
       content = await generateReportContent({
-        reportId: 0, // no report row yet — Sentry context only
+        reportId: existingReportId ?? 0, // sync path: no row yet — Sentry context only
         projectId,
         mediaIds,
         note,
@@ -2909,26 +2932,47 @@ export async function registerRoutes(
       throw err;
     }
 
-    // 2. Create report + sections + photos in ONE transaction.
+    // 2. Create-or-fill report + sections + photos in ONE transaction —
+    // a partial write rolls back entirely (walkthrough stub stays a clean
+    // 'generating' row for the caller's failure handler).
     try {
       const report = await db.transaction(async (tx) => {
-        const created = await storage.createReport({
-          projectId,
-          accountId,
-          title: content.title,
-          description: content.coverDescription,
-          coverConfig: {
-            showCoverPhoto: true,
-            showCompanyLogo: true,
-            showCompanyName: true,
-            showCreatorName: true,
-            showPhotoCount: true,
-            showDateCreated: true,
-            coverPhotoMediaId: null as number | null,
-          },
-          status: "draft",
-          createdById: userId,
-        }, tx);
+        const coverConfig = {
+          showCoverPhoto: true,
+          showCompanyLogo: true,
+          showCompanyName: true,
+          showCreatorName: true,
+          showPhotoCount: true,
+          showDateCreated: true,
+          coverPhotoMediaId: null as number | null,
+        };
+        let created: { id: number; title: string };
+        if (existingReportId != null) {
+          // Walkthrough: fill the pre-created stub and flip it to 'draft'.
+          const [updatedRow] = await tx
+            .update(reports)
+            .set({
+              title: content.title,
+              description: content.coverDescription,
+              coverConfig,
+              status: "draft",
+              updatedAt: new Date(),
+            })
+            .where(eq(reports.id, existingReportId))
+            .returning({ id: reports.id, title: reports.title });
+          if (!updatedRow) throw new Error(`Walkthrough stub report ${existingReportId} disappeared before content write`);
+          created = updatedRow;
+        } else {
+          created = await storage.createReport({
+            projectId,
+            accountId,
+            title: content.title,
+            description: content.coverDescription,
+            coverConfig,
+            status: "draft",
+            createdById: userId,
+          }, tx);
+        }
         for (let i = 0; i < content.sections.length; i++) {
           const s = content.sections[i];
           const section = await storage.createReportSection(
@@ -3049,8 +3093,28 @@ export async function registerRoutes(
       const userId: string = req.user.id;
       const { transcript, mediaIds, photoOffsets } = parsed.data;
 
+      // Stub row up-front so clients can render a truthful in-progress
+      // entry. If this insert fails we have consumed nothing user-visible:
+      // release the slot and 500 (still before any response).
+      let stubReportId: number;
+      try {
+        const stub = await storage.createReport({
+          projectId,
+          accountId,
+          title: "Walkthrough report (generating…)",
+          description: null,
+          coverConfig: {},
+          status: "generating",
+          createdById: userId,
+        } as any);
+        stubReportId = stub.id;
+      } catch (stubErr) {
+        await releaseReportGeneration(accountId, periodMonth, "walkthrough_generation");
+        throw stubErr;
+      }
+
       // 202 BEFORE generation starts — the client does not wait.
-      res.status(202).json({ status: "generating" });
+      res.status(202).json({ status: "generating", reportId: stubReportId });
 
       const work = (async () => {
         let report: { id: number; title: string };
@@ -3068,12 +3132,23 @@ export async function registerRoutes(
             transcriptIsNarration: true,
             periodMonth,
             feature: "walkthrough_generation",
+            existingReportId: stubReportId,
           }));
         } catch (err) {
           // Slot already released by generateAndPersistReport on every
           // failure path. A silent failure is the worst outcome — the user
           // is waiting on a push either way.
           console.error("[walkthrough] generation failed:", err);
+          // Mark the stub 'failed' FIRST, in its own try/catch — a DB
+          // failure here must neither mask the original error (already
+          // captured below) nor crash the deferred work. No sweeper exists
+          // yet; if this update fails, the row stays 'generating' (a future
+          // staleness sweeper would live here / in a cron).
+          try {
+            await db.update(reports).set({ status: "failed", updatedAt: new Date() }).where(eq(reports.id, stubReportId));
+          } catch (markErr) {
+            console.error("[walkthrough] failed to mark stub report as failed:", markErr);
+          }
           try {
             Sentry.captureException(err, {
               tags: { source: "walkthrough" },
@@ -3135,6 +3210,12 @@ export async function registerRoutes(
     try {
       const id = parseInt(req.params.id as string);
       if (!(await verifyReportFullAccess(req, id)).ok) return res.status(403).json({ message: "Access denied" });
+      // A generating stub has no content — it must not be exportable.
+      const reportRow = await storage.getReport(id);
+      if (!reportRow) return res.status(404).json({ message: "Report not found" });
+      if (reportRow.status === "generating") {
+        return res.status(409).json({ message: "Report is still generating" });
+      }
       // Export tracking — AUTHENTICATED route only (the public share route is
       // the client downloading, not the contractor exporting). 'finish' fires
       // only when the response was fully flushed — a stream error destroys the
@@ -3164,6 +3245,12 @@ export async function registerRoutes(
       const id = parseInt(req.params.id as string);
       if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid id" });
       if (!(await verifyReportFullAccess(req, id)).ok) return res.status(403).json({ message: "Access denied" });
+      // A generating stub has no content — it must not be shareable.
+      const reportRow = await storage.getReport(id);
+      if (!reportRow) return res.status(404).json({ message: "Report not found" });
+      if (reportRow.status === "generating") {
+        return res.status(409).json({ message: "Report is still generating" });
+      }
       const token = crypto.randomBytes(16).toString("base64url");
       const updated = await storage.setReportShareToken(id, token);
       if (!updated) return res.status(404).json({ message: "Report not found" });
@@ -3499,6 +3586,10 @@ export async function registerRoutes(
       if (!token) return res.status(404).json({ message: "Report not found" });
       const row = await storage.getReportByShareToken(token);
       if (!row) return res.status(404).json({ message: "Report not found" });
+      // Defense in depth: a generating stub can't normally hold a share
+      // token (share minting 409s on it), but never serve one publicly.
+      // 404, not 409 — public routes don't reveal report state.
+      if (row.status === "generating") return res.status(404).json({ message: "Report not found" });
       await streamReportPdfById(row.id, res);
     } catch (error) {
       console.error("[public-reports] pdf error:", error);
