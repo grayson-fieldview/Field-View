@@ -138,6 +138,7 @@ apiV1Router.get("/photos", async (req, res) => {
         latitude: media.latitude,
         longitude: media.longitude,
         createdAt: media.createdAt,
+        takenAt: media.takenAt,
         uploaderId: users.id,
         uploaderFirstName: users.firstName,
         uploaderLastName: users.lastName,
@@ -168,6 +169,13 @@ apiV1Router.get("/photos", async (req, res) => {
         latitude: r.latitude,
         longitude: r.longitude,
         created_at: iso(r.createdAt),
+        // Capture time (client-reported); null for pre-takenAt rows —
+        // consumers should prefer taken_at ?? created_at for display. The
+        // `since` cursor and sort stay on created_at ON PURPOSE: an
+        // incremental sync keyed on capture time would permanently miss
+        // offline photos registered after the cursor passed their capture
+        // date.
+        taken_at: r.takenAt ? iso(r.takenAt) : null,
         uploaded_by: r.uploaderId
           ? {
               id: r.uploaderId,

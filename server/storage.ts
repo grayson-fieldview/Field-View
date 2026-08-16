@@ -368,7 +368,7 @@ export class DatabaseStorage implements IStorage {
         })
         .from(media)
         .where(eq(media.projectId, project.id))
-        .orderBy(desc(media.createdAt));
+        .orderBy(sql`COALESCE(${media.takenAt}, ${media.createdAt}) DESC`);
 
       const photoCount = projectMedia.length;
       const recentPhotos = projectMedia.slice(0, 4).map(m => ({ id: m.id, url: m.url }));
@@ -440,7 +440,9 @@ export class DatabaseStorage implements IStorage {
       .from(media)
       .leftJoin(users, eq(media.uploadedById, users.id))
       .where(eq(media.projectId, projectId))
-      .orderBy(desc(media.createdAt));
+      // Capture time preferred; createdAt (registration time) is the
+      // fallback for pre-takenAt rows and clients that don't send it.
+      .orderBy(sql`COALESCE(${media.takenAt}, ${media.createdAt}) DESC`);
 
     return rows.map((r) => ({
       ...r.media,
@@ -468,7 +470,7 @@ export class DatabaseStorage implements IStorage {
       .innerJoin(projects, eq(media.projectId, projects.id))
       .leftJoin(users, eq(media.uploadedById, users.id))
       .where(eq(projects.accountId, accountId))
-      .orderBy(desc(media.createdAt));
+      .orderBy(sql`COALESCE(${media.takenAt}, ${media.createdAt}) DESC`);
 
     return rows.map((r) => ({
       ...r.media,
@@ -1688,10 +1690,17 @@ export class DatabaseStorage implements IStorage {
     // bounded; revisit with pagination if any project hits the cap.
     // TODO: paginate if soft cap is regularly reached.
     const photos = await db
-      .select({ id: media.id, url: media.url, thumbUrl: media.thumbUrl, takenAt: media.createdAt })
+      .select({
+        id: media.id,
+        url: media.url,
+        thumbUrl: media.thumbUrl,
+        // Capture time preferred — the field was already NAMED takenAt in
+        // this payload but carried registration time; now it means it.
+        takenAt: sql<Date>`COALESCE(${media.takenAt}, ${media.createdAt})`,
+      })
       .from(media)
       .where(and(eq(media.projectId, project.id), like(media.mimeType, "image/%")))
-      .orderBy(desc(media.createdAt))
+      .orderBy(sql`COALESCE(${media.takenAt}, ${media.createdAt}) DESC`)
       .limit(200);
 
     return {

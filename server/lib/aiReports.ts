@@ -181,10 +181,10 @@ export async function generateReportContent(input: {
 
   // Pull the photos; verify ALL belong to the report's project.
   const rows = await db
-    .select({ id: media.id, projectId: media.projectId, aiCaption: media.aiCaption, createdAt: media.createdAt })
+    .select({ id: media.id, projectId: media.projectId, aiCaption: media.aiCaption, createdAt: media.createdAt, takenAt: media.takenAt })
     .from(media)
     .where(inArray(media.id, mediaIds))
-    .orderBy(asc(media.createdAt), asc(media.id));
+    .orderBy(sql`COALESCE(${media.takenAt}, ${media.createdAt}) ASC`, asc(media.id));
   if (rows.length !== mediaIds.length || rows.some((r) => r.projectId !== projectId)) {
     throw Object.assign(new Error("One or more photos do not belong to this report's project"), { statusCode: 400 });
   }
@@ -206,7 +206,8 @@ export async function generateReportContent(input: {
   // description" — the sentinel must never leak into the prompt.
   const photoLines = rows.map((r) => {
     const parts: string[] = [`mediaId ${r.id}`];
-    if (r.createdAt) parts.push(`taken ${r.createdAt.toISOString().slice(0, 10)}`);
+    const taken = r.takenAt ?? r.createdAt;
+    if (taken) parts.push(`taken ${taken.toISOString().slice(0, 10)}`);
     const cap = r.aiCaption && r.aiCaption !== "UNCLEAR" ? r.aiCaption : null;
     if (cap) parts.push(`description: ${cap}`);
     const humanComments = commentsByMedia.get(r.id) ?? [];

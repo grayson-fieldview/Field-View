@@ -95,7 +95,8 @@ async function streamReportPdfById(id: number, res: any): Promise<void> {
         s3Key: extractS3KeyFromUrl(p.media.url),
         caption: p.caption,
         description: p.description,
-        createdAt: p.media.createdAt,
+        // Capture time preferred; createdAt is server registration time.
+        createdAt: p.media.takenAt ?? p.media.createdAt,
         latitude: p.media.latitude,
         longitude: p.media.longitude,
       })),
@@ -786,6 +787,32 @@ export async function registerRoutes(
             ? req.body.tags.split(",").map((t: string) => t.trim()).filter(Boolean)
             : []);
 
+      // Optional per-file capture time. NEVER 400s the batch: anything
+      // unparseable or outside sanity bounds (>24h in the future — device
+      // clock skew is real — or before 2020-01-01) is stored as null. A
+      // photo with no capture time is far better than a failed upload.
+      const ISO_8601_RE =
+        /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:?\d{2})?$/;
+      const parseTakenAt = (raw: unknown): Date | null => {
+        if (typeof raw !== "string") return null;
+        // Strict ISO 8601 datetime only — no bare dates, no locale formats.
+        const match = ISO_8601_RE.exec(raw.trim());
+        if (!match) return null;
+        const d = new Date(raw.trim());
+        if (Number.isNaN(d.getTime())) return null;
+        // Reject calendar dates Date() silently normalizes (e.g. Feb 30).
+        const [, y, mo, day] = match;
+        const probe = new Date(Date.UTC(Number(y), Number(mo) - 1, Number(day)));
+        if (
+          probe.getUTCFullYear() !== Number(y) ||
+          probe.getUTCMonth() !== Number(mo) - 1 ||
+          probe.getUTCDate() !== Number(day)
+        ) return null;
+        if (d.getTime() > Date.now() + 24 * 60 * 60 * 1000) return null;
+        if (d.getTime() < Date.UTC(2020, 0, 1)) return null;
+        return d;
+      };
+
       const mediaRows = items.map((it: any) => {
         if (!it?.key || !it?.publicUrl || !it?.originalName || !it?.mimeType) {
           throw new Error("Each file must include key, publicUrl, originalName, and mimeType");
@@ -801,6 +828,7 @@ export async function registerRoutes(
           tags,
           latitude: it.latitude ?? (req.body.latitude ? parseFloat(req.body.latitude) : null),
           longitude: it.longitude ?? (req.body.longitude ? parseFloat(req.body.longitude) : null),
+          takenAt: parseTakenAt(it.takenAt),
         };
       });
 
@@ -2979,7 +3007,7 @@ export async function registerRoutes(
               description: p.description,
               sortOrder: p.sortOrder,
               displayTimestamp: formatPhotoTimestamp(
-                p.media.createdAt,
+                p.media.takenAt ?? p.media.createdAt,
                 resolvePhotoTimeZone(
                   p.media.latitude,
                   p.media.longitude,
@@ -3815,6 +3843,7 @@ export async function registerRoutes(
           originalName: media.originalName,
           mimeType: media.mimeType,
           createdAt: media.createdAt,
+          takenAt: media.takenAt,
         })
         .from(media)
         .innerJoin(projects, eq(media.projectId, projects.id))
@@ -3848,7 +3877,8 @@ export async function registerRoutes(
           url: toPermanentUrl(m.url),
           originalName: m.originalName,
           mimeType: m.mimeType,
-          createdAt: m.createdAt,
+          // Capture time preferred (field name kept for consumer compat).
+          createdAt: m.takenAt ?? m.createdAt,
         });
       }
 
@@ -5966,7 +5996,8 @@ export async function registerRoutes(
           url: m.url,
           thumbUrl: m.thumbUrl ?? null,
           caption: gallery.includeDescriptions ? m.caption : null,
-          createdAt: gallery.includeMetadata ? m.createdAt : null,
+          // Capture time preferred (field name kept for client compat).
+          createdAt: gallery.includeMetadata ? (m.takenAt ?? m.createdAt) : null,
           uploadedBy: gallery.includeMetadata && m.uploadedBy ? {
             firstName: m.uploadedBy.firstName,
             lastName: m.uploadedBy.lastName,
@@ -5994,6 +6025,7 @@ export async function registerRoutes(
           originalName: media.originalName,
           projectId: media.projectId,
           createdAt: media.createdAt,
+          takenAt: media.takenAt,
           uploaderFirst: users.firstName,
           uploaderLast: users.lastName,
           uploaderImage: users.profileImageUrl,
@@ -6003,7 +6035,7 @@ export async function registerRoutes(
         .innerJoin(projects, eq(media.projectId, projects.id))
         .leftJoin(users, eq(media.uploadedById, users.id))
         .where(eq(projects.accountId, accountId))
-        .orderBy(sql`${media.createdAt} DESC`)
+        .orderBy(sql`COALESCE(${media.takenAt}, ${media.createdAt}) DESC`)
         .limit(limit);
 
       const recentTasks = await db
@@ -6163,13 +6195,17 @@ export async function registerRoutes(
           caption: media.caption,
           originalName: media.originalName,
           createdAt: media.createdAt,
+          takenAt: media.takenAt,
           uploaderFirst: users.firstName,
           uploaderLast: users.lastName,
         })
         .from(media)
         .leftJoin(users, eq(media.uploadedById, users.id))
-        .where(sql`${media.projectId} = ${projectId} AND ${media.createdAt} >= ${dayStart} AND ${media.createdAt} <= ${dayEnd}`)
-        .orderBy(sql`${media.createdAt} ASC`);
+        // Group photos into the day they were CAPTURED (takenAt), falling
+        // back to registration time — grouping by upload time is exactly
+        // the offline-sync bug this column fixes.
+        .where(sql`${media.projectId} = ${projectId} AND COALESCE(${media.takenAt}, ${media.createdAt}) >= ${dayStart} AND COALESCE(${media.takenAt}, ${media.createdAt}) <= ${dayEnd}`)
+        .orderBy(sql`COALESCE(${media.takenAt}, ${media.createdAt}) ASC`);
 
       const dayTasks = await db
         .select({
@@ -6267,6 +6303,7 @@ export async function registerRoutes(
         .select({
           id: media.id,
           createdAt: media.createdAt,
+          takenAt: media.takenAt,
           uploadedById: media.uploadedById,
           projectId: media.projectId,
           latitude: media.latitude,
@@ -6280,7 +6317,7 @@ export async function registerRoutes(
         .where(eq(projects.accountId, accountId));
 
       const filteredMedia = allMedia.filter((m) => {
-        const d = new Date(m.createdAt);
+        const d = new Date(m.takenAt ?? m.createdAt);
         return d >= fromDate && d <= toDate;
       });
 
@@ -6300,7 +6337,7 @@ export async function registerRoutes(
 
       const photosByDay: Record<string, number> = {};
       for (const m of filteredMedia) {
-        const day = new Date(m.createdAt).toISOString().split("T")[0];
+        const day = new Date(m.takenAt ?? m.createdAt).toISOString().split("T")[0];
         photosByDay[day] = (photosByDay[day] || 0) + 1;
       }
       const sortedDays = Object.keys(photosByDay).sort();

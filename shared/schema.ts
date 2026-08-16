@@ -64,6 +64,11 @@ export const media = pgTable("media", {
   // shortly after registration by deferred generation, or by the backfill.
   // Clients render thumbUrl ?? url.
   thumbUrl: text("thumb_url"),
+  // Capture time as reported by the client; null for photos uploaded before
+  // this existed and for any client that doesn't send it. Readers should
+  // prefer takenAt ?? createdAt (createdAt is server registration time —
+  // offline-synced photos can register hours after capture).
+  takenAt: timestamp("taken_at"),
   // AI-generated caption (Claude vision). Nullable: filled shortly after
   // registration by deferred generation, or by the backfill. Distinct from
   // `caption` (user-authored, batch-shared) — never write one to the other.
@@ -77,6 +82,8 @@ export const media = pgTable("media", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
   index("media_project_id_idx").on(table.projectId),
+  // Daily Log / date-range photo queries filter by project + capture time.
+  index("media_project_taken_at_idx").on(table.projectId, table.takenAt),
 ]);
 
 // Project documents (work orders, change orders, permits) — uploaded by
