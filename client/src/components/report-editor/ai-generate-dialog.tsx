@@ -21,6 +21,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Loader2, Sparkles } from "lucide-react";
+import { VoiceNoteButton } from "./voice-note-button";
 import type { Media } from "@shared/schema";
 
 export type AiReportType = "client_update" | "daily_log" | "progress_recap";
@@ -59,6 +60,9 @@ export function AiGenerateDialog({
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [note, setNote] = useState("");
   const [reportType, setReportType] = useState<AiReportType>("client_update");
+  const [voiceBusy, setVoiceBusy] = useState(false);
+  // Incremented on close so an active recording is force-stopped (discarded).
+  const [voiceStopSignal, setVoiceStopSignal] = useState(0);
 
   // Reset inputs whenever the dialog closes (cancel or success).
   useEffect(() => {
@@ -66,6 +70,8 @@ export function AiGenerateDialog({
       setSelectedIds(new Set());
       setNote("");
       setReportType("client_update");
+      setVoiceBusy(false);
+      setVoiceStopSignal((n) => n + 1);
     }
   }, [open]);
 
@@ -125,7 +131,17 @@ export function AiGenerateDialog({
 
           {/* Note */}
           <div>
-            <p className="text-sm font-medium mb-2">Note (optional)</p>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-medium">Note (optional)</p>
+              <VoiceNoteButton
+                stopSignal={voiceStopSignal}
+                onBusyChange={setVoiceBusy}
+                onTranscript={(text) =>
+                  // APPEND, never replace — someone may type, record, type more.
+                  setNote((prev) => (prev.trim() ? `${prev.trimEnd()} ${text}` : text))
+                }
+              />
+            </div>
             <Textarea
               value={note}
               onChange={(e) => setNote(e.target.value)}
@@ -200,7 +216,7 @@ export function AiGenerateDialog({
                 reportType,
               })
             }
-            disabled={selectedIds.size === 0 || selectedIds.size > MAX_PHOTOS || isPending}
+            disabled={selectedIds.size === 0 || selectedIds.size > MAX_PHOTOS || isPending || voiceBusy}
             data-testid="button-confirm-ai"
           >
             {isPending ? (

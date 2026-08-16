@@ -24,6 +24,7 @@ import { z } from "zod";
 import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, deleteFromS3, getObjectStream, getS3Url, inlineContentDisposition } from "./s3";
 import { queueThumbnailGeneration } from "./lib/thumbnails";
 import { queueCaptionGeneration } from "./lib/aiCaptions";
+import { transcribeAudio } from "./lib/transcription";
 import {
   generateReportContent,
   classifyAnthropicApiError,
@@ -697,6 +698,42 @@ export async function registerRoutes(
       res.status(400).json({ message: error?.message || "Failed to sign upload" });
     }
   });
+
+  // Voice-note transcription. Audio is NOT stored: raw body in, Deepgram,
+  // transcript out, bytes discarded. Route-local raw parser — the global
+  // express.json() default (100kb) stays untouched and would reject audio.
+  // Strict exact-mime allowlist (the ALLOWED_DOCUMENT_TYPES pattern, not
+  // isAllowedUpload's extension-OR-mime hole).
+  const ALLOWED_AUDIO_TYPES = ["audio/webm", "audio/mp4", "audio/ogg"];
+  const MAX_AUDIO_SIZE = 10 * 1024 * 1024; // 10 MB — well above 5 min of Opus/AAC voice
+  app.post(
+    "/api/transcribe",
+    express.raw({ type: ALLOWED_AUDIO_TYPES, limit: "10mb" }),
+    requireWriteAccess,
+    async (req: any, res) => {
+      try {
+        // Content-Type may carry a codecs suffix (audio/webm;codecs=opus);
+        // validate the base type against the exact allowlist.
+        const baseType = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+        if (!ALLOWED_AUDIO_TYPES.includes(baseType)) {
+          return res.status(400).json({ message: "Unsupported audio type. Use audio/webm, audio/mp4, or audio/ogg." });
+        }
+        // If the parser didn't match (wrong type) req.body is {}; if it did,
+        // it's a Buffer. Reject empty or oversized bodies.
+        if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+          return res.status(400).json({ message: "Empty audio body" });
+        }
+        if (req.body.length > MAX_AUDIO_SIZE) {
+          return res.status(400).json({ message: "Audio too large (max 10 MB)" });
+        }
+        const transcript = await transcribeAudio(req.body, baseType);
+        res.json({ transcript });
+      } catch (error: any) {
+        console.error("Transcription error:", error?.message || error);
+        res.status(503).json({ message: "Transcription failed. Please try again or type your note." });
+      }
+    },
+  );
 
   app.post("/api/projects/:id/media", requireWriteAccess, async (req: any, res) => {
     try {
