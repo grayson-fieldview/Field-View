@@ -25,15 +25,17 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   FileBarChart,
+  FileDown,
   FileText,
-  Send,
-  CheckCircle2,
+  Link2,
+  ListFilter,
   LayoutTemplate,
   Plus,
   MoreHorizontal,
   Pencil,
   Trash2,
 } from "lucide-react";
+import { getReportBadge } from "@/lib/report-status";
 import { Link } from "wouter";
 import type { Report, ReportTemplate, TemplateConfig } from "@shared/schema";
 import { useAuth } from "@/hooks/use-auth";
@@ -48,10 +50,12 @@ type ReportListItem = Report & {
 
 type ReportTemplateWithCount = ReportTemplate & { sectionCount: number };
 
-const statusConfig: Record<string, { label: string; icon: typeof FileText; badgeClass: string }> = {
-  draft: { label: "Draft", icon: FileText, badgeClass: "bg-muted text-muted-foreground" },
-  submitted: { label: "Submitted", icon: Send, badgeClass: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" },
-  approved: { label: "Approved", icon: CheckCircle2, badgeClass: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" },
+// Badge is derived from real state (shareToken / lastPdfAt) — see
+// getReportBadge. Icons keyed by derived label.
+const badgeIcon: Record<string, typeof FileText> = {
+  Shared: Link2,
+  Exported: FileDown,
+  Draft: FileText,
 };
 
 type TabKey = "reports" | "templates";
@@ -93,6 +97,9 @@ export default function ReportsPage() {
   const { toast } = useToast();
   const canCreate = !!user && user.role !== "restricted";
   const canManageTemplates = !!user && (user.role === "admin" || user.role === "manager");
+
+  // Project filter — client-side; only projects that actually have reports.
+  const [filterProjectId, setFilterProjectId] = useState<number | null>(null);
 
   const [renameTarget, setRenameTarget] = useState<ReportTemplate | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -226,6 +233,48 @@ export default function ReportsPage() {
 
       {activeTab === "reports" && (
         <>
+          {allReports && allReports.length > 0 && (() => {
+            const projectOptions = Array.from(
+              allReports
+                .reduce((map, r) => {
+                  if (r.project?.name && !map.has(r.projectId)) map.set(r.projectId, r.project.name);
+                  return map;
+                }, new Map<number, string>())
+                .entries(),
+            ).sort((a, b) => a[1].localeCompare(b[1]));
+            const activeName = filterProjectId !== null
+              ? projectOptions.find(([pid]) => pid === filterProjectId)?.[1]
+              : null;
+            return (
+              <div className="flex items-center gap-2">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" data-testid="button-filter-project">
+                      <ListFilter className="h-3.5 w-3.5 mr-2" />
+                      {activeName ?? "All projects"}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    <DropdownMenuItem
+                      onClick={() => setFilterProjectId(null)}
+                      data-testid="menuitem-filter-all-projects"
+                    >
+                      All projects
+                    </DropdownMenuItem>
+                    {projectOptions.map(([pid, name]) => (
+                      <DropdownMenuItem
+                        key={pid}
+                        onClick={() => setFilterProjectId(pid)}
+                        data-testid={`menuitem-filter-project-${pid}`}
+                      >
+                        {name}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            );
+          })()}
           {(!allReports || allReports.length === 0) ? (
             <Card className="p-12">
               <div className="text-center space-y-3">
@@ -240,22 +289,25 @@ export default function ReportsPage() {
             </Card>
           ) : (
             <div className="space-y-3">
-              {allReports.map((report) => {
-                const config = statusConfig[report.status] ?? statusConfig.draft;
+              {allReports
+                .filter((r) => filterProjectId === null || r.projectId === filterProjectId)
+                .map((report) => {
+                const badge = getReportBadge(report);
+                const Icon = badgeIcon[badge.label] ?? FileText;
                 return (
                   <Link key={report.id} href={`/reports/${report.id}/edit`}>
                     <Card className="p-4 cursor-pointer hover-elevate" data-testid={`card-report-${report.id}`}>
                       <div className="flex items-start gap-3">
                         <div className="flex h-9 w-9 items-center justify-center rounded-md bg-muted shrink-0">
-                          <config.icon className="h-4 w-4 text-muted-foreground" />
+                          <Icon className="h-4 w-4 text-muted-foreground" />
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between gap-2">
                             <span className="text-sm font-semibold truncate" data-testid={`text-report-title-${report.id}`}>
                               {report.title}
                             </span>
-                            <Badge variant="secondary" className={`text-xs shrink-0 no-default-hover-elevate no-default-active-elevate ${config.badgeClass}`}>
-                              {config.label}
+                            <Badge variant="secondary" className={`text-xs shrink-0 no-default-hover-elevate no-default-active-elevate ${badge.badgeClass}`}>
+                              {badge.label}
                             </Badge>
                           </div>
                           <div className="flex flex-wrap items-center gap-2 mt-1">

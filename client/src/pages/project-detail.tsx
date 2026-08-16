@@ -102,6 +102,7 @@ import {
 import { useLocation, Link } from "wouter";
 import { LayoutTemplate, Sparkles } from "lucide-react";
 import { AiGenerateDialog, type AiGenerateParams } from "@/components/report-editor/ai-generate-dialog";
+import { getReportBadge } from "@/lib/report-status";
 import ReportFormDialog from "@/components/report-form-dialog";
 import { AddressAutocomplete } from "@/components/address-autocomplete";
 import type { Project, Media, Comment, Task, Checklist, ChecklistItem, Report, ChecklistTemplate, ChecklistTemplateItem, MediaAnnotation, AnnotationStroke, ProjectFile } from "@shared/schema";
@@ -181,12 +182,6 @@ const checklistStatusConfig: Record<string, { label: string; icon: typeof CheckC
   not_started: { label: "Not Started", icon: Circle, className: "text-muted-foreground" },
   in_progress: { label: "In Progress", icon: Clock, className: "text-amber-500" },
   completed: { label: "Completed", icon: CheckCircle2, className: "text-green-500" },
-};
-
-const reportStatusConfig: Record<string, { label: string; badgeClass: string }> = {
-  draft: { label: "Draft", badgeClass: "bg-muted text-muted-foreground" },
-  submitted: { label: "Submitted", badgeClass: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" },
-  approved: { label: "Approved", badgeClass: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" },
 };
 
 const reportTypeLabels: Record<string, string> = {
@@ -2181,7 +2176,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
               ) : (
                 <div className="space-y-2">
                   {projectReports.map((report) => {
-                    const config = reportStatusConfig[report.status] || reportStatusConfig.draft;
+                    const badge = getReportBadge(report);
                     return (
                       <Link key={report.id} href={`/reports/${report.id}/edit`}>
                         <Card className="p-4 hover-elevate cursor-pointer" data-testid={`card-report-${report.id}`}>
@@ -2194,8 +2189,8 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                                 <span className="text-sm font-semibold truncate" data-testid={`text-report-title-${report.id}`}>
                                   {report.title}
                                 </span>
-                                <Badge variant="secondary" className={`text-xs shrink-0 no-default-hover-elevate no-default-active-elevate ${config.badgeClass}`}>
-                                  {config.label}
+                                <Badge variant="secondary" className={`text-xs shrink-0 no-default-hover-elevate no-default-active-elevate ${badge.badgeClass}`}>
+                                  {badge.label}
                                 </Badge>
                               </div>
                               <div className="flex flex-wrap items-center gap-2 mt-1">

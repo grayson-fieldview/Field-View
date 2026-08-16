@@ -37,7 +37,9 @@ const REPORT_TYPE_OPTIONS = [
   { value: "progress_recap", label: "Progress Recap" },
 ] as const;
 
-const MAX_PHOTOS = 50;
+// 75 = measured-safe ceiling (60s maxDuration) — lockstep with
+// generateReportBodySchema and the PDF cap in server/routes.ts.
+const MAX_PHOTOS = 75;
 
 export function AiGenerateDialog({
   open,

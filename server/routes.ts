@@ -57,9 +57,11 @@ async function streamReportPdfById(id: number, res: any): Promise<void> {
     if (!res.headersSent) res.status(404).json({ message: "Report not found" });
     return;
   }
-  if (data.totalPhotos > 50) {
+  // 75 is the measured-safe ceiling against the 60s maxDuration — keep in
+  // lockstep with generateReportBodySchema and MAX_PHOTOS in ai-generate-dialog.
+  if (data.totalPhotos > 75) {
     if (!res.headersSent) res.status(400).json({
-      message: `Report has ${data.totalPhotos} photos; PDF generation is capped at 50. Remove some photos and try again.`,
+      message: `Report has ${data.totalPhotos} photos; PDF generation is capped at 75. Remove some photos and try again.`,
     });
     return;
   }
@@ -2588,7 +2590,9 @@ export async function registerRoutes(
   // Runs synchronously in the request path (well inside the 60s maxDuration).
   // REPLACES all existing sections; does NOT generate a PDF.
   const generateReportBodySchema = z.object({
-    mediaIds: z.array(z.number().int().positive()).min(1).max(50),
+    // 75 = measured-safe ceiling (60s maxDuration) — lockstep with the PDF
+    // cap in streamReportPdfById and MAX_PHOTOS in ai-generate-dialog.tsx.
+    mediaIds: z.array(z.number().int().positive()).min(1).max(75),
     note: z.string().max(5000).optional(),
     reportType: z.enum(REPORT_TYPES as [ReportType, ...ReportType[]]),
   });
@@ -2777,6 +2781,21 @@ export async function registerRoutes(
     try {
       const id = parseInt(req.params.id as string);
       if (!(await verifyReportFullAccess(req, id)).ok) return res.status(403).json({ message: "Access denied" });
+      // Export tracking — AUTHENTICATED route only (the public share route is
+      // the client downloading, not the contractor exporting). 'finish' fires
+      // only when the response was fully flushed — a stream error destroys the
+      // response ('close' without 'finish'), so it can't record a failed
+      // export; statusCode 200 excludes the 404/400 JSON early-outs. Fire-and-
+      // forget: a failed timestamp write must never break the PDF response.
+      res.once("finish", () => {
+        if (res.statusCode !== 200) return;
+        db.update(reports)
+          .set({ lastPdfAt: new Date() })
+          .where(eq(reports.id, id))
+          .catch((err: unknown) =>
+            console.warn("[reports/pdf] failed to record lastPdfAt:", (err as Error)?.message),
+          );
+      });
       await streamReportPdfById(id, res);
     } catch (error) {
       console.error("[reports/pdf] error:", error);

@@ -289,6 +289,7 @@ export const reports = pgTable("reports", {
   coverConfig: jsonb("cover_config").notNull().default(sql`'{}'::jsonb`),
   status: reportStatusEnum("status").default("draft").notNull(),
   shareToken: varchar("share_token", { length: 32 }),
+  lastPdfAt: timestamp("last_pdf_at"), // set by the authenticated PDF export route only
   createdById: varchar("created_by_id").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),

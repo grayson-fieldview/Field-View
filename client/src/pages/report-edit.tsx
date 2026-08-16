@@ -33,16 +33,11 @@ import { SectionEditor } from "@/components/report-editor/section-editor";
 import { DEFAULT_COVER, type CoverConfig, type Section } from "@/components/report-editor/types";
 import ReportShareDialog from "@/components/report-share-dialog";
 import { AiGenerateDialog, type AiGenerateParams } from "@/components/report-editor/ai-generate-dialog";
+import { getReportBadge } from "@/lib/report-status";
 
 type Pane = { kind: "cover" } | { kind: "section"; id: number };
 
 type ReportTree = Report & { sections: Section[] };
-
-const STATUS_LABEL: Record<string, string> = {
-  draft: "Draft",
-  submitted: "Submitted",
-  approved: "Approved",
-};
 
 export default function ReportEditPage({ id }: { id: string }) {
   const reportId = parseInt(id);
@@ -310,8 +305,8 @@ export default function ReportEditPage({ id }: { id: string }) {
             <p className="text-xs text-muted-foreground truncate">Report editor</p>
             <p className="text-sm font-semibold truncate" data-testid="text-report-header-title">{draftTitle || "Untitled Report"}</p>
           </div>
-          <Badge variant="secondary" className="text-xs no-default-hover-elevate no-default-active-elevate" data-testid="badge-report-status">
-            {STATUS_LABEL[report.status] ?? report.status}
+          <Badge variant="secondary" className={`text-xs no-default-hover-elevate no-default-active-elevate ${getReportBadge(report).badgeClass}`} data-testid="badge-report-status">
+            {getReportBadge(report).label}
           </Badge>
           {isDirty && (
             <Badge variant="outline" className="text-xs no-default-hover-elevate no-default-active-elevate" data-testid="badge-unsaved">
@@ -382,6 +377,17 @@ export default function ReportEditPage({ id }: { id: string }) {
                 a.click();
                 a.remove();
                 URL.revokeObjectURL(url);
+                // The server just recorded lastPdfAt — refresh every surface
+                // showing the derived status badge (staleTime: Infinity means
+                // stale caches never refetch on their own).
+                queryClient.invalidateQueries({ queryKey: ["/api/reports", reportId] });
+                queryClient.invalidateQueries({ queryKey: ["/api/reports"] });
+                if (report?.projectId) {
+                  // project-detail keys on the string route param; this page's
+                  // own bundle query keys on the number — invalidate both.
+                  queryClient.invalidateQueries({ queryKey: ["/api/projects", String(report.projectId)] });
+                  queryClient.invalidateQueries({ queryKey: ["/api/projects", report.projectId] });
+                }
               } catch (e) {
                 toast({
                   title: "Couldn't generate PDF",
