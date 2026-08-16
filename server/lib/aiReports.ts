@@ -26,9 +26,48 @@ import { sql, and, eq } from "drizzle-orm";
 import { Sentry } from "./sentry";
 
 export const AI_REPORT_MODEL = "claude-sonnet-4-6";
-export const AI_REPORT_MAX_TOKENS = 8000;
+// At the 75-photo cap, realistic output is ~2,500 tokens (title + cover +
+// sections + per-photo caption/description), so 4000 is comfortable headroom.
+// The NON-STREAMING Messages API rejects requests whose max_tokens implies a
+// generation long enough to risk a network timeout (live 400s at 8000 with
+// 44+ photos). Do NOT raise this without switching to streaming.
+export const AI_REPORT_MAX_TOKENS = 4000;
 export const AI_REPORT_MONTHLY_LIMIT = 1000;
 export const AI_REPORT_FEATURE = "report_generation";
+
+/**
+ * Classify an Anthropic APIError for the generate routes' catch-alls.
+ * Returns the HTTP status + user-facing message to respond with, or null
+ * when the error is not an Anthropic API error the routes should special-
+ * case (fall through to the existing generic handling). Slot release is
+ * the caller's job and happens BEFORE this — reservation logic unchanged.
+ */
+export function classifyAnthropicApiError(
+  err: unknown,
+): { status: number; message: string } | null {
+  if (!(err instanceof Anthropic.APIError)) return null;
+  if (err.status === 400) {
+    // Log the FULL error body — a 400 here is a bug in how we build the
+    // request (e.g. max_tokens over the non-streaming limit), never user error.
+    try {
+      Sentry.captureException(err, {
+        tags: { source: "ai_reports" },
+        extra: { errorBody: (err as any).error },
+      });
+    } catch {
+      // Sentry must never mask the primary failure.
+    }
+    return {
+      status: 500,
+      message:
+        "The AI service rejected the request. This is a bug on our end — please try again or contact support.",
+    };
+  }
+  if (err.status === 429 || err.status === 529) {
+    return { status: 503, message: "The AI service is busy. Please try again in a moment." };
+  }
+  return null;
+}
 
 export type ReportType = "client_update" | "daily_log" | "progress_recap";
 export const REPORT_TYPES: ReportType[] = ["client_update", "daily_log", "progress_recap"];
@@ -182,6 +221,14 @@ export async function generateReportContent(input: {
         { role: "assistant", content: [{ type: "text", text: "{" }] },
       ],
     });
+
+    // Truncated output cannot be valid JSON — name the stop_reason so the
+    // ensuing parse failure is diagnosable. Retry/error handling unchanged.
+    if (response.stop_reason === "max_tokens") {
+      console.warn(
+        `[ai-reports] response truncated at max_tokens (stop_reason=max_tokens, reportId=${reportId}, projectId=${projectId}, attempt=${attempt}) — JSON parse will likely fail`,
+      );
+    }
 
     // The response omits the prefilled opening brace — prepend it (on the
     // first attempt AND the retry) before parsing.

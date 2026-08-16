@@ -26,6 +26,7 @@ import { queueThumbnailGeneration } from "./lib/thumbnails";
 import { queueCaptionGeneration } from "./lib/aiCaptions";
 import {
   generateReportContent,
+  classifyAnthropicApiError,
   tryReserveReportGeneration,
   releaseReportGeneration,
   AI_REPORT_MONTHLY_LIMIT,
@@ -2674,6 +2675,10 @@ export async function registerRoutes(
       res.json({ ...tree, excludedCount: content.excludedMediaIds.length });
     } catch (error) {
       console.error("[reports/generate] error:", error);
+      // Anthropic API errors (slot already released by the inner catch):
+      // 400 → our bug, Sentry'd with full body; 429/529 → 503 busy.
+      const apiErr = classifyAnthropicApiError(error);
+      if (apiErr) return res.status(apiErr.status).json({ message: apiErr.message });
       res.status(500).json({
         message: error instanceof Error && error.message.startsWith("AI returned")
           ? error.message
@@ -2769,6 +2774,10 @@ export async function registerRoutes(
       res.status(201).json({ reportId: report.id, excludedCount: content.excludedMediaIds.length });
     } catch (error) {
       console.error("[projects/reports/generate] error:", error);
+      // Anthropic API errors (slot already released by the inner catch):
+      // 400 → our bug, Sentry'd with full body; 429/529 → 503 busy.
+      const apiErr = classifyAnthropicApiError(error);
+      if (apiErr) return res.status(apiErr.status).json({ message: apiErr.message });
       res.status(500).json({
         message: error instanceof Error && error.message.startsWith("AI returned")
           ? error.message
