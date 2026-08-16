@@ -116,6 +116,8 @@ const TONE_BY_TYPE: Record<ReportType, string> = {
 function buildSystemPrompt(reportType: ReportType): string {
   return `You write construction/trade job reports from photo descriptions. ${TONE_BY_TYPE[reportType]}
 
+The contractor's note is the primary source. It tells you what was done, what matters, and what happens next. The photo descriptions are a fallback that only tells you what is visible in an image. When the note says something about a photo, lead with that. Use a photo description only to add detail the note did not cover, or for photos the note does not mention at all.
+
 Rules:
 - Never mention missing, absent, unclear, or undescribed source material. Never write phrases like "several images lack descriptions" or "no additional details were provided". Describe only what is present. This is a document the contractor sends to their customer.
 - Never describe or attempt to identify people by name or appearance.
@@ -124,6 +126,8 @@ Rules:
 - Group photos by work type or area, not strictly by timestamp.
 - Never create a section whose purpose is to explain that photos are irrelevant, unrelated, unidentified, or not part of the project.
 - Never write a photo caption like "Unidentified photo" or "Unknown image". If you cannot tell what a photo shows, exclude it.
+- For a photo the note speaks to, the caption and description should reflect what the contractor said about it, not a visual inventory. If the note says countertops went in yesterday and shiplap goes in tomorrow, write that — do not write "white countertop in kitchen". Keep visual detail only where it adds something the note left out.
+- Section summaries must describe the work and its status, not the act of documentation. Never write that photos were "documented", "captured", or "shown". Say what was done or what is planned.
 
 Content guidance: title is a short report title, 3-6 words, naming the work and site. coverDescription is one paragraph, 2-4 sentences. Section titles are short headings in trade language; summaries are 1-2 sentences or null. Photo captions are short titles, 3-8 words; photo descriptions are one sentence or null.
 Every photo must either appear exactly once in a section OR be listed in excludedMediaIds. Exclude a photo when it does not show work, materials, conditions, or the site for this job — for example screenshots, app or software interfaces, email or document captures, marketing images, or photos whose subject cannot be determined. Excluding is the correct choice for those; do not include them.
@@ -181,7 +185,9 @@ function formatOffsetMs(offsetMs: number): string {
 // Appended to the system prompt ONLY for walkthrough narration transcripts.
 const NARRATION_ADDENDUM = `
 
-The contractor's note is a transcript of them narrating while walking the site and taking these photos. Each photo shows roughly when it was taken relative to the recording. Use that timing as a HINT for which part of the narration describes which photo, but do not trust it blindly — people often describe a photo several seconds after taking it, or describe what they are about to shoot. When the narration content clearly matches a different photo than the timing suggests, follow the content.`;
+The contractor's note is a transcript of them narrating while walking the site and taking these photos. Each photo shows roughly when it was taken relative to the recording. Use that timing as a HINT for which part of the narration describes which photo, but do not trust it blindly — people often describe a photo several seconds after taking it, or describe what they are about to shoot. When the narration content clearly matches a different photo than the timing suggests, follow the content.
+
+The contractor was talking while walking the site, so the narration IS the report. Photo descriptions exist only to fill gaps. Where narration and description both apply to a photo, the narration leads and the description supports.`;
 
 export async function generateReportContent(input: {
   reportId: number;
