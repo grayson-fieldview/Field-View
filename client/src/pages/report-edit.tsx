@@ -25,7 +25,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { ArrowLeft, FileText, FileDown, Link2, Loader2, Plus, Save, Sparkles, Trash2 } from "lucide-react";
+import { ArrowLeft, FileText, FileDown, Link2, Loader2, MoreHorizontal, Plus, Save, Sparkles, Trash2 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Textarea } from "@/components/ui/textarea";
 import type { Media, Report, ReportSection } from "@shared/schema";
 import { CoverEditor } from "@/components/report-editor/cover-editor";
@@ -315,26 +322,9 @@ export default function ReportEditPage({ id }: { id: string }) {
           )}
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={() => setConfirmDeleteSection(-1)} data-testid="button-delete-report">
-            <Trash2 className="h-4 w-4 mr-1.5" />
-            Delete
-          </Button>
           <Button onClick={() => saveDraft.mutate()} disabled={!isDirty || saveDraft.isPending} data-testid="button-save-draft">
             <Save className="h-4 w-4 mr-1.5" />
             {saveDraft.isPending ? "Saving..." : "Save Draft"}
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => setIsAiOpen(true)}
-            disabled={generateWithAi.isPending}
-            data-testid="button-generate-ai"
-          >
-            {generateWithAi.isPending ? (
-              <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-            ) : (
-              <Sparkles className="h-4 w-4 mr-1.5" />
-            )}
-            {generateWithAi.isPending ? "Generating..." : "Generate with AI"}
           </Button>
           <Button variant="outline" onClick={() => setIsShareOpen(true)} data-testid="button-share-report">
             <Link2 className="h-4 w-4 mr-1.5" />
@@ -408,6 +398,32 @@ export default function ReportEditPage({ id }: { id: string }) {
             )}
             {isGeneratingPdf ? "Generating..." : "Generate PDF"}
           </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" data-testid="button-report-menu">
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                onClick={() => setIsAiOpen(true)}
+                disabled={generateWithAi.isPending}
+                data-testid="menuitem-regenerate-ai"
+              >
+                <Sparkles className="h-4 w-4 mr-2" />
+                {generateWithAi.isPending ? "Generating..." : "Regenerate with AI"}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={() => setConfirmDeleteSection(-1)}
+                className="text-destructive focus:text-destructive"
+                data-testid="menuitem-delete-report"
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete report
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
