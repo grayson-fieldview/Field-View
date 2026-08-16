@@ -2605,16 +2605,16 @@ export async function registerRoutes(
       // 1. Usage gate — atomic reservation (conditional upsert increment).
       // Concurrent requests can never push the month past the limit; on any
       // failure below the slot is released so failed attempts aren't charged.
-      const admitted = await tryReserveReportGeneration(req.user.accountId);
+      const { admitted, periodMonth } = await tryReserveReportGeneration(req.user.accountId);
       if (!admitted) {
         return res.status(429).json({
           message: `Monthly AI report limit reached (${AI_REPORT_MONTHLY_LIMIT} generations). The limit resets at the start of next month.`,
         });
       }
 
+      // 2. Generate content (throws on model/parse failure — nothing written).
+      let content: Awaited<ReturnType<typeof generateReportContent>>;
       try {
-        // 2. Generate content (throws on model/parse failure — nothing written).
-        let content;
         try {
           content = await generateReportContent({
             reportId: id,
@@ -2625,7 +2625,7 @@ export async function registerRoutes(
           });
         } catch (err: any) {
           if (err?.statusCode === 400) {
-            await releaseReportGeneration(req.user.accountId);
+            await releaseReportGeneration(req.user.accountId, periodMonth);
             return res.status(400).json({ message: err.message });
           }
           throw err;
@@ -2660,13 +2660,14 @@ export async function registerRoutes(
         });
       } catch (err) {
         // Model error or write failure — release the reserved slot.
-        await releaseReportGeneration(req.user.accountId);
+        await releaseReportGeneration(req.user.accountId, periodMonth);
         throw err;
       }
 
-      // 5. Return the regenerated report tree.
+      // 5. Return the regenerated report tree + per-generation exclusion
+      // count (exclusions are user feedback only; never persisted).
       const tree = await storage.getReportTree(id);
-      res.json(tree);
+      res.json({ ...tree, excludedCount: content.excludedMediaIds.length });
     } catch (error) {
       console.error("[reports/generate] error:", error);
       res.status(500).json({

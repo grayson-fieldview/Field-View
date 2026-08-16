@@ -46,6 +46,9 @@ export type GeneratedSection = {
 export type GeneratedReportContent = {
   coverDescription: string;
   sections: GeneratedSection[];
+  /** Photos the model excluded as not showing project work. Per-generation
+   * feedback for the user — never persisted, never written to the report. */
+  excludedMediaIds: number[];
 };
 
 // Module-scope lazy client (same pattern as aiCaptions.ts).
@@ -77,10 +80,13 @@ Rules:
 - Plain trade language. No marketing adjectives.
 - Section count should follow the actual content — do not force a fixed number. A single-trade day may be one section.
 - Group photos by work type or area, not strictly by timestamp.
+- Never create a section whose purpose is to explain that photos are irrelevant, unrelated, unidentified, or not part of the project.
+- Never write a photo caption like "Unidentified photo" or "Unknown image". If you cannot tell what a photo shows, exclude it.
 
 Return ONLY a JSON object — no markdown fences, no prose before or after — matching exactly:
 {
   "coverDescription": "one paragraph, 2-4 sentences",
+  "excludedMediaIds": [123, 456],
   "sections": [
     {
       "title": "short section heading in trade language",
@@ -91,7 +97,7 @@ Return ONLY a JSON object — no markdown fences, no prose before or after — m
     }
   ]
 }
-Every photo you were given must appear exactly once, referenced by its numeric mediaId.`;
+Every photo must either appear exactly once in a section OR be listed in excludedMediaIds. Exclude a photo when it does not show work, materials, conditions, or the site for this job — for example screenshots, app or software interfaces, email or document captures, marketing images, or photos whose subject cannot be determined. Excluding is the correct choice for those; do not include them.`;
 }
 
 /** Strip ```json fences if the model wrapped its output despite instructions. */
@@ -185,9 +191,16 @@ export async function generateReportContent(input: {
   }
 
   // Validate + normalize. Drop hallucinated mediaIds; dedupe repeats; append
-  // any missing input photos to a final "Additional Photos" section.
+  // photos that are neither placed nor explicitly excluded to a final
+  // "Additional Photos" section.
   const inputIds = new Set(mediaIds);
   const seen = new Set<number>();
+  // Model-declared exclusions; ignore ids not in the input set. Resolved
+  // AFTER placement below — section placement wins over exclusion.
+  const claimedExcluded = new Set<number>(
+    (Array.isArray(parsed.excludedMediaIds) ? parsed.excludedMediaIds : [])
+      .filter((id: unknown): id is number => typeof id === "number" && inputIds.has(id)),
+  );
   const sections: GeneratedSection[] = [];
   for (const s of parsed.sections) {
     if (!s || typeof s.title !== "string") continue;
@@ -210,7 +223,22 @@ export async function generateReportContent(input: {
       });
     }
   }
-  const missing = mediaIds.filter((id) => !seen.has(id));
+  // Placement wins: a photo both placed and listed as excluded is placed.
+  const excludedMediaIds = mediaIds.filter((id) => claimedExcluded.has(id) && !seen.has(id));
+  const excludedSet = new Set(excludedMediaIds);
+
+  // Guard: an all-excluded generation must not produce an empty report.
+  // Thrown as a 400-style error so the route surfaces the message plainly
+  // and releases the reserved usage slot (route catch paths handle both).
+  if (excludedMediaIds.length === mediaIds.length) {
+    throw Object.assign(
+      new Error("None of the selected photos showed project work. Try selecting different photos."),
+      { statusCode: 400 },
+    );
+  }
+
+  // Append ONLY photos that are neither placed nor explicitly excluded.
+  const missing = mediaIds.filter((id) => !seen.has(id) && !excludedSet.has(id));
   if (missing.length > 0) {
     sections.push({
       title: "Additional Photos",
@@ -219,7 +247,7 @@ export async function generateReportContent(input: {
     });
   }
 
-  return { coverDescription: String(parsed.coverDescription).trim(), sections };
+  return { coverDescription: String(parsed.coverDescription).trim(), sections, excludedMediaIds };
 }
 
 /** 'YYYY-MM' for the current month (UTC). */
@@ -250,10 +278,13 @@ export async function getReportGenerationCount(accountId: string): Promise<numbe
  * `setWhere` makes the admission decision atomic — concurrent requests
  * can never push count past the limit (check-then-increment would).
  */
-export async function tryReserveReportGeneration(accountId: string): Promise<boolean> {
+export async function tryReserveReportGeneration(
+  accountId: string,
+): Promise<{ admitted: boolean; periodMonth: string }> {
+  const periodMonth = currentPeriodMonth();
   const rows = await db
     .insert(aiUsage)
-    .values({ accountId, feature: AI_REPORT_FEATURE, periodMonth: currentPeriodMonth(), count: 1 })
+    .values({ accountId, feature: AI_REPORT_FEATURE, periodMonth, count: 1 })
     .onConflictDoUpdate({
       target: [aiUsage.accountId, aiUsage.feature, aiUsage.periodMonth],
       set: { count: sql`${aiUsage.count} + 1`, updatedAt: new Date() },
@@ -261,15 +292,17 @@ export async function tryReserveReportGeneration(accountId: string): Promise<boo
     })
     .returning({ count: aiUsage.count });
   // With setWhere unmet, ON CONFLICT DO UPDATE updates nothing → no row returned.
-  return rows.length > 0;
+  return { admitted: rows.length > 0, periodMonth };
 }
 
 /**
  * Compensating release when generation or the DB write fails after a
  * reservation — the user shouldn't be charged a slot for a failed attempt.
- * Never throws (called from catch paths).
+ * Never throws (called from catch paths). Takes the RESERVATION's
+ * periodMonth (not recomputed) so a request crossing the UTC month
+ * boundary releases the month it actually reserved against.
  */
-export async function releaseReportGeneration(accountId: string): Promise<void> {
+export async function releaseReportGeneration(accountId: string, periodMonth: string): Promise<void> {
   try {
     await db
       .update(aiUsage)
@@ -278,7 +311,7 @@ export async function releaseReportGeneration(accountId: string): Promise<void> 
         and(
           eq(aiUsage.accountId, accountId),
           eq(aiUsage.feature, AI_REPORT_FEATURE),
-          eq(aiUsage.periodMonth, currentPeriodMonth()),
+          eq(aiUsage.periodMonth, periodMonth),
         ),
       );
   } catch (err) {

@@ -254,9 +254,9 @@ export default function ReportEditPage({ id }: { id: string }) {
         note: aiNote.trim() || undefined,
         reportType: aiReportType,
       });
-      return res.json() as Promise<ReportTree>;
+      return res.json() as Promise<ReportTree & { excludedCount?: number }>;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       // Force a full draft re-init from the fresh server tree.
       lastLoadedReportIdRef.current = null;
       setIsDirty(false);
@@ -266,7 +266,14 @@ export default function ReportEditPage({ id }: { id: string }) {
       setIsAiOpen(false);
       aiClearSelection();
       setAiNote("");
-      toast({ title: "Report generated", description: "Sections were created from your photos. Review and edit as needed." });
+      const excluded = data?.excludedCount ?? 0;
+      toast({
+        title: "Report generated",
+        description:
+          excluded > 0
+            ? `Sections were created from your photos. ${excluded} photo${excluded === 1 ? " wasn't" : "s weren't"} included because ${excluded === 1 ? "it" : "they"} didn't show project work.`
+            : "Sections were created from your photos. Review and edit as needed.",
+      });
     },
     onError: (e: Error) => {
       // apiRequest throws "429: {json}" style messages; surface the server's
