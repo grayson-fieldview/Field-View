@@ -185,6 +185,10 @@ export interface IStorage {
   getAllChecklists(accountId: string): Promise<(Checklist & { project?: { name: string }; assignedTo?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }; itemCount: number; checkedCount: number; sectionCount: number })[]>;
   getChecklist(id: number): Promise<Checklist | undefined>;
   createChecklist(checklist: InsertChecklist): Promise<Checklist>;
+  createChecklistWithItems(
+    checklistData: InsertChecklist,
+    items: Array<string | { label: string; fieldType?: "yes_no" | "rating" | "text" | "multiple_choice"; notes?: string | null; sectionId?: number | null; assignedToUserId?: string | null; photosRequired?: boolean; sortOrder?: number }>,
+  ): Promise<Checklist>;
   updateChecklist(id: number, data: Partial<InsertChecklist>): Promise<Checklist | undefined>;
   deleteChecklist(id: number): Promise<void>;
 
@@ -878,6 +882,58 @@ export class DatabaseStorage implements IStorage {
   async createChecklist(checklist: InsertChecklist): Promise<Checklist> {
     const [created] = await db.insert(checklists).values(checklist).returning();
     return created;
+  }
+
+  /**
+   * Create a checklist AND its items in ONE transaction (modeled on
+   * instantiateChecklistFromTemplate) — a mid-write failure leaves nothing
+   * behind, unlike the old create-then-loop path. Items may be plain labels
+   * (yes_no defaults for everything) or seed objects carrying the optional
+   * fields the scratch endpoint has always accepted.
+   */
+  async createChecklistWithItems(
+    checklistData: InsertChecklist,
+    items: Array<
+      | string
+      | {
+          label: string;
+          fieldType?: "yes_no" | "rating" | "text" | "multiple_choice";
+          notes?: string | null;
+          sectionId?: number | null;
+          assignedToUserId?: string | null;
+          photosRequired?: boolean;
+          /** Explicit sort position; defaults to the item's ORIGINAL array
+           *  index (pre-filter) to match the old loop's behavior exactly. */
+          sortOrder?: number;
+        }
+    >,
+  ): Promise<Checklist> {
+    return await db.transaction(async (tx) => {
+      const [created] = await tx.insert(checklists).values(checklistData as any).returning();
+      // Filter AFTER capturing the raw index so skipped empty labels leave
+      // the same sortOrder gaps the old createChecklistItem loop produced.
+      const seeds = items
+        .map((raw, i) => {
+          const s = typeof raw === "string" ? { label: raw } : raw;
+          return { ...s, sortOrder: s.sortOrder ?? i };
+        })
+        .filter((s) => s.label);
+      if (seeds.length > 0) {
+        await tx.insert(checklistItems).values(
+          seeds.map((s) => ({
+            checklistId: created.id,
+            label: s.label,
+            fieldType: s.fieldType,
+            notes: s.notes ?? null,
+            sectionId: s.sectionId ?? null,
+            assignedToUserId: s.assignedToUserId ?? null,
+            photosRequired: s.photosRequired === true,
+            sortOrder: s.sortOrder,
+          })) as any,
+        );
+      }
+      return created;
+    });
   }
 
   async updateChecklist(id: number, data: Partial<InsertChecklist>): Promise<Checklist | undefined> {

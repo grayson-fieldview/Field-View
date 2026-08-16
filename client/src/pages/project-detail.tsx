@@ -102,6 +102,7 @@ import {
 import { useLocation, Link } from "wouter";
 import { LayoutTemplate, Sparkles } from "lucide-react";
 import { AiGenerateDialog, type AiGenerateParams } from "@/components/report-editor/ai-generate-dialog";
+import { ChecklistGenerateDialog } from "@/components/checklist-generate-dialog";
 import { getReportBadge } from "@/lib/report-status";
 import ReportFormDialog from "@/components/report-form-dialog";
 import { AddressAutocomplete } from "@/components/address-autocomplete";
@@ -297,6 +298,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const [confirmDeleteTask, setConfirmDeleteTask] = useState<number | null>(null);
   const [newChecklistTitle, setNewChecklistTitle] = useState("");
   const [createChecklistDialogOpen, setCreateChecklistDialogOpen] = useState(false);
+  const [generateChecklistDialogOpen, setGenerateChecklistDialogOpen] = useState(false);
   const [isCreateReportOpen, setIsCreateReportOpen] = useState(false);
   const [isAiGenerateOpen, setIsAiGenerateOpen] = useState(false);
   const [expandedChecklist, setExpandedChecklist] = useState<number | null>(null);
@@ -2029,6 +2031,15 @@ export default function ProjectDetailPage({ id }: { id: string }) {
               <div className="flex items-center gap-2">
                 <Button
                   size="sm"
+                  onClick={() => setGenerateChecklistDialogOpen(true)}
+                  data-testid="button-open-generate-checklist"
+                >
+                  <Sparkles className="h-3.5 w-3.5 mr-1.5" />
+                  Generate with AI
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
                   onClick={() => setCreateChecklistDialogOpen(true)}
                   data-testid="button-open-create-checklist"
                 >
@@ -2059,6 +2070,13 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                   </DropdownMenu>
                 )}
               </div>
+
+              <ChecklistGenerateDialog
+                open={generateChecklistDialogOpen}
+                onOpenChange={setGenerateChecklistDialogOpen}
+                projectId={id!}
+                onCreated={(checklistId) => setExpandedChecklist(checklistId)}
+              />
 
               <Dialog
                 open={createChecklistDialogOpen}
@@ -2115,6 +2133,13 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                     <p className="text-sm text-muted-foreground max-w-sm mx-auto">
                       Create a checklist above to start tracking items for this project.
                     </p>
+                    <Button
+                      onClick={() => setGenerateChecklistDialogOpen(true)}
+                      data-testid="button-empty-generate-checklist"
+                    >
+                      <Sparkles className="h-4 w-4 mr-2" />
+                      Generate with AI
+                    </Button>
                   </div>
                 </Card>
               ) : (

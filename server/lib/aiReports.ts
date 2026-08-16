@@ -380,11 +380,12 @@ export async function getReportGenerationCount(accountId: string): Promise<numbe
  */
 export async function tryReserveReportGeneration(
   accountId: string,
+  feature: string = AI_REPORT_FEATURE,
 ): Promise<{ admitted: boolean; periodMonth: string }> {
   const periodMonth = currentPeriodMonth();
   const rows = await db
     .insert(aiUsage)
-    .values({ accountId, feature: AI_REPORT_FEATURE, periodMonth, count: 1 })
+    .values({ accountId, feature, periodMonth, count: 1 })
     .onConflictDoUpdate({
       target: [aiUsage.accountId, aiUsage.feature, aiUsage.periodMonth],
       set: { count: sql`${aiUsage.count} + 1`, updatedAt: new Date() },
@@ -402,7 +403,11 @@ export async function tryReserveReportGeneration(
  * periodMonth (not recomputed) so a request crossing the UTC month
  * boundary releases the month it actually reserved against.
  */
-export async function releaseReportGeneration(accountId: string, periodMonth: string): Promise<void> {
+export async function releaseReportGeneration(
+  accountId: string,
+  periodMonth: string,
+  feature: string = AI_REPORT_FEATURE,
+): Promise<void> {
   try {
     await db
       .update(aiUsage)
@@ -410,7 +415,7 @@ export async function releaseReportGeneration(accountId: string, periodMonth: st
       .where(
         and(
           eq(aiUsage.accountId, accountId),
-          eq(aiUsage.feature, AI_REPORT_FEATURE),
+          eq(aiUsage.feature, feature),
           eq(aiUsage.periodMonth, periodMonth),
         ),
       );

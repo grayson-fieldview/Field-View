@@ -26,6 +26,7 @@ import { queueThumbnailGeneration } from "./lib/thumbnails";
 import { queueCaptionGeneration } from "./lib/aiCaptions";
 import { transcribeAudio } from "./lib/transcription";
 import { translateText } from "./lib/translation";
+import { generateChecklistContent } from "./lib/aiChecklists";
 import {
   generateReportContent,
   classifyAnthropicApiError,
@@ -1925,35 +1926,88 @@ export async function registerRoutes(
       if (!parsed.success) {
         return res.status(400).json({ message: parsed.error.message });
       }
-      const checklist = await storage.createChecklist(parsed.data);
-
-      if (req.body.items && Array.isArray(req.body.items)) {
-        for (let i = 0; i < req.body.items.length; i++) {
-          const raw = req.body.items[i];
-          // Backward compat: legacy callers pass an array of strings.
-          const seed = typeof raw === "string"
-            ? { label: raw }
-            : {
-                label: String(raw.label ?? ""),
-                fieldType: raw.fieldType,
-                notes: raw.notes ?? null,
-                sectionId: raw.sectionId ?? null,
-                assignedToUserId: raw.assignedToUserId ?? null,
-                photosRequired: raw.photosRequired === true,
-              };
-          if (!seed.label) continue;
-          await storage.createChecklistItem({
-            checklistId: checklist.id,
-            sortOrder: i,
-            ...seed,
-          } as any);
-        }
-      }
+      // Checklist + items in ONE transaction — the old create-then-loop left
+      // a partial checklist on a mid-loop failure. Same request/response
+      // shape: legacy string labels and seed objects both still accepted.
+      const rawItems: any[] = Array.isArray(req.body.items) ? req.body.items : [];
+      const seeds = rawItems.map((raw) =>
+        typeof raw === "string"
+          ? { label: raw }
+          : {
+              label: String(raw.label ?? ""),
+              fieldType: raw.fieldType,
+              notes: raw.notes ?? null,
+              sectionId: raw.sectionId ?? null,
+              assignedToUserId: raw.assignedToUserId ?? null,
+              photosRequired: raw.photosRequired === true,
+            },
+      );
+      const checklist = await storage.createChecklistWithItems(parsed.data, seeds);
 
       res.status(201).json(checklist);
     } catch (error) {
       console.error("[API] POST /api/projects/:id/checklists failed:", error);
       res.status(500).json({ message: "Failed to create checklist" });
+    }
+  });
+
+  // AI checklist generation: voice/typed description → title + flat yes_no
+  // items, one new checklist. Create-only, never appends. Same atomic
+  // reservation pattern as /api/reports/:id/generate, feature-scoped to
+  // "checklist_generation" (ai_usage unique index already covers feature).
+  const AI_CHECKLIST_FEATURE = "checklist_generation";
+  const generateChecklistBodySchema = z.object({ note: z.string().min(1).max(5000) });
+  app.post("/api/projects/:id/checklists/generate", requireWriteAccess, async (req: any, res) => {
+    try {
+      const projectId = parseInt(req.params.id as string);
+      if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
+      if (!(await userCanAccessProject(req, projectId))) return res.status(403).json({ message: "Access denied" });
+      const parsed = generateChecklistBodySchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: "Provide 'note' between 1 and 5000 characters" });
+
+      // 1. Usage gate — atomic reservation; released on every failure below.
+      const { admitted, periodMonth } = await tryReserveReportGeneration(
+        req.user.accountId, AI_CHECKLIST_FEATURE,
+      );
+      if (!admitted) {
+        return res.status(429).json({
+          message: `Monthly AI generation limit reached (${AI_REPORT_MONTHLY_LIMIT} generations). The limit resets at the start of next month.`,
+        });
+      }
+
+      try {
+        // 2. Generate (throws on model/parse failure — nothing written).
+        let content: Awaited<ReturnType<typeof generateChecklistContent>>;
+        try {
+          content = await generateChecklistContent({ projectId, note: parsed.data.note });
+        } catch (err: any) {
+          if (err?.statusCode === 400) {
+            await releaseReportGeneration(req.user.accountId, periodMonth, AI_CHECKLIST_FEATURE);
+            return res.status(400).json({ message: err.message });
+          }
+          throw err;
+        }
+
+        // 3. Write checklist + items in one transaction.
+        const checklist = await storage.createChecklistWithItems(
+          { projectId, title: content.title, createdById: req.user.id } as any,
+          content.items,
+        );
+        return res.status(201).json({ checklistId: checklist.id, itemCount: content.items.length });
+      } catch (err) {
+        // Model error or write failure — release the reserved slot.
+        await releaseReportGeneration(req.user.accountId, periodMonth, AI_CHECKLIST_FEATURE);
+        throw err;
+      }
+    } catch (error) {
+      console.error("[checklists/generate] error:", error);
+      const apiErr = classifyAnthropicApiError(error);
+      if (apiErr) return res.status(apiErr.status).json({ message: apiErr.message });
+      res.status(500).json({
+        message: error instanceof Error && error.message.startsWith("AI returned")
+          ? error.message
+          : "Failed to generate checklist",
+      });
     }
   });
 

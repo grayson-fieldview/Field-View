@@ -1763,10 +1763,9 @@ export default function PhotoViewer({
                   </div>
                 </div>
               )}
-              {(mediaComments || []).length === 0 ? (
-                <p className="text-sm text-muted-foreground">No comments yet.</p>
-              ) : (
-                (mediaComments || []).map((comment) => (
+              {/* No empty state: the "Add a comment..." box below already
+                  tells the user what to do when there are no comments. */}
+              {(mediaComments || []).map((comment) => (
                   <div key={comment.id} className="flex gap-2 text-sm" data-testid={`comment-${comment.id}`}>
                     <Avatar className="h-6 w-6 shrink-0">
                       <AvatarImage src={comment.user?.profileImageUrl || undefined} />
@@ -1799,8 +1798,7 @@ export default function PhotoViewer({
                       {renderTranslateControls(String(comment.id), comment.content)}
                     </div>
                   </div>
-                ))
-              )}
+              ))}
             </div>
             <div className="space-y-2">
               <Textarea
