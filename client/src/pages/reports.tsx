@@ -24,9 +24,10 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
+  AlertCircle,
   FileBarChart,
-  FileDown,
   FileText,
+  Loader2,
   Link2,
   ListFilter,
   LayoutTemplate,
@@ -50,12 +51,13 @@ type ReportListItem = Report & {
 
 type ReportTemplateWithCount = ReportTemplate & { sectionCount: number };
 
-// Badge is derived from real state (shareToken / lastPdfAt) — see
-// getReportBadge. Icons keyed by derived label.
+// Badge is derived from status + shareToken — see getReportBadge.
+// Icons keyed by derived label; unknown labels fall back to FileText.
 const badgeIcon: Record<string, typeof FileText> = {
+  Generating: Loader2,
+  Failed: AlertCircle,
   Shared: Link2,
-  Exported: FileDown,
-  Draft: FileText,
+  Ready: FileText,
 };
 
 type TabKey = "reports" | "templates";
