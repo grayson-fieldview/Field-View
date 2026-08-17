@@ -6274,6 +6274,25 @@ export async function registerRoutes(
     }
   });
 
+  // Revoke a shared gallery link — same access chain as creation:
+  // requireWriteAccess + verifyProjectAccess against the gallery's project.
+  app.delete("/api/galleries/:token", requireWriteAccess, async (req: any, res) => {
+    try {
+      const token = String(req.params.token || "");
+      if (!token) return res.status(404).json({ message: "Gallery not found" });
+      const gallery = await storage.getSharedGalleryByToken(token);
+      if (!gallery) return res.status(404).json({ message: "Gallery not found" });
+      if (!(await verifyProjectAccess(gallery.projectId, req.user.accountId))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      await storage.deleteSharedGallery(token);
+      res.json({ revoked: true });
+    } catch (error) {
+      console.error("[galleries] revoke error:", error);
+      res.status(500).json({ message: "Failed to revoke gallery" });
+    }
+  });
+
   app.get("/api/galleries/:token", async (req, res) => {
     try {
       const gallery = await storage.getSharedGalleryByToken(req.params.token);

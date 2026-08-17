@@ -258,6 +258,7 @@ export interface IStorage {
 
   createSharedGallery(gallery: InsertSharedGallery): Promise<SharedGallery>;
   getSharedGalleryByToken(token: string): Promise<SharedGallery | undefined>;
+  deleteSharedGallery(token: string): Promise<boolean>;
 
   setReportShareToken(id: number, token: string | null): Promise<Report | undefined>;
   getReportByShareToken(token: string): Promise<Report | undefined>;
@@ -1563,6 +1564,11 @@ export class DatabaseStorage implements IStorage {
   async getSharedGalleryByToken(token: string): Promise<SharedGallery | undefined> {
     const [gallery] = await db.select().from(sharedGalleries).where(eq(sharedGalleries.token, token));
     return gallery;
+  }
+
+  async deleteSharedGallery(token: string): Promise<boolean> {
+    const deleted = await db.delete(sharedGalleries).where(eq(sharedGalleries.token, token)).returning();
+    return deleted.length > 0;
   }
 
   async setReportShareToken(id: number, token: string | null): Promise<Report | undefined> {

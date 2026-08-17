@@ -311,6 +311,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const [shareIncludeMetadata, setShareIncludeMetadata] = useState(false);
   const [shareIncludeDescriptions, setShareIncludeDescriptions] = useState(false);
   const [shareLink, setShareLink] = useState("");
+  const [shareToken, setShareToken] = useState<string | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
   const [compareMode, setCompareMode] = useState(false);
   const [comparePhotos, setComparePhotos] = useState<[number | null, number | null]>([null, null]);
@@ -747,7 +748,23 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     onSuccess: (data) => {
       const url = `${window.location.origin}/gallery/${data.token}`;
       setShareLink(url);
+      setShareToken(data.token);
       setShareStep("link");
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const revokeGallery = useMutation({
+    mutationFn: async (token: string) => {
+      await apiRequest("DELETE", `/api/galleries/${token}`);
+    },
+    onSuccess: () => {
+      setShareToken(null);
+      setShareLink("");
+      setShareStep("options");
+      toast({ title: "Link revoked", description: "The gallery link no longer works." });
     },
     onError: (error: Error) => {
       toast({ title: "Error", description: error.message, variant: "destructive" });
@@ -2482,6 +2499,16 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                 >
                   <Eye className="h-4 w-4 mr-2" />
                   View Gallery
+                </Button>
+                <Button
+                  variant="outline"
+                  className="text-destructive"
+                  disabled={!shareToken || revokeGallery.isPending}
+                  onClick={() => shareToken && revokeGallery.mutate(shareToken)}
+                  data-testid="button-revoke-gallery"
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  {revokeGallery.isPending ? "Revoking..." : "Revoke Link"}
                 </Button>
               </div>
             </div>
