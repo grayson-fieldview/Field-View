@@ -750,10 +750,24 @@ export default function ProjectDetailPage({ id }: { id: string }) {
       setShareLink(url);
       setShareToken(data.token);
       setShareStep("link");
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", id, "galleries"] });
     },
     onError: (error: Error) => {
       toast({ title: "Error", description: error.message, variant: "destructive" });
     },
+  });
+
+  type GalleryLink = {
+    token: string;
+    createdAt: string;
+    photoCount: number;
+    includeMetadata: boolean;
+    includeDescriptions: boolean;
+    createdBy: { firstName: string | null; lastName: string | null } | null;
+  };
+  const galleriesQuery = useQuery<GalleryLink[]>({
+    queryKey: ["/api/projects", id, "galleries"],
+    enabled: showShareDialog && shareStep === "options",
   });
 
   const revokeGallery = useMutation({
@@ -764,6 +778,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
       setShareToken(null);
       setShareLink("");
       setShareStep("options");
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", id, "galleries"] });
       toast({ title: "Link revoked", description: "The gallery link no longer works." });
     },
     onError: (error: Error) => {
@@ -2466,6 +2481,47 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                   <Link2 className="h-4 w-4 mr-2" />
                   {createGallery.isPending ? "Creating..." : "Get Link"}
                 </Button>
+              </div>
+              <div className="border-t pt-3 space-y-2">
+                <p className="text-xs font-medium text-muted-foreground">Active links</p>
+                {galleriesQuery.isLoading ? (
+                  <p className="text-xs text-muted-foreground">Loading…</p>
+                ) : !galleriesQuery.data || galleriesQuery.data.length === 0 ? (
+                  <p className="text-xs text-muted-foreground" data-testid="text-no-gallery-links">No active links for this project.</p>
+                ) : (
+                  <div className="max-h-40 overflow-y-auto space-y-1">
+                    {galleriesQuery.data.map((g) => (
+                      <div key={g.token} className="flex items-center gap-2 text-xs rounded-md border px-2 py-1.5" data-testid={`row-gallery-${g.token}`}>
+                        <span className="flex-1 min-w-0 truncate">
+                          {new Date(g.createdAt).toLocaleDateString()} · {g.photoCount} photo{g.photoCount === 1 ? "" : "s"}
+                          {g.createdBy?.firstName ? ` · ${g.createdBy.firstName} ${g.createdBy.lastName ?? ""}`.trimEnd() : ""}
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2 shrink-0"
+                          onClick={() => {
+                            navigator.clipboard.writeText(`${window.location.origin}/gallery/${g.token}`);
+                            toast({ title: "Link copied" });
+                          }}
+                          data-testid={`button-copy-gallery-${g.token}`}
+                        >
+                          <Copy className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2 shrink-0 text-destructive"
+                          disabled={revokeGallery.isPending}
+                          onClick={() => revokeGallery.mutate(g.token)}
+                          data-testid={`button-revoke-gallery-${g.token}`}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           ) : (

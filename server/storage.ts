@@ -259,6 +259,7 @@ export interface IStorage {
   createSharedGallery(gallery: InsertSharedGallery): Promise<SharedGallery>;
   getSharedGalleryByToken(token: string): Promise<SharedGallery | undefined>;
   deleteSharedGallery(token: string): Promise<boolean>;
+  getSharedGalleriesByProject(projectId: number): Promise<(SharedGallery & { createdBy?: { firstName: string | null; lastName: string | null } })[]>;
 
   setReportShareToken(id: number, token: string | null): Promise<Report | undefined>;
   getReportByShareToken(token: string): Promise<Report | undefined>;
@@ -1564,6 +1565,22 @@ export class DatabaseStorage implements IStorage {
   async getSharedGalleryByToken(token: string): Promise<SharedGallery | undefined> {
     const [gallery] = await db.select().from(sharedGalleries).where(eq(sharedGalleries.token, token));
     return gallery;
+  }
+
+  async getSharedGalleriesByProject(projectId: number) {
+    const rows = await db
+      .select({
+        gallery: sharedGalleries,
+        createdBy: { firstName: users.firstName, lastName: users.lastName },
+      })
+      .from(sharedGalleries)
+      .leftJoin(users, eq(sharedGalleries.createdById, users.id))
+      .where(eq(sharedGalleries.projectId, projectId))
+      .orderBy(desc(sharedGalleries.createdAt));
+    return rows.map(r => ({
+      ...r.gallery,
+      createdBy: r.createdBy?.firstName ? r.createdBy : undefined,
+    }));
   }
 
   async deleteSharedGallery(token: string): Promise<boolean> {

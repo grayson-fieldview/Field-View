@@ -6274,6 +6274,30 @@ export async function registerRoutes(
     }
   });
 
+  // List a project's active gallery links (for revocation UI). Write access
+  // required — this exposes share tokens, same sensitivity as creating one.
+  app.get("/api/projects/:id/galleries", requireWriteAccess, async (req: any, res) => {
+    try {
+      const projectId = parseInt(req.params.id as string);
+      if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
+      if (!(await verifyProjectAccess(projectId, req.user.accountId))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const galleries = await storage.getSharedGalleriesByProject(projectId);
+      res.json(galleries.map(g => ({
+        token: g.token,
+        createdAt: g.createdAt,
+        photoCount: g.mediaIds.length,
+        includeMetadata: g.includeMetadata,
+        includeDescriptions: g.includeDescriptions,
+        createdBy: g.createdBy ?? null,
+      })));
+    } catch (error) {
+      console.error("[galleries] list error:", error);
+      res.status(500).json({ message: "Failed to list galleries" });
+    }
+  });
+
   // Revoke a shared gallery link — same access chain as creation:
   // requireWriteAccess + verifyProjectAccess against the gallery's project.
   app.delete("/api/galleries/:token", requireWriteAccess, async (req: any, res) => {
