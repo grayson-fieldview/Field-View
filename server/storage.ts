@@ -359,42 +359,83 @@ export class DatabaseStorage implements IStorage {
 
   async getProjectsWithDetails(accountId: string): Promise<ProjectWithDetails[]> {
     const allProjects = await db.select().from(projects).where(eq(projects.accountId, accountId)).orderBy(desc(projects.updatedAt));
-    
-    const result: ProjectWithDetails[] = [];
-    for (const project of allProjects) {
-      const projectMedia = await db
-        .select({
-          id: media.id,
-          url: media.url,
-          uploadedById: media.uploadedById,
-        })
-        .from(media)
-        .where(eq(media.projectId, project.id))
-        .orderBy(sql`COALESCE(${media.takenAt}, ${media.createdAt}) DESC`);
+    if (allProjects.length === 0) return [];
+    const projectIds = allProjects.map(p => p.id);
+    const idList = sql.join(projectIds.map(id => sql`${id}`), sql`, `);
 
-      const photoCount = projectMedia.length;
-      const recentPhotos = projectMedia.slice(0, 4).map(m => ({ id: m.id, url: m.url }));
+    // One aggregate for counts, one windowed query for the top-4 photos per
+    // project, one grouped+windowed query for the top-3 uploaders per project
+    // (distinct uploaders ordered by their most recent photo — identical to
+    // the old first-seen-in-DESC-list semantics), and ONE batched user
+    // lookup. Replaces the old N+1 full-media fetch per project.
+    const [countRes, photoRes, uploaderRes] = await Promise.all([
+      db.execute(sql`
+        SELECT project_id, count(*)::int AS photo_count
+        FROM media WHERE project_id IN (${idList})
+        GROUP BY project_id
+      `),
+      db.execute(sql`
+        SELECT project_id, id, url FROM (
+          SELECT project_id, id, url,
+                 row_number() OVER (
+                   PARTITION BY project_id
+                   ORDER BY COALESCE(taken_at, created_at) DESC
+                 ) AS rn
+          FROM media WHERE project_id IN (${idList})
+        ) t WHERE rn <= 4 ORDER BY project_id, rn
+      `),
+      db.execute(sql`
+        SELECT project_id, uploaded_by_id FROM (
+          SELECT project_id, uploaded_by_id,
+                 row_number() OVER (
+                   PARTITION BY project_id
+                   ORDER BY MAX(COALESCE(taken_at, created_at)) DESC
+                 ) AS rn
+          FROM media
+          WHERE project_id IN (${idList}) AND uploaded_by_id IS NOT NULL
+          GROUP BY project_id, uploaded_by_id
+        ) t WHERE rn <= 3 ORDER BY project_id, rn
+      `),
+    ]);
 
-      const uploaderIds = new Set(projectMedia.map(m => m.uploadedById).filter(Boolean));
-      const uniqueUploaderIds = Array.from(uploaderIds) as string[];
-      const recentUsers: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }[] = [];
-      for (const uid of uniqueUploaderIds.slice(0, 3)) {
-        const [u] = await db.select({
+    const countByProject = new Map<number, number>(
+      (countRes.rows as any[]).map(r => [Number(r.project_id), Number(r.photo_count)]),
+    );
+    const photosByProject = new Map<number, { id: number; url: string }[]>();
+    for (const r of photoRes.rows as any[]) {
+      const pid = Number(r.project_id);
+      if (!photosByProject.has(pid)) photosByProject.set(pid, []);
+      photosByProject.get(pid)!.push({ id: Number(r.id), url: r.url });
+    }
+    const uploadersByProject = new Map<number, string[]>();
+    const allUploaderIds = new Set<string>();
+    for (const r of uploaderRes.rows as any[]) {
+      const pid = Number(r.project_id);
+      if (!uploadersByProject.has(pid)) uploadersByProject.set(pid, []);
+      uploadersByProject.get(pid)!.push(r.uploaded_by_id);
+      allUploaderIds.add(r.uploaded_by_id);
+    }
+
+    const userRows = allUploaderIds.size > 0
+      ? await db.select({
+          id: users.id,
           firstName: users.firstName,
           lastName: users.lastName,
           profileImageUrl: users.profileImageUrl,
-        }).from(users).where(eq(users.id, uid));
-        if (u) recentUsers.push(u);
-      }
+        }).from(users).where(inArray(users.id, Array.from(allUploaderIds)))
+      : [];
+    const userById = new Map(userRows.map(u => [u.id, { firstName: u.firstName, lastName: u.lastName, profileImageUrl: u.profileImageUrl }]));
 
-      result.push({
-        ...project,
-        photoCount,
-        recentPhotos,
-        recentUsers,
-      });
-    }
-    return result;
+    return allProjects.map(project => ({
+      ...project,
+      photoCount: countByProject.get(project.id) ?? 0,
+      recentPhotos: photosByProject.get(project.id) ?? [],
+      // Missing user rows are skipped (old behavior), so a project can have
+      // fewer than 3 recentUsers even with 3+ uploaders.
+      recentUsers: (uploadersByProject.get(project.id) ?? [])
+        .map(uid => userById.get(uid))
+        .filter((u): u is { firstName: string | null; lastName: string | null; profileImageUrl: string | null } => !!u),
+    }));
   }
 
   async getProject(id: number): Promise<Project | undefined> {
