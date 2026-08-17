@@ -1,10 +1,20 @@
 import { sql, relations } from "drizzle-orm";
-import { pgTable, text, varchar, integer, bigint, timestamp, boolean, real, pgEnum, jsonb, index, uniqueIndex, unique } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, bigint, timestamp, boolean, real, pgEnum, jsonb, index, uniqueIndex, unique, customType } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
 export * from "./models/auth";
 import { users, accounts, invitations } from "./models/auth";
+
+// tsvector isn't built into drizzle — customType mirror. The COLUMN IS OWNED
+// BY THE DB: created by scripts/migrations/add_media_search_vector.ts as
+// GENERATED ALWAYS AS ... STORED; app code must never write it. Declared with
+// generatedAlwaysAs so drizzle also refuses inserts/updates to it.
+const tsvector = customType<{ data: string }>({
+  dataType() {
+    return "tsvector";
+  },
+});
 
 export const tagTypeEnum = pgEnum("tag_type", ["photo", "project"]);
 export const projectStatusEnum = pgEnum("project_status", ["active", "completed", "on_hold", "archived"]);
@@ -80,10 +90,18 @@ export const media = pgTable("media", {
   longitude: real("longitude"),
   tags: text("tags").array().default(sql`'{}'::text[]`),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  // DB-owned generated column (see migration add_media_search_vector.ts).
+  // Weights: A ai_caption (UNCLEAR sentinel excluded) + user caption,
+  // B tags (via IMMUTABLE media_tags_text()), C original_name. 'simple'
+  // config — no stemming. Never write from app code.
+  searchVector: tsvector("search_vector").generatedAlwaysAs(
+    sql`setweight(to_tsvector('simple', CASE WHEN ai_caption = 'UNCLEAR' THEN '' ELSE coalesce(ai_caption, '') END), 'A') || setweight(to_tsvector('simple', coalesce(caption, '')), 'A') || setweight(to_tsvector('simple', media_tags_text(tags)), 'B') || setweight(to_tsvector('simple', coalesce(original_name, '')), 'C')`,
+  ),
 }, (table) => [
   index("media_project_id_idx").on(table.projectId),
   // Daily Log / date-range photo queries filter by project + capture time.
   index("media_project_taken_at_idx").on(table.projectId, table.takenAt),
+  index("media_search_vector_idx").using("gin", table.searchVector),
 ]);
 
 // Project documents (work orders, change orders, permits) — uploaded by

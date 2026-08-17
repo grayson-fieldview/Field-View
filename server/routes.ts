@@ -1530,7 +1530,10 @@ export async function registerRoutes(
     try {
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
-      const allMedia = await presignMediaUrls(await storage.getAllMedia(accountId));
+      // Restricted users only see media from projects they created or are
+      // assigned to (filtered in SQL) — same rule as userCanAccessProject.
+      const restrictedToUserId = req.user.role === "restricted" ? req.user.id : undefined;
+      const allMedia = await presignMediaUrls(await storage.getAllMedia(accountId, restrictedToUserId));
       res.json(allMedia);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch media" });

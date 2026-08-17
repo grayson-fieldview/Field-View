@@ -1,6 +1,7 @@
 import {
   projects,
   media,
+  projectAssignments,
   projectFiles,
   mediaAnnotations,
   comments,
@@ -144,7 +145,7 @@ export interface IStorage {
   deleteProject(id: number): Promise<void>;
 
   getMediaByProject(projectId: number): Promise<(Media & { uploadedBy?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }; uploader?: { id: string; firstName: string | null; lastName: string | null } })[]>;
-  getAllMedia(accountId: string): Promise<(Media & { project?: { name: string; color: string | null }; uploadedBy?: { firstName: string | null; lastName: string | null } })[]>;
+  getAllMedia(accountId: string, restrictedToUserId?: string): Promise<(Media & { project?: { name: string; color: string | null }; uploadedBy?: { firstName: string | null; lastName: string | null } })[]>;
   getMedia(id: number): Promise<Media | undefined>;
   createMedia(item: InsertMedia): Promise<Media>;
   createMediaBatch(items: InsertMedia[]): Promise<Media[]>;
@@ -496,7 +497,10 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
-  async getAllMedia(accountId: string) {
+  async getAllMedia(accountId: string, restrictedToUserId?: string) {
+    // restrictedToUserId: pass ONLY for role === "restricted" — limits rows
+    // to projects the user created or is assigned to (same rule as
+    // userCanAccessProject in routes.ts), enforced in SQL.
     const rows = await db
       .select({
         media: media,
@@ -512,7 +516,16 @@ export class DatabaseStorage implements IStorage {
       .from(media)
       .innerJoin(projects, eq(media.projectId, projects.id))
       .leftJoin(users, eq(media.uploadedById, users.id))
-      .where(eq(projects.accountId, accountId))
+      .where(and(
+        eq(projects.accountId, accountId),
+        ...(restrictedToUserId
+          ? [sql`(${projects.createdById} = ${restrictedToUserId} OR EXISTS (
+              SELECT 1 FROM ${projectAssignments}
+              WHERE ${projectAssignments.projectId} = ${media.projectId}
+                AND ${projectAssignments.userId} = ${restrictedToUserId}
+            ))`]
+          : []),
+      ))
       .orderBy(sql`COALESCE(${media.takenAt}, ${media.createdAt}) DESC`);
 
     return rows.map((r) => ({
