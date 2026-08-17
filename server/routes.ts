@@ -192,61 +192,84 @@ async function checkActivationMilestone(accountId: string | null): Promise<void>
   });
 }
 
-async function verifyProjectAccess(projectId: number, accountId: string): Promise<boolean> {
-  const project = await storage.getProject(projectId);
-  return !!project && project.accountId === accountId;
+// User context for the verify* access helpers below. All of them enforce the
+// restricted-role rule (project creator OR project_assignments row — same as
+// userCanAccessProject) in addition to the account check, so every caller
+// inherits it. Non-restricted roles short-circuit: zero extra queries,
+// identical behavior to the old accountId-only helpers.
+type AccessUser = { id: string; accountId: string; role: string };
+
+async function restrictedProjectGate(user: AccessUser, projectId: number, createdById: string | null): Promise<boolean> {
+  if (user.role !== "restricted") return true;
+  if (createdById === user.id) return true;
+  const [a] = await db.select({ userId: projectAssignments.userId })
+    .from(projectAssignments)
+    .where(and(eq(projectAssignments.projectId, projectId), eq(projectAssignments.userId, user.id)))
+    .limit(1);
+  return !!a;
 }
 
-async function verifyMediaAccess(mediaId: number, accountId: string): Promise<boolean> {
-  const item = await db.select({ accountId: projects.accountId })
+async function verifyProjectAccess(projectId: number, user: AccessUser): Promise<boolean> {
+  const project = await storage.getProject(projectId);
+  if (!project || project.accountId !== user.accountId) return false;
+  return restrictedProjectGate(user, project.id, project.createdById);
+}
+
+async function verifyMediaAccess(mediaId: number, user: AccessUser): Promise<boolean> {
+  const item = await db.select({ accountId: projects.accountId, projectId: projects.id, createdById: projects.createdById })
     .from(media)
     .innerJoin(projects, eq(media.projectId, projects.id))
     .where(eq(media.id, mediaId))
     .limit(1);
-  return item.length > 0 && item[0].accountId === accountId;
+  if (item.length === 0 || item[0].accountId !== user.accountId) return false;
+  return restrictedProjectGate(user, item[0].projectId, item[0].createdById);
 }
 
-async function verifyChecklistAccess(checklistId: number, accountId: string): Promise<boolean> {
-  const result = await db.select({ accountId: projects.accountId })
+async function verifyChecklistAccess(checklistId: number, user: AccessUser): Promise<boolean> {
+  const result = await db.select({ accountId: projects.accountId, projectId: projects.id, createdById: projects.createdById })
     .from(checklists)
     .innerJoin(projects, eq(checklists.projectId, projects.id))
     .where(eq(checklists.id, checklistId))
     .limit(1);
-  return result.length > 0 && result[0].accountId === accountId;
+  if (result.length === 0 || result[0].accountId !== user.accountId) return false;
+  return restrictedProjectGate(user, result[0].projectId, result[0].createdById);
 }
 
-async function verifyChecklistSectionAccess(sectionId: number, accountId: string): Promise<{ ok: boolean; checklistId?: number }> {
-  const [row] = await db.select({ accountId: projects.accountId, checklistId: checklists.id })
+async function verifyChecklistSectionAccess(sectionId: number, user: AccessUser): Promise<{ ok: boolean; checklistId?: number }> {
+  const [row] = await db.select({ accountId: projects.accountId, projectId: projects.id, createdById: projects.createdById, checklistId: checklists.id })
     .from(checklistSections)
     .innerJoin(checklists, eq(checklistSections.checklistId, checklists.id))
     .innerJoin(projects, eq(checklists.projectId, projects.id))
     .where(eq(checklistSections.id, sectionId))
     .limit(1);
-  if (!row || row.accountId !== accountId) return { ok: false };
+  if (!row || row.accountId !== user.accountId) return { ok: false };
+  if (!(await restrictedProjectGate(user, row.projectId, row.createdById))) return { ok: false };
   return { ok: true, checklistId: row.checklistId };
 }
 
 // Stage 2 — 4-table chain: option → item → checklist → project → account.
-async function verifyChecklistItemAccess(itemId: number, accountId: string): Promise<{ ok: boolean; projectId?: number; checklistId?: number }> {
-  const [row] = await db.select({ accountId: projects.accountId, projectId: projects.id, checklistId: checklists.id })
+async function verifyChecklistItemAccess(itemId: number, user: AccessUser): Promise<{ ok: boolean; projectId?: number; checklistId?: number }> {
+  const [row] = await db.select({ accountId: projects.accountId, projectId: projects.id, createdById: projects.createdById, checklistId: checklists.id })
     .from(checklistItems)
     .innerJoin(checklists, eq(checklistItems.checklistId, checklists.id))
     .innerJoin(projects, eq(checklists.projectId, projects.id))
     .where(eq(checklistItems.id, itemId))
     .limit(1);
-  if (!row || row.accountId !== accountId) return { ok: false };
+  if (!row || row.accountId !== user.accountId) return { ok: false };
+  if (!(await restrictedProjectGate(user, row.projectId, row.createdById))) return { ok: false };
   return { ok: true, projectId: row.projectId, checklistId: row.checklistId };
 }
 
-async function verifyChecklistOptionAccess(optionId: number, accountId: string): Promise<{ ok: boolean; itemId?: number }> {
-  const [row] = await db.select({ accountId: projects.accountId, itemId: checklistItemOptions.itemId })
+async function verifyChecklistOptionAccess(optionId: number, user: AccessUser): Promise<{ ok: boolean; itemId?: number }> {
+  const [row] = await db.select({ accountId: projects.accountId, projectId: projects.id, createdById: projects.createdById, itemId: checklistItemOptions.itemId })
     .from(checklistItemOptions)
     .innerJoin(checklistItems, eq(checklistItemOptions.itemId, checklistItems.id))
     .innerJoin(checklists, eq(checklistItems.checklistId, checklists.id))
     .innerJoin(projects, eq(checklists.projectId, projects.id))
     .where(eq(checklistItemOptions.id, optionId))
     .limit(1);
-  if (!row || row.accountId !== accountId) return { ok: false };
+  if (!row || row.accountId !== user.accountId) return { ok: false };
+  if (!(await restrictedProjectGate(user, row.projectId, row.createdById))) return { ok: false };
   return { ok: true, itemId: row.itemId };
 }
 
@@ -292,35 +315,38 @@ async function verifyChecklistTemplateOptionAccess(optionId: number, accountId: 
   return { ok: true, itemId: row.itemId };
 }
 
-async function verifyChecklistItemPhotoAccess(joinId: number, accountId: string): Promise<{ ok: boolean; itemId?: number }> {
-  const [row] = await db.select({ accountId: projects.accountId, itemId: checklistItemPhotos.itemId })
+async function verifyChecklistItemPhotoAccess(joinId: number, user: AccessUser): Promise<{ ok: boolean; itemId?: number }> {
+  const [row] = await db.select({ accountId: projects.accountId, projectId: projects.id, createdById: projects.createdById, itemId: checklistItemPhotos.itemId })
     .from(checklistItemPhotos)
     .innerJoin(checklistItems, eq(checklistItemPhotos.itemId, checklistItems.id))
     .innerJoin(checklists, eq(checklistItems.checklistId, checklists.id))
     .innerJoin(projects, eq(checklists.projectId, projects.id))
     .where(eq(checklistItemPhotos.id, joinId))
     .limit(1);
-  if (!row || row.accountId !== accountId) return { ok: false };
+  if (!row || row.accountId !== user.accountId) return { ok: false };
+  if (!(await restrictedProjectGate(user, row.projectId, row.createdById))) return { ok: false };
   return { ok: true, itemId: row.itemId };
 }
 
-async function verifyTaskAccess(taskId: number, accountId: string): Promise<boolean> {
-  const result = await db.select({ accountId: projects.accountId })
+async function verifyTaskAccess(taskId: number, user: AccessUser): Promise<boolean> {
+  const result = await db.select({ accountId: projects.accountId, projectId: projects.id, createdById: projects.createdById })
     .from(tasks)
     .innerJoin(projects, eq(tasks.projectId, projects.id))
     .where(eq(tasks.id, taskId))
     .limit(1);
-  return result.length > 0 && result[0].accountId === accountId;
+  if (result.length === 0 || result[0].accountId !== user.accountId) return false;
+  return restrictedProjectGate(user, result[0].projectId, result[0].createdById);
 }
 
 // Like verifyTaskAccess but also returns the task row (projectId +
 // requiredPhotoCount) so callers that need the task don't query twice.
 // Scopes through projects.accountId, matching the media access pattern.
-async function getTaskWithAccess(taskId: number, accountId: string): Promise<
+async function getTaskWithAccess(taskId: number, user: AccessUser): Promise<
   { ok: false } | { ok: true; task: { id: number; projectId: number; status: string; requiredPhotoCount: number } }
 > {
   const result = await db.select({
       accountId: projects.accountId,
+      createdById: projects.createdById,
       id: tasks.id,
       projectId: tasks.projectId,
       status: tasks.status,
@@ -330,8 +356,9 @@ async function getTaskWithAccess(taskId: number, accountId: string): Promise<
     .innerJoin(projects, eq(tasks.projectId, projects.id))
     .where(eq(tasks.id, taskId))
     .limit(1);
-  if (result.length === 0 || result[0].accountId !== accountId) return { ok: false };
-  const { accountId: _a, ...task } = result[0];
+  if (result.length === 0 || result[0].accountId !== user.accountId) return { ok: false };
+  if (!(await restrictedProjectGate(user, result[0].projectId, result[0].createdById))) return { ok: false };
+  const { accountId: _a, createdById: _c, ...task } = result[0];
   return { ok: true, task };
 }
 
@@ -1446,7 +1473,7 @@ export async function registerRoutes(
     try {
       const mediaId = parseInt(req.params.id as string);
       if (Number.isNaN(mediaId)) return res.status(400).json({ message: "Invalid media id" });
-      if (!(await verifyMediaAccess(mediaId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      if (!(await verifyMediaAccess(mediaId, req.user))) return res.status(403).json({ message: "Access denied" });
       const item = await storage.getMedia(mediaId);
       if (!item) return res.status(404).json({ message: "Media not found" });
       const project = await storage.getProject(item.projectId);
@@ -1468,7 +1495,7 @@ export async function registerRoutes(
   app.patch("/api/media/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const mediaId = parseInt(req.params.id as string);
-      if (!(await verifyMediaAccess(mediaId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      if (!(await verifyMediaAccess(mediaId, req.user))) return res.status(403).json({ message: "Access denied" });
       const { caption, tags } = req.body;
       const updateData: { caption?: string; tags?: string[] } = {};
       if (caption !== undefined) updateData.caption = caption;
@@ -1557,7 +1584,7 @@ export async function registerRoutes(
       if (!Number.isInteger(mediaId) || mediaId <= 0) {
         return res.status(404).json({ message: "Media not found" });
       }
-      if (!(await verifyMediaAccess(mediaId, req.user.accountId))) {
+      if (!(await verifyMediaAccess(mediaId, req.user))) {
         return res.status(404).json({ message: "Media not found" });
       }
 
@@ -1627,7 +1654,7 @@ export async function registerRoutes(
   app.get("/api/media/:id/comments", requireReadAccess, async (req: any, res) => {
     try {
       const mediaId = parseInt(req.params.id as string);
-      if (!(await verifyMediaAccess(mediaId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      if (!(await verifyMediaAccess(mediaId, req.user))) return res.status(403).json({ message: "Access denied" });
       const mediaComments = await storage.getCommentsByMedia(mediaId);
       res.json(mediaComments);
     } catch (error) {
@@ -1638,7 +1665,7 @@ export async function registerRoutes(
   app.post("/api/media/:id/comments", requireWriteAccess, async (req: any, res) => {
     try {
       const mediaId = parseInt(req.params.id as string);
-      if (!(await verifyMediaAccess(mediaId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      if (!(await verifyMediaAccess(mediaId, req.user))) return res.status(403).json({ message: "Access denied" });
       const parsed = insertCommentSchema.safeParse({
         mediaId,
         userId: req.user.id,
@@ -1658,7 +1685,7 @@ export async function registerRoutes(
     try {
       const projectId = parseInt(req.params.projectId as string);
       if (Number.isNaN(projectId)) return res.status(400).json({ message: "Invalid project id" });
-      if (!(await verifyProjectAccess(projectId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      if (!(await verifyProjectAccess(projectId, req.user))) return res.status(403).json({ message: "Access denied" });
       const annotations = await storage.getAnnotationsByProject(projectId);
       res.json(annotations);
     } catch (error) {
@@ -1671,7 +1698,7 @@ export async function registerRoutes(
     try {
       const mediaId = parseInt(req.params.mediaId as string);
       if (Number.isNaN(mediaId)) return res.status(400).json({ message: "Invalid media id" });
-      if (!(await verifyMediaAccess(mediaId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      if (!(await verifyMediaAccess(mediaId, req.user))) return res.status(403).json({ message: "Access denied" });
       const annotations = await storage.getAnnotationsByMedia(mediaId);
       res.json(annotations);
     } catch (error) {
@@ -1683,7 +1710,7 @@ export async function registerRoutes(
     try {
       const mediaId = parseInt(req.params.mediaId as string);
       if (Number.isNaN(mediaId)) return res.status(400).json({ message: "Invalid media id" });
-      if (!(await verifyMediaAccess(mediaId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      if (!(await verifyMediaAccess(mediaId, req.user))) return res.status(403).json({ message: "Access denied" });
       const parsedStrokes = annotationStrokesSchema.safeParse(req.body?.strokes);
       if (!parsedStrokes.success) {
         return res.status(400).json({ message: parsedStrokes.error.message });
@@ -1711,7 +1738,7 @@ export async function registerRoutes(
       const existing = await storage.getAnnotation(id);
       if (!existing) return res.status(404).json({ message: "Annotation not found" });
       if (existing.userId !== req.user.id) return res.status(403).json({ message: "Only the owner can edit this annotation" });
-      if (!(await verifyMediaAccess(existing.mediaId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      if (!(await verifyMediaAccess(existing.mediaId, req.user))) return res.status(403).json({ message: "Access denied" });
       const parsedStrokes = annotationStrokesSchema.safeParse(req.body?.strokes);
       if (!parsedStrokes.success) {
         return res.status(400).json({ message: parsedStrokes.error.message });
@@ -1729,7 +1756,7 @@ export async function registerRoutes(
       const existing = await storage.getAnnotation(id);
       if (!existing) return res.status(404).json({ message: "Annotation not found" });
       if (existing.userId !== req.user.id) return res.status(403).json({ message: "Only the owner can delete this annotation" });
-      if (!(await verifyMediaAccess(existing.mediaId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      if (!(await verifyMediaAccess(existing.mediaId, req.user))) return res.status(403).json({ message: "Access denied" });
       await storage.deleteAnnotation(id);
       res.status(204).end();
     } catch (error) {
@@ -1774,7 +1801,7 @@ export async function registerRoutes(
   app.patch("/api/tasks/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
-      const access = await getTaskWithAccess(id, req.user.accountId);
+      const access = await getTaskWithAccess(id, req.user);
       if (!access.ok) return res.status(403).json({ message: "Access denied" });
       const allowed = ["title", "description", "status", "priority", "assignedToId", "dueDate"];
       const filtered: Record<string, any> = {};
@@ -1855,7 +1882,7 @@ export async function registerRoutes(
     try {
       const taskId = parseInt(req.params.id as string);
       if (!Number.isInteger(taskId) || taskId <= 0) return res.status(400).json({ message: "Invalid task id" });
-      const access = await getTaskWithAccess(taskId, req.user.accountId);
+      const access = await getTaskWithAccess(taskId, req.user);
       if (!access.ok) return res.status(403).json({ message: "Access denied" });
       const photos = await storage.getTaskPhotos(taskId);
       // Presign the nested media URLs (same treatment as project media).
@@ -1873,7 +1900,7 @@ export async function registerRoutes(
     try {
       const taskId = parseInt(req.params.id as string);
       if (!Number.isInteger(taskId) || taskId <= 0) return res.status(400).json({ message: "Invalid task id" });
-      const access = await getTaskWithAccess(taskId, req.user.accountId);
+      const access = await getTaskWithAccess(taskId, req.user);
       if (!access.ok) return res.status(403).json({ message: "Access denied" });
       const mediaIds = req.body?.mediaIds;
       if (!Array.isArray(mediaIds) || mediaIds.length === 0 || !mediaIds.every((n) => Number.isInteger(n) && n > 0)) {
@@ -1906,7 +1933,7 @@ export async function registerRoutes(
       const row = await storage.getTaskPhoto(id);
       if (!row) return res.status(404).json({ message: "Not found" });
       // Account scoping through the task's project.
-      if (!(await verifyTaskAccess(row.taskId, req.user.accountId))) {
+      if (!(await verifyTaskAccess(row.taskId, req.user))) {
         return res.status(403).json({ message: "Access denied" });
       }
       // Detaching from a completed task is allowed and does NOT reopen it —
@@ -1925,7 +1952,7 @@ export async function registerRoutes(
       // Per spec: collapse "not in account" and "not found" both to 404 so we
       // don't leak cross-account task IDs. (PATCH above returns 403 for the
       // access-denied case — DELETE intentionally diverges per spec request.)
-      if (!(await verifyTaskAccess(id, req.user.accountId))) {
+      if (!(await verifyTaskAccess(id, req.user))) {
         return res.status(404).json({ message: "Task not found" });
       }
       const deleted = await storage.deleteTask(id, req.user.accountId);
@@ -1959,7 +1986,7 @@ export async function registerRoutes(
     try {
       const projectId = parseInt(req.params.id as string);
       if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
-      if (!(await verifyProjectAccess(projectId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      if (!(await verifyProjectAccess(projectId, req.user))) return res.status(403).json({ message: "Access denied" });
 
       // Stage 3 — server-driven template instantiation. Single POST with a
       // templateId clones every section/item/option in one transaction,
@@ -2088,7 +2115,7 @@ export async function registerRoutes(
   app.patch("/api/checklists/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
-      if (!(await verifyChecklistAccess(id, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      if (!(await verifyChecklistAccess(id, req.user))) return res.status(403).json({ message: "Access denied" });
       const allowed = ["title", "description", "status", "assignedToId", "dueDate"];
       const filtered: Record<string, any> = {};
       for (const key of allowed) {
@@ -2105,7 +2132,7 @@ export async function registerRoutes(
   app.delete("/api/checklists/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
-      if (!(await verifyChecklistAccess(id, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      if (!(await verifyChecklistAccess(id, req.user))) return res.status(403).json({ message: "Access denied" });
       await storage.deleteChecklist(id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -2116,7 +2143,7 @@ export async function registerRoutes(
   app.get("/api/checklists/:id/items", requireReadAccess, async (req: any, res) => {
     try {
       const checklistId = parseInt(req.params.id as string);
-      if (!(await verifyChecklistAccess(checklistId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      if (!(await verifyChecklistAccess(checklistId, req.user))) return res.status(403).json({ message: "Access denied" });
       const items = await storage.getChecklistItems(checklistId);
       res.json(items);
     } catch (error) {
@@ -2143,7 +2170,7 @@ export async function registerRoutes(
   app.post("/api/checklists/:id/items", requireWriteAccess, async (req: any, res) => {
     try {
       const checklistId = parseInt(req.params.id as string);
-      if (!(await verifyChecklistAccess(checklistId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      if (!(await verifyChecklistAccess(checklistId, req.user))) return res.status(403).json({ message: "Access denied" });
       if ("sectionId" in req.body) {
         const check = await assertSectionInChecklist(req.body.sectionId, checklistId);
         if (!check.ok) return res.status(400).json({ message: check.reason });
@@ -2174,7 +2201,7 @@ export async function registerRoutes(
       const id = parseInt(req.params.id as string);
       const item = await db.select({ checklistId: sql<number>`checklist_items.checklist_id` }).from(sql`checklist_items`).where(sql`checklist_items.id = ${id}`).limit(1);
       if (item.length === 0) return res.status(404).json({ message: "Item not found" });
-      if (!(await verifyChecklistAccess(item[0].checklistId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      if (!(await verifyChecklistAccess(item[0].checklistId, req.user))) return res.status(403).json({ message: "Access denied" });
       // Re-link guard: a PATCH that moves the item to a different section must
       // keep it inside the same checklist. Null is allowed (move to "Untitled").
       if ("sectionId" in req.body) {
@@ -2260,7 +2287,7 @@ export async function registerRoutes(
   app.get("/api/checklists/:id/sections", requireReadAccess, async (req: any, res) => {
     try {
       const checklistId = parseInt(req.params.id as string);
-      if (!(await verifyChecklistAccess(checklistId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      if (!(await verifyChecklistAccess(checklistId, req.user))) return res.status(403).json({ message: "Access denied" });
       res.json(await storage.getChecklistSections(checklistId));
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch sections" });
@@ -2270,7 +2297,7 @@ export async function registerRoutes(
   app.post("/api/checklists/:id/sections", requireWriteAccess, async (req: any, res) => {
     try {
       const checklistId = parseInt(req.params.id as string);
-      if (!(await verifyChecklistAccess(checklistId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      if (!(await verifyChecklistAccess(checklistId, req.user))) return res.status(403).json({ message: "Access denied" });
       const parsed = insertChecklistSectionSchema.safeParse({
         checklistId,
         title: req.body.title,
@@ -2287,7 +2314,7 @@ export async function registerRoutes(
   app.patch("/api/checklist-sections/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
-      const access = await verifyChecklistSectionAccess(id, req.user.accountId);
+      const access = await verifyChecklistSectionAccess(id, req.user);
       if (!access.ok) return res.status(403).json({ message: "Access denied" });
       const allowed = ["title", "sortOrder"];
       const filtered: Record<string, any> = {};
@@ -2305,7 +2332,7 @@ export async function registerRoutes(
   app.delete("/api/checklist-sections/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id as string);
-      const access = await verifyChecklistSectionAccess(id, req.user.accountId);
+      const access = await verifyChecklistSectionAccess(id, req.user);
       if (!access.ok) return res.status(403).json({ message: "Access denied" });
       // FK ON DELETE SET NULL drops items into the "Untitled" virtual group.
       await storage.deleteChecklistSection(id);
@@ -2318,7 +2345,7 @@ export async function registerRoutes(
   app.post("/api/checklists/:id/sections/reorder", requireWriteAccess, async (req: any, res) => {
     try {
       const checklistId = parseInt(req.params.id as string);
-      if (!(await verifyChecklistAccess(checklistId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      if (!(await verifyChecklistAccess(checklistId, req.user))) return res.status(403).json({ message: "Access denied" });
       const orderedIds = req.body.orderedIds;
       if (!Array.isArray(orderedIds) || !orderedIds.every((n) => Number.isInteger(n))) {
         return res.status(400).json({ message: "orderedIds must be an array of integers" });
@@ -2336,7 +2363,7 @@ export async function registerRoutes(
       const id = parseInt(req.params.id as string);
       const item = await db.select({ checklistId: sql<number>`checklist_items.checklist_id` }).from(sql`checklist_items`).where(sql`checklist_items.id = ${id}`).limit(1);
       if (item.length === 0) return res.status(404).json({ message: "Item not found" });
-      if (!(await verifyChecklistAccess(item[0].checklistId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      if (!(await verifyChecklistAccess(item[0].checklistId, req.user))) return res.status(403).json({ message: "Access denied" });
       await storage.deleteChecklistItem(id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -2349,7 +2376,7 @@ export async function registerRoutes(
     try {
       const itemId = parseInt(req.params.id as string);
       if (!Number.isInteger(itemId) || itemId <= 0) return res.status(400).json({ message: "Invalid item id" });
-      const access = await verifyChecklistItemAccess(itemId, req.user.accountId);
+      const access = await verifyChecklistItemAccess(itemId, req.user);
       if (!access.ok) return res.status(403).json({ message: "Access denied" });
       const options = await storage.getChecklistItemOptions(itemId);
       res.json(options);
@@ -2362,7 +2389,7 @@ export async function registerRoutes(
     try {
       const itemId = parseInt(req.params.id as string);
       if (!Number.isInteger(itemId) || itemId <= 0) return res.status(400).json({ message: "Invalid item id" });
-      const access = await verifyChecklistItemAccess(itemId, req.user.accountId);
+      const access = await verifyChecklistItemAccess(itemId, req.user);
       if (!access.ok) return res.status(403).json({ message: "Access denied" });
       // Force the URL itemId — never trust body's itemId.
       const parsed = insertChecklistItemOptionSchema.safeParse({ ...req.body, itemId });
@@ -2378,7 +2405,7 @@ export async function registerRoutes(
     try {
       const id = parseInt(req.params.id as string);
       if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ message: "Invalid id" });
-      const access = await verifyChecklistOptionAccess(id, req.user.accountId);
+      const access = await verifyChecklistOptionAccess(id, req.user);
       if (!access.ok) return res.status(403).json({ message: "Access denied" });
       const optionPatchSchema = z.object({
         label: z.string().min(1).max(500).optional(),
@@ -2398,7 +2425,7 @@ export async function registerRoutes(
     try {
       const id = parseInt(req.params.id as string);
       if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ message: "Invalid id" });
-      const access = await verifyChecklistOptionAccess(id, req.user.accountId);
+      const access = await verifyChecklistOptionAccess(id, req.user);
       if (!access.ok) return res.status(403).json({ message: "Access denied" });
       // Storage handles FK SET NULL on parent + recompute completion.
       await storage.deleteChecklistItemOption(id);
@@ -2412,7 +2439,7 @@ export async function registerRoutes(
     try {
       const itemId = parseInt(req.params.id as string);
       if (!Number.isInteger(itemId) || itemId <= 0) return res.status(400).json({ message: "Invalid item id" });
-      const access = await verifyChecklistItemAccess(itemId, req.user.accountId);
+      const access = await verifyChecklistItemAccess(itemId, req.user);
       if (!access.ok) return res.status(403).json({ message: "Access denied" });
       const orderedIds = req.body?.orderedIds;
       if (!Array.isArray(orderedIds) || !orderedIds.every((n) => Number.isInteger(n) && n > 0)) {
@@ -2431,7 +2458,7 @@ export async function registerRoutes(
     try {
       const itemId = parseInt(req.params.id as string);
       if (!Number.isInteger(itemId) || itemId <= 0) return res.status(400).json({ message: "Invalid item id" });
-      const access = await verifyChecklistItemAccess(itemId, req.user.accountId);
+      const access = await verifyChecklistItemAccess(itemId, req.user);
       if (!access.ok) return res.status(403).json({ message: "Access denied" });
       const photos = await storage.getChecklistItemPhotos(itemId);
       res.json(photos);
@@ -2444,7 +2471,7 @@ export async function registerRoutes(
     try {
       const itemId = parseInt(req.params.id as string);
       if (!Number.isInteger(itemId) || itemId <= 0) return res.status(400).json({ message: "Invalid item id" });
-      const access = await verifyChecklistItemAccess(itemId, req.user.accountId);
+      const access = await verifyChecklistItemAccess(itemId, req.user);
       if (!access.ok) return res.status(403).json({ message: "Access denied" });
       const mediaIds = req.body?.mediaIds;
       if (!Array.isArray(mediaIds) || mediaIds.length === 0 || !mediaIds.every((n) => Number.isInteger(n) && n > 0)) {
@@ -2469,7 +2496,7 @@ export async function registerRoutes(
     try {
       const id = parseInt(req.params.id as string);
       if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ message: "Invalid id" });
-      const access = await verifyChecklistItemPhotoAccess(id, req.user.accountId);
+      const access = await verifyChecklistItemPhotoAccess(id, req.user);
       if (!access.ok) return res.status(403).json({ message: "Access denied" });
       await storage.detachChecklistItemPhoto(id);
       res.json({ message: "Detached" });
@@ -2482,7 +2509,7 @@ export async function registerRoutes(
     try {
       const itemId = parseInt(req.params.id as string);
       if (!Number.isInteger(itemId) || itemId <= 0) return res.status(400).json({ message: "Invalid item id" });
-      const access = await verifyChecklistItemAccess(itemId, req.user.accountId);
+      const access = await verifyChecklistItemAccess(itemId, req.user);
       if (!access.ok) return res.status(403).json({ message: "Access denied" });
       const orderedIds = req.body?.orderedIds;
       if (!Array.isArray(orderedIds) || !orderedIds.every((n) => Number.isInteger(n) && n > 0)) {
@@ -4901,7 +4928,7 @@ export async function registerRoutes(
     try {
       const projectId = parseInt(req.params.id);
       if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
-      if (!(await verifyProjectAccess(projectId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      if (!(await verifyProjectAccess(projectId, req.user))) return res.status(403).json({ message: "Access denied" });
       const assignments = await db.select({
         id: projectAssignments.id,
         userId: projectAssignments.userId,
@@ -4925,7 +4952,7 @@ export async function registerRoutes(
       const currentUser = req.user;
       const projectId = parseInt(req.params.id);
       if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
-      if (!(await verifyProjectAccess(projectId, currentUser.accountId))) return res.status(403).json({ message: "Access denied" });
+      if (!(await verifyProjectAccess(projectId, currentUser))) return res.status(403).json({ message: "Access denied" });
       const { userId } = req.body;
       if (!userId) return res.status(400).json({ message: "userId is required" });
       const targetUser = await authStorage.getUser(userId);
@@ -4951,7 +4978,7 @@ export async function registerRoutes(
       const currentUser = req.user;
       const projectId = parseInt(req.params.id);
       if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
-      if (!(await verifyProjectAccess(projectId, currentUser.accountId))) return res.status(403).json({ message: "Access denied" });
+      if (!(await verifyProjectAccess(projectId, currentUser))) return res.status(403).json({ message: "Access denied" });
       await db.delete(projectAssignments).where(
         and(eq(projectAssignments.projectId, projectId), eq(projectAssignments.userId, req.params.userId))
       );
@@ -6261,7 +6288,7 @@ export async function registerRoutes(
       if (!projectId || !Array.isArray(mediaIds) || mediaIds.length === 0) {
         return res.status(400).json({ message: "projectId and mediaIds are required" });
       }
-      if (!(await verifyProjectAccess(projectId, req.user.accountId))) return res.status(403).json({ message: "Access denied" });
+      if (!(await verifyProjectAccess(projectId, req.user))) return res.status(403).json({ message: "Access denied" });
       const token = crypto.randomBytes(12).toString("base64url");
       const gallery = await storage.createSharedGallery({
         token,
@@ -6283,7 +6310,7 @@ export async function registerRoutes(
     try {
       const projectId = parseInt(req.params.id as string);
       if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
-      if (!(await verifyProjectAccess(projectId, req.user.accountId))) {
+      if (!(await verifyProjectAccess(projectId, req.user))) {
         return res.status(403).json({ message: "Access denied" });
       }
       const galleries = await storage.getSharedGalleriesByProject(projectId);
@@ -6309,7 +6336,7 @@ export async function registerRoutes(
       if (!token) return res.status(404).json({ message: "Gallery not found" });
       const gallery = await storage.getSharedGalleryByToken(token);
       if (!gallery) return res.status(404).json({ message: "Gallery not found" });
-      if (!(await verifyProjectAccess(gallery.projectId, req.user.accountId))) {
+      if (!(await verifyProjectAccess(gallery.projectId, req.user))) {
         return res.status(403).json({ message: "Access denied" });
       }
       await storage.deleteSharedGallery(token);
