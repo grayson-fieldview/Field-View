@@ -202,6 +202,61 @@ const reportTypeLabels: Record<string, string> = {
 
 type DetailTab = "photos" | "tasks" | "files" | "checklists" | "reports" | "daily-log";
 
+// Per-project override for the report-PDF timestamp/address overlay.
+// null = inherit account setting; true/false = explicit override.
+// Server enforces admin/manager on this field; UI hidden for others.
+function ProjectOverlayControl({ project }: { project: Project }) {
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const canEdit = user?.role === "admin" || user?.role === "manager";
+
+  const { data: accountSettings } = useQuery<{ photoOverlayEnabled: boolean }>({
+    queryKey: ["/api/account/settings"],
+    enabled: canEdit,
+  });
+
+  const mutation = useMutation({
+    mutationFn: async (value: boolean | null) => {
+      const res = await apiRequest("PATCH", `/api/projects/${project.id}`, { photoOverlayEnabled: value });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", project.id.toString()] });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects"], exact: true });
+      toast({ title: "Photo overlay setting updated" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  if (!canEdit) return null;
+
+  const override = (project as any).photoOverlayEnabled as boolean | null | undefined;
+  const value = override === true ? "on" : override === false ? "off" : "inherit";
+  const inheritLabel = `Inherit (${accountSettings?.photoOverlayEnabled ? "On" : "Off"})`;
+
+  return (
+    <div className="flex items-center gap-1.5" data-testid="control-photo-overlay">
+      <span className="text-xs text-muted-foreground whitespace-nowrap">PDF overlay:</span>
+      <Select
+        value={value}
+        disabled={mutation.isPending}
+        onValueChange={(v) => mutation.mutate(v === "on" ? true : v === "off" ? false : null)}
+      >
+        <SelectTrigger className="h-7 w-[110px] text-xs" data-testid="select-photo-overlay">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="inherit">{inheritLabel}</SelectItem>
+          <SelectItem value="on">On</SelectItem>
+          <SelectItem value="off">Off</SelectItem>
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
 function ProjectTagsInline({ project }: { project: Project }) {
   const { toast } = useToast();
   const [editing, setEditing] = useState(false);
@@ -1307,6 +1362,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                     </span>
                   )}
                   <ProjectTagsInline project={project} />
+                  <ProjectOverlayControl project={project} />
                 </div>
               </div>
 

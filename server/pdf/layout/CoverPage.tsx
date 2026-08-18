@@ -34,6 +34,16 @@ export function CoverPage({ data, images }: { data: CoverPageData; images: Map<s
       {data.toggles.showCoverPhoto && coverBuf ? (
         <View style={styles.coverPhotoBox}>
           <Image style={styles.coverPhoto} src={coverBuf} />
+          {data.overlay && (data.overlay.timestamp || data.overlay.address) ? (
+            <View style={styles.photoOverlayStrip}>
+              {data.overlay.timestamp ? (
+                <Text style={styles.coverOverlayText}>{data.overlay.timestamp}</Text>
+              ) : null}
+              {data.overlay.address ? (
+                <Text style={styles.coverOverlayText}>{data.overlay.address}</Text>
+              ) : null}
+            </View>
+          ) : null}
         </View>
       ) : null}
 

@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Separator } from "@/components/ui/separator";
 import { Camera, Loader2 } from "lucide-react";
 import type { AccountSettings, PhotoAspectRatio } from "@shared/schema";
 
@@ -38,6 +40,21 @@ export function AccountSettingsCard() {
       queryClient.setQueryData(["/api/account/settings"], next);
       queryClient.invalidateQueries({ queryKey: ["/api/account/settings"] });
       toast({ title: "Default aspect ratio updated" });
+    },
+    onError: (e: any) => {
+      toast({ title: "Couldn't save", description: e?.message ?? "Please try again", variant: "destructive" });
+    },
+  });
+
+  const overlayMutation = useMutation({
+    mutationFn: async (value: boolean) => {
+      const res = await apiRequest("PATCH", "/api/account/settings", { photoOverlayEnabled: value });
+      return (await res.json()) as AccountSettings;
+    },
+    onSuccess: (next) => {
+      queryClient.setQueryData(["/api/account/settings"], next);
+      queryClient.invalidateQueries({ queryKey: ["/api/account/settings"] });
+      toast({ title: next.photoOverlayEnabled ? "Photo overlay enabled" : "Photo overlay disabled" });
     },
     onError: (e: any) => {
       toast({ title: "Couldn't save", description: e?.message ?? "Please try again", variant: "destructive" });
@@ -108,6 +125,24 @@ export function AccountSettingsCard() {
               {mutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Save
             </Button>
+          </div>
+
+          <Separator className="my-5" />
+
+          <div className="flex items-center justify-between gap-4" data-testid="row-photo-overlay">
+            <div>
+              <p className="text-sm font-medium">Timestamp &amp; address on report photos</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Adds a small date/time and project address strip to photos in report PDFs.
+                Original photos are never modified. Projects can override this individually.
+              </p>
+            </div>
+            <Switch
+              checked={data?.photoOverlayEnabled ?? false}
+              disabled={overlayMutation.isPending}
+              onCheckedChange={(v) => overlayMutation.mutate(v)}
+              data-testid="switch-photo-overlay"
+            />
           </div>
         </>
       )}

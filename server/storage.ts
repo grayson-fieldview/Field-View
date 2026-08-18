@@ -228,8 +228,8 @@ export interface IStorage {
   getReportTree(id: number): Promise<(Report & { sections: (ReportSection & { photos: (ReportSectionPhoto & { media: Media })[] })[] }) | undefined>;
   getReportForPdf(id: number): Promise<{
     report: Report;
-    project: { id: number; name: string; address: string | null; coverPhotoId: number | null };
-    account: { id: string; name: string; companyLogoUrl: string | null; companyLegalName: string | null; companyAddress: string | null };
+    project: { id: number; name: string; address: string | null; coverPhotoId: number | null; latitude: number | null; longitude: number | null; photoOverlayEnabled: boolean | null };
+    account: { id: string; name: string; companyLogoUrl: string | null; companyLegalName: string | null; companyAddress: string | null; photoOverlayEnabled: boolean };
     creator: { firstName: string | null; lastName: string | null } | null;
     sections: (ReportSection & { photos: (ReportSectionPhoto & { media: Media })[] })[];
     coverPhoto: Media | null;
@@ -1582,7 +1582,7 @@ export class DatabaseStorage implements IStorage {
     const { sections, ...report } = tree;
 
     const [project] = await db
-      .select({ id: projects.id, name: projects.name, address: projects.address, coverPhotoId: projects.coverPhotoId, latitude: projects.latitude, longitude: projects.longitude })
+      .select({ id: projects.id, name: projects.name, address: projects.address, coverPhotoId: projects.coverPhotoId, latitude: projects.latitude, longitude: projects.longitude, photoOverlayEnabled: projects.photoOverlayEnabled })
       .from(projects)
       .where(eq(projects.id, report.projectId));
     if (!project) return undefined;
@@ -1594,6 +1594,7 @@ export class DatabaseStorage implements IStorage {
         companyLogoUrl: accounts.companyLogoUrl,
         companyLegalName: accounts.companyLegalName,
         companyAddress: accounts.companyAddress,
+        photoOverlayEnabled: accounts.photoOverlayEnabled,
       })
       .from(accounts)
       .where(eq(accounts.id, report.accountId));
@@ -1665,17 +1666,26 @@ export class DatabaseStorage implements IStorage {
   // already speak. These two helpers are the ONLY translation boundary.
   async getAccountSettings(accountId: string): Promise<AccountSettings> {
     const [row] = await db
-      .select({ defaultPhotoAspectRatio: accounts.defaultPhotoAspectRatio })
+      .select({
+        defaultPhotoAspectRatio: accounts.defaultPhotoAspectRatio,
+        photoOverlayEnabled: accounts.photoOverlayEnabled,
+      })
       .from(accounts)
       .where(eq(accounts.id, accountId))
       .limit(1);
     if (!row) throw new Error(`Account ${accountId} not found`);
-    return { defaultPhotoAspectRatio: dbToWireRatio(row.defaultPhotoAspectRatio) };
+    return {
+      defaultPhotoAspectRatio: dbToWireRatio(row.defaultPhotoAspectRatio),
+      photoOverlayEnabled: row.photoOverlayEnabled,
+    };
   }
   async updateAccountSettings(accountId: string, patch: AccountSettingsPatch): Promise<AccountSettings> {
-    const set: { defaultPhotoAspectRatio?: DbAspectRatio } = {};
+    const set: { defaultPhotoAspectRatio?: DbAspectRatio; photoOverlayEnabled?: boolean } = {};
     if (patch.defaultPhotoAspectRatio !== undefined) {
       set.defaultPhotoAspectRatio = wireToDbRatio(patch.defaultPhotoAspectRatio);
+    }
+    if (patch.photoOverlayEnabled !== undefined) {
+      set.photoOverlayEnabled = patch.photoOverlayEnabled;
     }
     // Empty patch ({} after .strict() validation) → no-op UPDATE would be
     // wasteful; just read and return current state.
@@ -1685,9 +1695,15 @@ export class DatabaseStorage implements IStorage {
       .update(accounts)
       .set(set)
       .where(eq(accounts.id, accountId))
-      .returning({ defaultPhotoAspectRatio: accounts.defaultPhotoAspectRatio });
+      .returning({
+        defaultPhotoAspectRatio: accounts.defaultPhotoAspectRatio,
+        photoOverlayEnabled: accounts.photoOverlayEnabled,
+      });
     if (!updated) throw new Error(`Account ${accountId} not found`);
-    return { defaultPhotoAspectRatio: dbToWireRatio(updated.defaultPhotoAspectRatio) };
+    return {
+      defaultPhotoAspectRatio: dbToWireRatio(updated.defaultPhotoAspectRatio),
+      photoOverlayEnabled: updated.photoOverlayEnabled,
+    };
   }
 
   async createSharedGallery(gallery: InsertSharedGallery): Promise<SharedGallery> {

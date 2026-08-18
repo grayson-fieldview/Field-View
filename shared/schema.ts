@@ -51,6 +51,9 @@ export const projects = pgTable("projects", {
   color: text("color").default("#3B82F6"),
   tags: text("tags").array().default(sql`'{}'::text[]`),
   coverPhotoId: integer("cover_photo_id"),
+  // NULL = inherit accounts.photo_overlay_enabled; true/false = explicit
+  // override. Resolved via shared/photoOverlay.ts resolvePhotoOverlay().
+  photoOverlayEnabled: boolean("photo_overlay_enabled"),
   shareToken: varchar("share_token", { length: 32 }),
   accountId: varchar("account_id").references(() => accounts.id),
   createdById: varchar("created_by_id").references(() => users.id),
@@ -689,10 +692,12 @@ export type PendingGeofenceEnter = typeof pendingGeofenceEnters.$inferSelect;
 export type PhotoAspectRatio = "4:3" | "1:1" | "16:9";
 export type AccountSettings = {
   defaultPhotoAspectRatio: PhotoAspectRatio;
+  photoOverlayEnabled: boolean;
 };
 export const photoAspectRatioWireSchema = z.enum(["4:3", "1:1", "16:9"]);
 export const accountSettingsPatchSchema = z.object({
   defaultPhotoAspectRatio: photoAspectRatioWireSchema.optional(),
+  photoOverlayEnabled: z.boolean().optional(),
 }).strict();
 export type AccountSettingsPatch = z.infer<typeof accountSettingsPatchSchema>;
 

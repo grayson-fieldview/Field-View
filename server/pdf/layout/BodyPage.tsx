@@ -3,12 +3,13 @@ import { styles } from "./styles";
 import { Header } from "./Header";
 import { Footer } from "./Footer";
 import { PhotoCell } from "./PhotoCell";
-import type { BodyChunk } from "../types";
+import type { BodyChunk, OverlayConfig } from "../types";
 
 export function BodyPage({
   chunk,
   reportTitle,
   dateText,
+  overlay,
   companyName,
   logoBytes,
   images,
@@ -16,6 +17,7 @@ export function BodyPage({
   chunk: BodyChunk;
   reportTitle: string;
   dateText: string;
+  overlay: OverlayConfig;
   companyName: string;
   logoBytes: Buffer;
   images: Map<string, Buffer>;
@@ -42,6 +44,11 @@ export function BodyPage({
               caption={p.caption}
               description={p.description}
               timestamp={p.timestamp ?? null}
+              overlay={
+                overlay.enabled
+                  ? { timestamp: p.timestamp ?? null, address: overlay.projectAddress }
+                  : null
+              }
             />
           ))}
         </View>

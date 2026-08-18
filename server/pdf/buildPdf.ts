@@ -4,7 +4,7 @@ import { fetchAndResize } from "./imagePipeline";
 import { ReportDocument } from "./layout/Document";
 import { FIELDVIEW_LOGO_BYTES } from "./assets/logoBase64";
 import { resolvePhotoTimeZone, formatPhotoTimestamp } from "../lib/photoTime";
-import type { BodyChunk, BodyPhoto, CoverPageData, CoverToggles } from "./types";
+import type { BodyChunk, BodyPhoto, CoverPageData, CoverToggles, OverlayConfig } from "./types";
 
 const LOGO_BYTES = FIELDVIEW_LOGO_BYTES;
 
@@ -41,7 +41,11 @@ export type PdfData = {
   projectLongitude: number | null;
   sections: { id: number; title: string; summary: string | null; photos: BodyPhoto[] }[];
   coverPhotoUrl: string | null;
+  /** takenAt ?? createdAt of the cover photo — for its overlay strip. */
+  coverPhotoTakenAt: Date | string | null;
   totalPhotos: number;
+  /** Timestamp/address overlay (resolved account/project setting). */
+  overlay: OverlayConfig;
 };
 
 export async function buildReportPdfStream(data: PdfData): Promise<NodeJS.ReadableStream> {
@@ -118,6 +122,19 @@ export async function buildReportPdfStream(data: PdfData): Promise<NodeJS.Readab
   const createdAt = data.report.createdAt ? new Date(data.report.createdAt) : new Date();
   const dateText = formatDate(createdAt);
 
+  const coverOverlay =
+    data.overlay.enabled && coverPhotoKey
+      ? {
+          timestamp: data.coverPhotoTakenAt
+            ? formatPhotoTimestamp(
+                data.coverPhotoTakenAt,
+                resolvePhotoTimeZone(null, null, data.projectLatitude, data.projectLongitude),
+              )
+            : null,
+          address: data.overlay.projectAddress,
+        }
+      : null;
+
   const cover: CoverPageData = {
     title: data.report.title,
     description: data.report.description,
@@ -129,6 +146,7 @@ export async function buildReportPdfStream(data: PdfData): Promise<NodeJS.Readab
     creatorName,
     photoCount: data.totalPhotos,
     dateText,
+    overlay: coverOverlay,
   };
 
   const stream = await renderToStream(
@@ -137,6 +155,7 @@ export async function buildReportPdfStream(data: PdfData): Promise<NodeJS.Readab
       bodyChunks,
       reportTitle: data.report.title,
       dateText,
+      overlay: data.overlay,
       companyName: companyDisplayName,
       logoBytes: LOGO_BYTES,
       images,

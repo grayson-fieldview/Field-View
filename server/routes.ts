@@ -16,6 +16,7 @@ import { formatLocalTime } from "./lib/geo";
 import { users, invitations, accounts, assignedProjectIdsSchema } from "@shared/models/auth";
 import { MAX_UPLOAD_BATCH } from "@shared/constants";
 import { isValidTagColor } from "@shared/tagColors";
+import { resolvePhotoOverlay } from "@shared/photoOverlay";
 import { computeSeatUsage } from "./lib/seats";
 import { resolvePhotoTimeZone, formatPhotoTimestamp } from "./lib/photoTime";
 import { db } from "./db";
@@ -106,7 +107,12 @@ async function streamReportPdfById(id: number, res: any): Promise<void> {
       })),
     })),
     coverPhotoUrl: data.coverPhoto?.url ?? null,
+    coverPhotoTakenAt: data.coverPhoto ? (data.coverPhoto.takenAt ?? data.coverPhoto.createdAt) : null,
     totalPhotos: data.totalPhotos,
+    overlay: {
+      enabled: resolvePhotoOverlay(data.project.photoOverlayEnabled, data.account.photoOverlayEnabled),
+      projectAddress: data.project.address,
+    },
   });
   const slug =
     (data.report.title || "")
@@ -654,7 +660,20 @@ export async function registerRoutes(
           return res.status(403).json({ message: "Access denied" });
         }
       }
-      const allowed = ["name", "description", "status", "address", "latitude", "longitude", "color", "coverPhotoId", "tags"];
+      // photoOverlayEnabled (per-project overlay override) is admin/manager
+      // only — same per-field gating decision as showcase settings: if the
+      // field is present and the caller lacks the role, reject the whole
+      // request rather than silently dropping it.
+      if ("photoOverlayEnabled" in req.body) {
+        if (!isManagerRole(req.user.role)) {
+          return res.status(403).json({ message: "Only admins and managers can change the photo overlay setting" });
+        }
+        const v = req.body.photoOverlayEnabled;
+        if (v !== null && typeof v !== "boolean") {
+          return res.status(400).json({ message: "photoOverlayEnabled must be true, false, or null (inherit account setting)" });
+        }
+      }
+      const allowed = ["name", "description", "status", "address", "latitude", "longitude", "color", "coverPhotoId", "tags", "photoOverlayEnabled"];
       const filtered: Record<string, any> = {};
       for (const key of allowed) {
         if (key in req.body) filtered[key] = req.body[key];

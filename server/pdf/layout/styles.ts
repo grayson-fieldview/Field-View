@@ -67,6 +67,7 @@ export const styles = StyleSheet.create({
     width: "100%",
     height: 252,
     marginTop: 8,
+    position: "relative",
   },
   coverPhoto: { width: "100%", height: "100%", objectFit: "cover" },
   coverMeta: { marginTop: "auto", paddingTop: 16 },
@@ -127,6 +128,7 @@ export const styles = StyleSheet.create({
     width: "100%",
     height: 168,
     marginBottom: 6,
+    position: "relative",
   },
   cellPhoto: { width: "100%", height: "100%", objectFit: "cover" },
   cellPhotoMissing: {
@@ -137,4 +139,17 @@ export const styles = StyleSheet.create({
   cellCaption: { fontSize: 10, fontFamily: "Helvetica-Bold", color: INK, marginBottom: 2 },
   cellDescription: { fontSize: 9, color: BODY, lineHeight: 1.4 },
   cellTimestamp: { fontSize: 8, color: MUTED, marginTop: 2 },
+
+  // ---- Burned-in timestamp/address strip (photo overlay setting) ----
+  photoOverlayStrip: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: "rgba(0, 0, 0, 0.55)",
+    paddingVertical: 3,
+    paddingHorizontal: 5,
+  },
+  photoOverlayText: { fontSize: 6.5, color: "#FFFFFF", lineHeight: 1.35 },
+  coverOverlayText: { fontSize: 8, color: "#FFFFFF", lineHeight: 1.35 },
 });

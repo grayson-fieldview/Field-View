@@ -1,13 +1,14 @@
 import { Document } from "@react-pdf/renderer";
 import { CoverPage } from "./CoverPage";
 import { BodyPage } from "./BodyPage";
-import type { CoverPageData, BodyChunk } from "../types";
+import type { CoverPageData, BodyChunk, OverlayConfig } from "../types";
 
 export function ReportDocument({
   cover,
   bodyChunks,
   reportTitle,
   dateText,
+  overlay,
   companyName,
   logoBytes,
   images,
@@ -16,6 +17,7 @@ export function ReportDocument({
   bodyChunks: BodyChunk[];
   reportTitle: string;
   dateText: string;
+  overlay: OverlayConfig;
   companyName: string;
   logoBytes: Buffer;
   images: Map<string, Buffer>;
@@ -29,6 +31,7 @@ export function ReportDocument({
           chunk={chunk}
           reportTitle={reportTitle}
           dateText={dateText}
+          overlay={overlay}
           companyName={companyName}
           logoBytes={logoBytes}
           images={images}

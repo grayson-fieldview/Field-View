@@ -61,6 +61,9 @@ export const accounts = pgTable("accounts", {
   companyLegalName: text("company_legal_name"),
   companyAddress: text("company_address"),
   defaultPhotoAspectRatio: photoAspectRatioEnum("default_photo_aspect_ratio").notNull().default("4_3"),
+  // Burn timestamp/address into report PDF photos (share-time overlay,
+  // originals untouched). Per-project override: projects.photo_overlay_enabled.
+  photoOverlayEnabled: boolean("photo_overlay_enabled").notNull().default(false),
   deletedAt: timestamp("deleted_at"),
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => [
