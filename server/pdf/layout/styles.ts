@@ -140,16 +140,36 @@ export const styles = StyleSheet.create({
   cellDescription: { fontSize: 9, color: BODY, lineHeight: 1.4 },
   cellTimestamp: { fontSize: 8, color: MUTED, marginTop: 2 },
 
-  // ---- Burned-in timestamp/address strip (photo overlay setting) ----
-  photoOverlayStrip: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: "rgba(0, 0, 0, 0.55)",
-    paddingVertical: 3,
-    paddingHorizontal: 5,
+  // ---- Timestamp/address overlay (photo overlay setting) ----
+  // Procore treatment: top-right, right-aligned, no background fill. The
+  // "shadow" box is an identical dark text layer offset ~0.6pt, rendered
+  // beneath the white layer — @react-pdf has no text-shadow.
+  overlayCornerBox: { position: "absolute", top: 4, left: 0, right: 6 },
+  overlayCornerShadowBox: { position: "absolute", top: 4.6, left: 0.6, right: 5.4 },
+  overlayCornerText: {
+    fontSize: 6.5,
+    color: "#FFFFFF",
+    lineHeight: 1.4,
+    textAlign: "right",
   },
-  photoOverlayText: { fontSize: 6.5, color: "#FFFFFF", lineHeight: 1.35 },
-  coverOverlayText: { fontSize: 8, color: "#FFFFFF", lineHeight: 1.35 },
+  overlayCornerShadow: {
+    fontSize: 6.5,
+    color: "#000000",
+    opacity: 0.75,
+    lineHeight: 1.4,
+    textAlign: "right",
+  },
+  overlayCornerTextLarge: {
+    fontSize: 8,
+    color: "#FFFFFF",
+    lineHeight: 1.4,
+    textAlign: "right",
+  },
+  overlayCornerShadowLarge: {
+    fontSize: 8,
+    color: "#000000",
+    opacity: 0.75,
+    lineHeight: 1.4,
+    textAlign: "right",
+  },
 });

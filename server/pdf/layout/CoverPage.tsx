@@ -1,6 +1,8 @@
 import { Image, Page, Text, View } from "@react-pdf/renderer";
 import { styles } from "./styles";
 import type { CoverPageData } from "../types";
+import { OverlayCorner } from "./OverlayCorner";
+import { splitOverlayAddress } from "@shared/photoOverlay";
 
 // Left-aligned letterhead cover: logo top-left, company name/address beneath,
 // thin accent rule, large left-aligned title, full-width cover photo,
@@ -35,14 +37,13 @@ export function CoverPage({ data, images }: { data: CoverPageData; images: Map<s
         <View style={styles.coverPhotoBox}>
           <Image style={styles.coverPhoto} src={coverBuf} />
           {data.overlay && (data.overlay.timestamp || data.overlay.address) ? (
-            <View style={styles.photoOverlayStrip}>
-              {data.overlay.timestamp ? (
-                <Text style={styles.coverOverlayText}>{data.overlay.timestamp}</Text>
-              ) : null}
-              {data.overlay.address ? (
-                <Text style={styles.coverOverlayText}>{data.overlay.address}</Text>
-              ) : null}
-            </View>
+            <OverlayCorner
+              large
+              lines={[
+                ...(data.overlay.timestamp ? [data.overlay.timestamp] : []),
+                ...splitOverlayAddress(data.overlay.address),
+              ]}
+            />
           ) : null}
         </View>
       ) : null}

@@ -2,6 +2,8 @@ import { Image, Text, View } from "@react-pdf/renderer";
 import type { Style } from "@react-pdf/types";
 import { styles } from "./styles";
 import type { PhotoOverlayInfo } from "../types";
+import { OverlayCorner } from "./OverlayCorner";
+import { splitOverlayAddress } from "@shared/photoOverlay";
 
 // maxLines/textOverflow are honored by @react-pdf/layout at runtime
 // (read off node.style) but missing from the Style type in 3.4.5.
@@ -32,14 +34,12 @@ export function PhotoCell({
           <View style={styles.cellPhotoMissing} />
         )}
         {showOverlay ? (
-          <View style={styles.photoOverlayStrip}>
-            {overlay!.timestamp ? (
-              <Text style={[styles.photoOverlayText, clamp1]}>{overlay!.timestamp}</Text>
-            ) : null}
-            {overlay!.address ? (
-              <Text style={[styles.photoOverlayText, clamp1]}>{overlay!.address}</Text>
-            ) : null}
-          </View>
+          <OverlayCorner
+            lines={[
+              ...(overlay!.timestamp ? [overlay!.timestamp] : []),
+              ...splitOverlayAddress(overlay!.address),
+            ]}
+          />
         ) : null}
       </View>
       {caption ? <Text style={[styles.cellCaption, clamp1]}>{caption}</Text> : null}

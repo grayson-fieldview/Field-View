@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { resolvePhotoOverlay } from "@shared/photoOverlay";
+import { resolvePhotoOverlay, splitOverlayAddress } from "@shared/photoOverlay";
 import type { AccountSettings } from "@shared/schema";
 
 /**
@@ -33,11 +33,17 @@ export function formatOverlayTimestamp(value: Date | string | null | undefined):
   });
 }
 
+// Procore-style treatment: no background fill — a text-shadow is the only
+// thing standing in for one, keeping thin white text legible on light photos.
+const OVERLAY_TEXT_SHADOW = "0 0 3px rgba(0,0,0,0.9), 0 1px 2px rgba(0,0,0,0.7)";
+
 /**
- * The strip itself. Render it inside a `position: relative` (or otherwise
- * positioned) container that exactly bounds the displayed image — it pins
- * itself to that container's bottom edge. Renders nothing when there is
- * neither a timestamp nor an address.
+ * Procore-style overlay: thin white right-aligned text in the TOP-RIGHT
+ * corner of the image, no background. Render it inside a `position:
+ * relative` (or otherwise positioned) container that exactly bounds the
+ * displayed image. Line 1 = date/time, then the address split across
+ * lines (street / city, state zip / country). Renders nothing when there
+ * is neither a timestamp nor an address.
  */
 export function PhotoOverlayStrip({
   takenAt,
@@ -49,18 +55,23 @@ export function PhotoOverlayStrip({
   address: string | null | undefined;
 }) {
   const timestamp = formatOverlayTimestamp(takenAt ?? createdAt);
-  if (!timestamp && !address) return null;
+  const addressLines = splitOverlayAddress(address);
+  if (!timestamp && addressLines.length === 0) return null;
+  const lines = [...(timestamp ? [timestamp] : []), ...addressLines];
   return (
     <div
-      className="absolute bottom-0 left-0 right-0 bg-black/55 px-2 py-1 pointer-events-none"
+      className="absolute top-0 right-0 px-2 py-1.5 text-right pointer-events-none"
       data-testid="photo-overlay-strip"
     >
-      {timestamp && (
-        <p className="text-[11px] leading-snug text-white truncate">{timestamp}</p>
-      )}
-      {address && (
-        <p className="text-[11px] leading-snug text-white truncate">{address}</p>
-      )}
+      {lines.map((line, i) => (
+        <p
+          key={i}
+          className="text-[11px] font-light leading-snug text-white truncate"
+          style={{ textShadow: OVERLAY_TEXT_SHADOW }}
+        >
+          {line}
+        </p>
+      ))}
     </div>
   );
 }
