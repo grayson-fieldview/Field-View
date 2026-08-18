@@ -35,7 +35,9 @@ export function formatOverlayTimestamp(value: Date | string | null | undefined):
 
 // Procore-style treatment: no background fill — a text-shadow is the only
 // thing standing in for one, keeping thin white text legible on light photos.
-const OVERLAY_TEXT_SHADOW = "0 0 3px rgba(0,0,0,0.9), 0 1px 2px rgba(0,0,0,0.7)";
+// Blur radii scaled 2x in lockstep with the 11px → 22px text size bump —
+// at 22px the original 3px glow read as a faint halo, not an outline.
+const OVERLAY_TEXT_SHADOW = "0 0 6px rgba(0,0,0,0.9), 0 2px 4px rgba(0,0,0,0.7)";
 
 /**
  * Procore-style overlay: thin white right-aligned text in the TOP-RIGHT
@@ -66,7 +68,7 @@ export function PhotoOverlayStrip({
       {lines.map((line, i) => (
         <p
           key={i}
-          className="text-[11px] font-light leading-snug text-white truncate"
+          className="text-[22px] font-light leading-snug text-white truncate"
           style={{ textShadow: OVERLAY_TEXT_SHADOW }}
         >
           {line}
