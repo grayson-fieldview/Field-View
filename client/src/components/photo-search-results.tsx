@@ -6,7 +6,12 @@ import { SearchX } from "lucide-react";
 import type { Media } from "@shared/schema";
 
 export type MediaSearchResult = Media & {
-  project?: { name: string; color: string | null };
+  project?: {
+    name: string;
+    color: string | null;
+    address?: string | null;
+    photoOverlayEnabled?: boolean | null;
+  };
   uploadedBy?: { firstName: string | null; lastName: string | null };
 };
 

@@ -533,6 +533,8 @@ export class DatabaseStorage implements IStorage {
         project: {
           name: projects.name,
           color: projects.color,
+          address: projects.address,
+          photoOverlayEnabled: projects.photoOverlayEnabled,
         },
         uploadedBy: {
           firstName: users.firstName,
@@ -581,6 +583,8 @@ export class DatabaseStorage implements IStorage {
         project: {
           name: projects.name,
           color: projects.color,
+          address: projects.address,
+          photoOverlayEnabled: projects.photoOverlayEnabled,
         },
         uploadedBy: {
           firstName: users.firstName,

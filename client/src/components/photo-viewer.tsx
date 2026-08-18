@@ -45,6 +45,7 @@ import type { Media, Comment, Task, Project, MediaAnnotation, AnnotationStroke }
 import { useAuth } from "@/hooks/use-auth";
 import { AnnotationOverlay, resolveFontSize } from "@/lib/annotation-svg";
 import { tagBadgeStyle, buildTagColorMap } from "@/lib/tag-colors";
+import { PhotoOverlayStrip, usePhotoOverlayEnabled } from "@/components/photo-overlay-strip";
 
 type MediaWithUser = Media & {
   uploadedBy?: {
@@ -1072,6 +1073,12 @@ export default function PhotoViewer({
 
   const isVideo = (media.mimeType ?? "").startsWith("video/");
 
+  // Timestamp/address overlay — same account/project setting that drives
+  // the report-PDF strip (shared resolver). Pure DOM overlay, no compositing.
+  const overlayStripEnabled = usePhotoOverlayEnabled(
+    (project as any).photoOverlayEnabled ?? null,
+  );
+
   const renderPhotoArea = (fullscreen: boolean) => (
     <div
       ref={containerRef}
@@ -1096,6 +1103,15 @@ export default function PhotoViewer({
           draggable={false}
           data-testid="photo-viewer-image"
         />
+      )}
+      {!isVideo && overlayStripEnabled && (
+        <div style={{ ...imageRectStyle, pointerEvents: "none" }} className="overflow-hidden">
+          <PhotoOverlayStrip
+            takenAt={(media as any).takenAt}
+            createdAt={media.createdAt}
+            address={project.address}
+          />
+        </div>
       )}
       {!isVideo && showOverlay && allDisplayedStrokes.length > 0 && (
         <AnnotationOverlay strokes={allDisplayedStrokes} style={imageRectStyle} renderText={false} />

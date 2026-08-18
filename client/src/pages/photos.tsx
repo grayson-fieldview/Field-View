@@ -35,9 +35,26 @@ import {
   useMediaSearch,
   type MediaSearchResult,
 } from "@/components/photo-search-results";
+import { PhotoOverlayStrip, usePhotoOverlayEnabled } from "@/components/photo-overlay-strip";
 import { tagBadgeStyle, buildTagColorMap } from "@/lib/tag-colors";
 
 type MediaWithProject = MediaSearchResult;
+
+// Timestamp/address overlay for the detail dialog — same account/project
+// setting that drives the report-PDF strip (shared resolver). Extracted so
+// the hook (account-settings query) lives in a component that only renders
+// when a photo is selected.
+function PhotoOverlayDialogStrip({ photo }: { photo: MediaWithProject }) {
+  const enabled = usePhotoOverlayEnabled(photo.project?.photoOverlayEnabled ?? null);
+  if (!enabled) return null;
+  return (
+    <PhotoOverlayStrip
+      takenAt={photo.takenAt}
+      createdAt={photo.createdAt}
+      address={photo.project?.address ?? null}
+    />
+  );
+}
 
 export default function PhotosPage() {
   const [search, setSearch] = useState("");
@@ -194,12 +211,13 @@ export default function PhotosPage() {
           </DialogHeader>
           {selectedPhoto && (
             <div className="space-y-4">
-              <div className="rounded-md overflow-hidden bg-muted">
+              <div className="rounded-md overflow-hidden bg-muted relative">
                 <img
                   src={selectedPhoto.url}
                   alt={selectedPhoto.caption || ""}
                   className="w-full h-auto max-h-[60vh] object-contain"
                 />
+                <PhotoOverlayDialogStrip photo={selectedPhoto} />
               </div>
               <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground">
                 {selectedPhoto.project && (
