@@ -500,6 +500,9 @@ export const accountTags = pgTable("account_tags", {
   accountId: varchar("account_id").references(() => accounts.id).notNull(),
   name: text("name").notNull(),
   type: tagTypeEnum("type").notNull(),
+  // Hex from the fixed palette in shared/tagColors.ts, or null (default
+  // badge styling). Enforced at the API layer, not by the DB.
+  color: text("color"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

@@ -160,6 +160,7 @@ export interface IStorage {
 
   getAccountTags(accountId: string, type?: string): Promise<AccountTag[]>;
   createAccountTag(tag: InsertAccountTag): Promise<AccountTag>;
+  updateAccountTag(id: number, data: { color: string | null }): Promise<AccountTag | undefined>;
   deleteAccountTag(id: number): Promise<void>;
 
   getCommentsByMedia(mediaId: number): Promise<(Comment & { user?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null } })[]>;
@@ -688,6 +689,11 @@ export class DatabaseStorage implements IStorage {
   async createAccountTag(tag: InsertAccountTag): Promise<AccountTag> {
     const [created] = await db.insert(accountTags).values(tag).returning();
     return created;
+  }
+
+  async updateAccountTag(id: number, data: { color: string | null }): Promise<AccountTag | undefined> {
+    const [updated] = await db.update(accountTags).set({ color: data.color }).where(eq(accountTags.id, id)).returning();
+    return updated;
   }
 
   async deleteAccountTag(id: number): Promise<void> {

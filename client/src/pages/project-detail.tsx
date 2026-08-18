@@ -52,6 +52,7 @@ import {
   useDebouncedValue,
   useMediaSearch,
 } from "@/components/photo-search-results";
+import { tagBadgeStyle, buildTagColorMap } from "@/lib/tag-colors";
 import TaskFormDialog from "@/components/task-form-dialog";
 import { ChecklistSectionEditor } from "@/components/checklist-section-editor";
 import ProjectShareDialog from "@/components/project-share-dialog";
@@ -206,7 +207,7 @@ function ProjectTagsInline({ project }: { project: Project }) {
   const [editing, setEditing] = useState(false);
   const currentTags: string[] = (project as any).tags || [];
 
-  const { data: accountProjectTags } = useQuery<{ id: number; name: string; type: string }[]>({
+  const { data: accountProjectTags } = useQuery<{ id: number; name: string; type: string; color: string | null }[]>({
     queryKey: ["/api/tags", { type: "project" }],
     queryFn: async () => {
       const res = await fetch("/api/tags?type=project", { credentials: "include" });
@@ -214,6 +215,7 @@ function ProjectTagsInline({ project }: { project: Project }) {
       return res.json();
     },
   });
+  const projectTagColors = buildTagColorMap(accountProjectTags);
 
   const updateProjectTags = useMutation({
     mutationFn: async (tags: string[]) => {
@@ -243,7 +245,7 @@ function ProjectTagsInline({ project }: { project: Project }) {
     <div className="flex flex-wrap items-center gap-1.5">
       <Tag className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
       {currentTags.map((tag) => (
-        <Badge key={tag} variant="secondary" className="text-xs gap-1" data-testid={`badge-project-tag-${tag}`}>
+        <Badge key={tag} variant="secondary" className="text-xs gap-1" style={tagBadgeStyle(projectTagColors.get(tag.toLowerCase()))} data-testid={`badge-project-tag-${tag}`}>
           {tag}
           {editing && (
             <X className="h-3 w-3 cursor-pointer hover:text-destructive" onClick={(e) => { e.stopPropagation(); removeTag(tag); }} />
@@ -269,6 +271,7 @@ function ProjectTagsInline({ project }: { project: Project }) {
               key={t.id}
               variant="outline"
               className="text-xs cursor-pointer hover:bg-primary/10"
+              style={tagBadgeStyle(t.color)}
               onClick={(e) => { e.stopPropagation(); toggleTag(t.name); }}
               data-testid={`badge-add-project-tag-${t.name}`}
             >

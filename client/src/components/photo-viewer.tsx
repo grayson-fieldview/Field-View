@@ -44,6 +44,7 @@ import {
 import type { Media, Comment, Task, Project, MediaAnnotation, AnnotationStroke } from "@shared/schema";
 import { useAuth } from "@/hooks/use-auth";
 import { AnnotationOverlay, resolveFontSize } from "@/lib/annotation-svg";
+import { tagBadgeStyle, buildTagColorMap } from "@/lib/tag-colors";
 
 type MediaWithUser = Media & {
   uploadedBy?: {
@@ -515,7 +516,7 @@ export default function PhotoViewer({
   const [editingTags, setEditingTags] = useState(false);
   const [selectedTags, setSelectedTags] = useState<string[]>(media.tags || []);
 
-  const { data: accountPhotoTags } = useQuery<{ id: number; name: string; type: string }[]>({
+  const { data: accountPhotoTags } = useQuery<{ id: number; name: string; type: string; color: string | null }[]>({
     queryKey: ["/api/tags", { type: "photo" }],
     queryFn: async () => {
       const res = await fetch("/api/tags?type=photo", { credentials: "include" });
@@ -523,6 +524,7 @@ export default function PhotoViewer({
       return res.json();
     },
   });
+  const photoTagColors = buildTagColorMap(accountPhotoTags);
 
   useEffect(() => {
     setDescriptionText(media.caption || "");
@@ -1633,7 +1635,7 @@ export default function PhotoViewer({
             </div>
             <div className="flex flex-wrap gap-1.5">
               {selectedTags.map((tag) => (
-                <Badge key={tag} variant="secondary" className="text-xs gap-1" data-testid={`badge-tag-${tag}`}>
+                <Badge key={tag} variant="secondary" className="text-xs gap-1" style={tagBadgeStyle(photoTagColors.get(tag.toLowerCase()))} data-testid={`badge-tag-${tag}`}>
                   {tag}
                   {editingTags && (
                     <X className="h-3 w-3 cursor-pointer hover:text-destructive" onClick={() => removeTag(tag)} />
@@ -1653,6 +1655,7 @@ export default function PhotoViewer({
                         key={t.id}
                         variant="outline"
                         className="text-xs cursor-pointer hover:bg-primary/10"
+                        style={tagBadgeStyle(t.color)}
                         onClick={() => toggleTag(t.name)}
                         data-testid={`badge-add-tag-${t.name}`}
                       >

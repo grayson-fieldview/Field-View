@@ -15,6 +15,7 @@ import { executeAutoClockOut } from "./lib/timesheets";
 import { formatLocalTime } from "./lib/geo";
 import { users, invitations, accounts, assignedProjectIdsSchema } from "@shared/models/auth";
 import { MAX_UPLOAD_BATCH } from "@shared/constants";
+import { isValidTagColor } from "@shared/tagColors";
 import { computeSeatUsage } from "./lib/seats";
 import { resolvePhotoTimeZone, formatPhotoTimestamp } from "./lib/photoTime";
 import { db } from "./db";
@@ -1512,14 +1513,28 @@ export async function registerRoutes(
     }
   });
 
+  const updateMediaBodySchema = z.object({
+    caption: z.string().max(5000).optional(),
+    tags: z.array(z.string().trim().min(1).max(100)).max(50).optional(),
+  });
+
   app.patch("/api/media/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const mediaId = parseInt(req.params.id as string);
       if (!(await verifyMediaAccess(mediaId, req.user))) return res.status(403).json({ message: "Access denied" });
-      const { caption, tags } = req.body;
+      // Validate instead of coercing — a malformed tags body used to be
+      // silently coerced to [], wiping the photo's tags.
+      const parsed = updateMediaBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid body", errors: parsed.error.flatten().fieldErrors });
+      }
+      const { caption, tags } = parsed.data as { caption?: string; tags?: string[] };
       const updateData: { caption?: string; tags?: string[] } = {};
       if (caption !== undefined) updateData.caption = caption;
-      if (tags !== undefined) updateData.tags = Array.isArray(tags) ? tags : [];
+      if (tags !== undefined) updateData.tags = tags;
+      if (Object.keys(updateData).length === 0) {
+        return res.status(400).json({ message: "Nothing to update — provide caption and/or tags" });
+      }
       const updated = await storage.updateMedia(mediaId, updateData);
       if (!updated) return res.status(404).json({ message: "Media not found" });
       res.json(updated);
@@ -1547,14 +1562,36 @@ export async function registerRoutes(
     try {
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
-      const { name, type } = req.body;
+      const { name, type, color } = req.body;
       if (!name || !type || !["photo", "project"].includes(type)) {
         return res.status(400).json({ message: "Name and type (photo/project) are required" });
       }
-      const tag = await storage.createAccountTag({ accountId, name: name.trim(), type });
+      if (color !== undefined && color !== null && !isValidTagColor(color)) {
+        return res.status(400).json({ message: "Invalid color — must be one of the fixed palette or null" });
+      }
+      const tag = await storage.createAccountTag({ accountId, name: name.trim(), type, color: color ?? null });
       res.status(201).json(tag);
     } catch (error) {
       res.status(500).json({ message: "Failed to create tag" });
+    }
+  });
+
+  app.patch("/api/tags/:id", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const { color } = req.body;
+      if (color !== null && !isValidTagColor(color)) {
+        return res.status(400).json({ message: "Invalid color — must be one of the fixed palette or null" });
+      }
+      // Same account-ownership check as DELETE /api/tags/:id.
+      const tags = await storage.getAccountTags(accountId);
+      if (!tags.find(t => t.id === id)) return res.status(404).json({ message: "Tag not found" });
+      const updated = await storage.updateAccountTag(id, { color });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update tag" });
     }
   });
 

@@ -13,6 +13,8 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { TAG_COLORS, tagBadgeStyle } from "@/lib/tag-colors";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useTheme } from "@/components/theme-provider";
 import { BrandingCard } from "@/components/branding-card";
@@ -462,8 +464,9 @@ function BillingCard() {
 function TagManagerCard({ type, title, icon: Icon }: { type: "photo" | "project"; title: string; icon: any }) {
   const { toast } = useToast();
   const [newTagName, setNewTagName] = useState("");
+  const [newTagColor, setNewTagColor] = useState<string | null>(null);
 
-  const { data: tags, isLoading } = useQuery<{ id: number; name: string; type: string }[]>({
+  const { data: tags, isLoading } = useQuery<{ id: number; name: string; type: string; color: string | null }[]>({
     queryKey: ["/api/tags", { type }],
     queryFn: async () => {
       const res = await fetch(`/api/tags?type=${type}`, { credentials: "include" });
@@ -474,13 +477,28 @@ function TagManagerCard({ type, title, icon: Icon }: { type: "photo" | "project"
 
   const createTag = useMutation({
     mutationFn: async (name: string) => {
-      const res = await apiRequest("POST", "/api/tags", { name, type });
+      const res = await apiRequest("POST", "/api/tags", { name, type, color: newTagColor });
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/tags", { type }] });
       queryClient.invalidateQueries({ queryKey: ["/api/tags"] });
       setNewTagName("");
+      setNewTagColor(null);
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const updateTagColor = useMutation({
+    mutationFn: async ({ id, color }: { id: number; color: string | null }) => {
+      const res = await apiRequest("PATCH", `/api/tags/${id}`, { color });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/tags", { type }] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tags"] });
     },
     onError: (error: Error) => {
       toast({ title: "Error", description: error.message, variant: "destructive" });
@@ -538,6 +556,29 @@ function TagManagerCard({ type, title, icon: Icon }: { type: "photo" | "project"
           Add
         </Button>
       </div>
+      <div className="flex items-center gap-1.5 mb-4" data-testid={`swatches-new-${type}-tag`}>
+        <span className="text-xs text-muted-foreground mr-1">Color:</span>
+        <button
+          type="button"
+          onClick={() => setNewTagColor(null)}
+          className={`h-5 w-5 rounded-full border bg-muted ${newTagColor === null ? "ring-2 ring-ring ring-offset-1" : ""}`}
+          title="No color"
+          aria-label="No color"
+          data-testid={`swatch-new-${type}-none`}
+        />
+        {TAG_COLORS.map((c) => (
+          <button
+            key={c}
+            type="button"
+            onClick={() => setNewTagColor(c)}
+            className={`h-5 w-5 rounded-full border ${newTagColor === c ? "ring-2 ring-ring ring-offset-1" : ""}`}
+            style={{ backgroundColor: c }}
+            title={c}
+            aria-label={`Color ${c}`}
+            data-testid={`swatch-new-${type}-${c.slice(1)}`}
+          />
+        ))}
+      </div>
       <div className="flex flex-wrap gap-2">
         {isLoading ? (
           <p className="text-sm text-muted-foreground">Loading...</p>
@@ -545,7 +586,37 @@ function TagManagerCard({ type, title, icon: Icon }: { type: "photo" | "project"
           <p className="text-sm text-muted-foreground">No tags defined yet</p>
         ) : (
           (tags || []).map((tag) => (
-            <Badge key={tag.id} variant="secondary" className="text-sm gap-1.5 py-1 px-3" data-testid={`badge-${type}-tag-${tag.id}`}>
+            <Badge
+              key={tag.id}
+              variant="secondary"
+              className="text-sm gap-1.5 py-1 px-3"
+              style={tagBadgeStyle(tag.color)}
+              data-testid={`badge-${type}-tag-${tag.id}`}
+            >
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="h-3.5 w-3.5 rounded-full border shrink-0"
+                    style={tag.color ? { backgroundColor: tag.color } : undefined}
+                    title="Change color"
+                    aria-label={`Change color of ${tag.name}`}
+                    data-testid={`button-color-${type}-tag-${tag.id}`}
+                  />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="min-w-0">
+                  <DropdownMenuItem onClick={() => updateTagColor.mutate({ id: tag.id, color: null })}>
+                    <span className="h-4 w-4 rounded-full border bg-muted mr-2" />
+                    No color
+                  </DropdownMenuItem>
+                  {TAG_COLORS.map((c) => (
+                    <DropdownMenuItem key={c} onClick={() => updateTagColor.mutate({ id: tag.id, color: c })}>
+                      <span className="h-4 w-4 rounded-full border mr-2" style={{ backgroundColor: c }} />
+                      {c === tag.color ? "Current" : c}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
               {tag.name}
               <X
                 className="h-3.5 w-3.5 cursor-pointer hover:text-destructive transition-colors"

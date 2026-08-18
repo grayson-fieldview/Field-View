@@ -35,6 +35,7 @@ import {
   useMediaSearch,
   type MediaSearchResult,
 } from "@/components/photo-search-results";
+import { tagBadgeStyle, buildTagColorMap } from "@/lib/tag-colors";
 
 type MediaWithProject = MediaSearchResult;
 
@@ -62,6 +63,16 @@ export default function PhotosPage() {
   const { data: projects } = useQuery<Project[]>({
     queryKey: ["/api/projects"],
   });
+
+  const { data: accountPhotoTags } = useQuery<{ id: number; name: string; color: string | null }[]>({
+    queryKey: ["/api/tags", { type: "photo" }],
+    queryFn: async () => {
+      const res = await fetch("/api/tags?type=photo", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+  const photoTagColors = buildTagColorMap(accountPhotoTags);
 
   const filtered = searchActive
     ? (searchResults || [])
@@ -212,7 +223,7 @@ export default function PhotosPage() {
                 <div className="flex flex-wrap items-center gap-1.5">
                   <Tag className="h-3.5 w-3.5 text-muted-foreground" />
                   {selectedPhoto.tags.map((tag) => (
-                    <Badge key={tag} variant="secondary" className="text-xs">{tag}</Badge>
+                    <Badge key={tag} variant="secondary" className="text-xs" style={tagBadgeStyle(photoTagColors.get(tag.toLowerCase()))}>{tag}</Badge>
                   ))}
                 </div>
               )}
