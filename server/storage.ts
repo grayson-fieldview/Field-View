@@ -137,7 +137,7 @@ export interface ProjectWithDetails extends Project {
 }
 
 export interface IStorage {
-  getProjects(accountId: string): Promise<Project[]>;
+  getProjects(accountId: string, restrictedToUserId?: string): Promise<Project[]>;
   getProjectsWithDetails(accountId: string): Promise<ProjectWithDetails[]>;
   getProject(id: number): Promise<Project | undefined>;
   createProject(project: InsertProject): Promise<Project>;
@@ -172,7 +172,7 @@ export interface IStorage {
   deleteAnnotation(id: string): Promise<void>;
 
   getTasksByProject(projectId: number): Promise<(Task & { assignedTo?: { firstName: string | null; lastName: string | null } })[]>;
-  getAllTasks(accountId: string): Promise<(Task & { project?: { name: string }; assignedTo?: { firstName: string | null; lastName: string | null } })[]>;
+  getAllTasks(accountId: string, restrictedToUserId?: string): Promise<(Task & { project?: { name: string }; assignedTo?: { firstName: string | null; lastName: string | null } })[]>;
   createTask(task: InsertTask): Promise<Task>;
   updateTask(id: number, data: Partial<InsertTask>): Promise<Task | undefined>;
   deleteTask(id: number, accountId: string): Promise<boolean>;
@@ -183,7 +183,7 @@ export interface IStorage {
   countTaskPhotos(taskId: number): Promise<number>;
 
   getChecklistsByProject(projectId: number): Promise<(Checklist & { assignedTo?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }; itemCount: number; checkedCount: number; sectionCount: number })[]>;
-  getAllChecklists(accountId: string): Promise<(Checklist & { project?: { name: string }; assignedTo?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }; itemCount: number; checkedCount: number; sectionCount: number })[]>;
+  getAllChecklists(accountId: string, restrictedToUserId?: string): Promise<(Checklist & { project?: { name: string }; assignedTo?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }; itemCount: number; checkedCount: number; sectionCount: number })[]>;
   getChecklist(id: number): Promise<Checklist | undefined>;
   createChecklist(checklist: InsertChecklist): Promise<Checklist>;
   createChecklistWithItems(
@@ -322,7 +322,7 @@ export interface IStorage {
   updateCalendarConnection(id: number, data: Partial<InsertCalendarConnection>): Promise<CalendarConnection | undefined>;
   deleteCalendarConnection(id: number): Promise<void>;
 
-  getCalendarEvents(accountId: string): Promise<CalendarEvent[]>;
+  getCalendarEvents(accountId: string, restrictedToUserId?: string): Promise<CalendarEvent[]>;
   getCalendarEvent(id: number): Promise<CalendarEvent | undefined>;
   createCalendarEvent(event: InsertCalendarEvent): Promise<CalendarEvent>;
   updateCalendarEvent(id: number, data: Partial<InsertCalendarEvent> & { syncStatus?: string; syncMessage?: string | null }): Promise<CalendarEvent | undefined>;
@@ -354,8 +354,24 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
-  async getProjects(accountId: string): Promise<Project[]> {
-    return db.select().from(projects).where(eq(projects.accountId, accountId)).orderBy(desc(projects.createdAt));
+  // Shared restricted-role SQL condition (creator OR project_assignments row
+  // — same rule as routes.ts userCanAccessProject) for methods that join or
+  // select from `projects`. Callers pass restrictedToUserId ONLY for role
+  // === "restricted"; undefined leaves the query unchanged (drizzle's and()
+  // drops undefined conditions).
+  private restrictedProjectCond(restrictedToUserId: string | undefined) {
+    if (!restrictedToUserId) return undefined;
+    return sql`(${projects.createdById} = ${restrictedToUserId} OR EXISTS (
+      SELECT 1 FROM ${projectAssignments}
+      WHERE ${projectAssignments.projectId} = ${projects.id}
+        AND ${projectAssignments.userId} = ${restrictedToUserId}
+    ))`;
+  }
+
+  async getProjects(accountId: string, restrictedToUserId?: string): Promise<Project[]> {
+    return db.select().from(projects)
+      .where(and(eq(projects.accountId, accountId), this.restrictedProjectCond(restrictedToUserId)))
+      .orderBy(desc(projects.createdAt));
   }
 
   async getProjectsWithDetails(accountId: string): Promise<ProjectWithDetails[]> {
@@ -733,7 +749,7 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
-  async getAllTasks(accountId: string) {
+  async getAllTasks(accountId: string, restrictedToUserId?: string) {
     const rows = await db
       .select({
         task: tasks,
@@ -747,7 +763,7 @@ export class DatabaseStorage implements IStorage {
       .from(tasks)
       .innerJoin(projects, eq(tasks.projectId, projects.id))
       .leftJoin(users, eq(tasks.assignedToId, users.id))
-      .where(eq(projects.accountId, accountId))
+      .where(and(eq(projects.accountId, accountId), this.restrictedProjectCond(restrictedToUserId)))
       .orderBy(desc(tasks.createdAt));
 
     return rows.map((r) => ({
@@ -867,7 +883,7 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
-  async getAllChecklists(accountId: string) {
+  async getAllChecklists(accountId: string, restrictedToUserId?: string) {
     const rows = await db
       .select({
         checklist: checklists,
@@ -881,7 +897,7 @@ export class DatabaseStorage implements IStorage {
       .from(checklists)
       .innerJoin(projects, eq(checklists.projectId, projects.id))
       .leftJoin(users, eq(checklists.assignedToId, users.id))
-      .where(eq(projects.accountId, accountId))
+      .where(and(eq(projects.accountId, accountId), this.restrictedProjectCond(restrictedToUserId)))
       .orderBy(desc(checklists.createdAt));
 
     const ids = rows.map(r => r.checklist.id);
@@ -2154,8 +2170,25 @@ export class DatabaseStorage implements IStorage {
     await db.delete(calendarConnections).where(eq(calendarConnections.id, id));
   }
 
-  async getCalendarEvents(accountId: string): Promise<CalendarEvent[]> {
-    return db.select().from(calendarEvents).where(eq(calendarEvents.accountId, accountId)).orderBy(asc(calendarEvents.startsAt));
+  async getCalendarEvents(accountId: string, restrictedToUserId?: string): Promise<CalendarEvent[]> {
+    // Restricted: project-linked events only for accessible projects;
+    // events with NO project stay visible to everyone (account-level).
+    return db.select().from(calendarEvents)
+      .where(and(
+        eq(calendarEvents.accountId, accountId),
+        restrictedToUserId
+          ? sql`(${calendarEvents.projectId} IS NULL OR EXISTS (
+              SELECT 1 FROM ${projects}
+              WHERE ${projects.id} = ${calendarEvents.projectId}
+                AND (${projects.createdById} = ${restrictedToUserId} OR EXISTS (
+                  SELECT 1 FROM ${projectAssignments}
+                  WHERE ${projectAssignments.projectId} = ${projects.id}
+                    AND ${projectAssignments.userId} = ${restrictedToUserId}
+                ))
+            ))`
+          : undefined,
+      ))
+      .orderBy(asc(calendarEvents.startsAt));
   }
   async getCalendarEvent(id: number): Promise<CalendarEvent | undefined> {
     const [item] = await db.select().from(calendarEvents).where(eq(calendarEvents.id, id));

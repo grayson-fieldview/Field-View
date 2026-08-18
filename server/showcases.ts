@@ -178,10 +178,17 @@ export function registerShowcaseRoutes(app: Express): void {
     try {
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
+      // Restricted users only see showcases they created — a showcase is a
+      // curated artifact, so it's all-or-nothing, never filtered photo-by-
+      // photo. (createdById is nullable on legacy rows; those stay hidden
+      // from restricted users.) Other roles: condition dropped, unchanged.
       const rows = await db
         .select()
         .from(showcases)
-        .where(eq(showcases.accountId, accountId))
+        .where(and(
+          eq(showcases.accountId, accountId),
+          req.user.role === "restricted" ? eq(showcases.createdById, req.user.id) : undefined,
+        ))
         .orderBy(desc(showcases.updatedAt));
       const photoRows = await loadShowcasePhotoRows(rows.map((r) => r.id));
       const counts = new Map<number, number>();
@@ -246,10 +253,21 @@ export function registerShowcaseRoutes(app: Express): void {
       if (!accountId) return res.status(403).json({ message: "No account associated" });
       const days = [7, 30, 90].includes(Number(req.query.days)) ? Number(req.query.days) : 30;
       const since = new Date(Date.now() - days * 86400000);
+      // Restricted: analytics only for showcases they created — mirrors the
+      // list/detail rule so numbers match what they can see. Portfolio-level
+      // views (showcaseId NULL) are account-wide and therefore excluded for
+      // restricted users. Other roles: condition dropped, unchanged.
+      const restrictedCond = req.user.role === "restricted"
+        ? sql`${showcaseViews.showcaseId} IN (
+            SELECT id FROM ${showcases}
+            WHERE ${showcases.accountId} = ${accountId}
+              AND ${showcases.createdById} = ${req.user.id}
+          )`
+        : undefined;
       const perShowcase = await db
         .select({ showcaseId: showcaseViews.showcaseId, c: sql<number>`count(*)::int` })
         .from(showcaseViews)
-        .where(and(eq(showcaseViews.accountId, accountId), gte(showcaseViews.viewedAt, since)))
+        .where(and(eq(showcaseViews.accountId, accountId), gte(showcaseViews.viewedAt, since), restrictedCond))
         .groupBy(showcaseViews.showcaseId);
       const daily = await db
         .select({
@@ -257,7 +275,7 @@ export function registerShowcaseRoutes(app: Express): void {
           c: sql<number>`count(*)::int`,
         })
         .from(showcaseViews)
-        .where(and(eq(showcaseViews.accountId, accountId), gte(showcaseViews.viewedAt, since)))
+        .where(and(eq(showcaseViews.accountId, accountId), gte(showcaseViews.viewedAt, since), restrictedCond))
         .groupBy(sql`to_char(${showcaseViews.viewedAt}, 'YYYY-MM-DD')`)
         .orderBy(sql`to_char(${showcaseViews.viewedAt}, 'YYYY-MM-DD')`);
       const portfolioViews = perShowcase.find((r) => r.showcaseId === null)?.c || 0;
@@ -281,6 +299,10 @@ export function registerShowcaseRoutes(app: Express): void {
       if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid id" });
       const row = await verifyShowcaseAccess(id, req.user.accountId);
       if (!row) return res.status(404).json({ message: "Showcase not found" });
+      // Restricted: creator-only, 404 (not 403) to avoid confirming existence.
+      if (req.user.role === "restricted" && row.createdById !== req.user.id) {
+        return res.status(404).json({ message: "Showcase not found" });
+      }
       const photos = await loadShowcasePhotoRows([id]);
       const mediaIds = photos.map((p) => p.mediaId);
       const mediaRows = mediaIds.length

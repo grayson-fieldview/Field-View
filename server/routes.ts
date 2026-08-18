@@ -1411,10 +1411,14 @@ export async function registerRoutes(
     try {
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
-      const allTasks = await storage.getAllTasks(accountId);
-      const allChecklists = await storage.getAllChecklists(accountId);
-      const projectsList = await storage.getProjects(accountId);
-      const calEvents = await storage.getCalendarEvents(accountId);
+      // Restricted users only see calendar entries from projects they
+      // created or are assigned to; calendar events with no project stay
+      // visible to everyone (filtered in SQL, getAllMedia precedent).
+      const restrictedToUserId = req.user.role === "restricted" ? req.user.id : undefined;
+      const allTasks = await storage.getAllTasks(accountId, restrictedToUserId);
+      const allChecklists = await storage.getAllChecklists(accountId, restrictedToUserId);
+      const projectsList = await storage.getProjects(accountId, restrictedToUserId);
+      const calEvents = await storage.getCalendarEvents(accountId, restrictedToUserId);
       const colorByProject: Record<number, string> = {};
       projectsList.forEach(p => { colorByProject[p.id] = p.color || "#F09000"; });
       const events = [
@@ -6389,6 +6393,18 @@ export async function registerRoutes(
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
 
+      // Restricted users only see activity (and stats — the dashboard
+      // numbers must match the visible lists) from projects they created or
+      // are assigned to. `undefined` for other roles: drizzle's and() drops
+      // it, so their queries are unchanged.
+      const restrictedCond = req.user.role === "restricted"
+        ? sql`(${projects.createdById} = ${req.user.id} OR EXISTS (
+            SELECT 1 FROM ${projectAssignments}
+            WHERE ${projectAssignments.projectId} = ${projects.id}
+              AND ${projectAssignments.userId} = ${req.user.id}
+          ))`
+        : undefined;
+
       const recentMedia = await db
         .select({
           id: media.id,
@@ -6406,7 +6422,7 @@ export async function registerRoutes(
         .from(media)
         .innerJoin(projects, eq(media.projectId, projects.id))
         .leftJoin(users, eq(media.uploadedById, users.id))
-        .where(eq(projects.accountId, accountId))
+        .where(and(eq(projects.accountId, accountId), restrictedCond))
         .orderBy(sql`COALESCE(${media.takenAt}, ${media.createdAt}) DESC`)
         .limit(limit);
 
@@ -6428,7 +6444,7 @@ export async function registerRoutes(
         .from(tasks)
         .innerJoin(projects, eq(tasks.projectId, projects.id))
         .leftJoin(users, eq(tasks.createdById, users.id))
-        .where(eq(projects.accountId, accountId))
+        .where(and(eq(projects.accountId, accountId), restrictedCond))
         .orderBy(sql`${tasks.updatedAt} DESC`)
         .limit(limit);
 
@@ -6446,7 +6462,7 @@ export async function registerRoutes(
         .innerJoin(media, eq(comments.mediaId, media.id))
         .innerJoin(projects, eq(media.projectId, projects.id))
         .leftJoin(users, eq(comments.userId, users.id))
-        .where(eq(projects.accountId, accountId))
+        .where(and(eq(projects.accountId, accountId), restrictedCond))
         .orderBy(sql`${comments.createdAt} DESC`)
         .limit(limit);
 
@@ -6516,22 +6532,22 @@ export async function registerRoutes(
       const activeProjectCount = await db
         .select({ count: sql<number>`count(*)` })
         .from(projects)
-        .where(and(eq(projects.status, "active"), eq(projects.accountId, accountId)));
+        .where(and(eq(projects.status, "active"), eq(projects.accountId, accountId), restrictedCond));
       const openTaskCount = await db
         .select({ count: sql<number>`count(*)` })
         .from(tasks)
         .innerJoin(projects, eq(tasks.projectId, projects.id))
-        .where(and(sql`${tasks.status} != 'done'`, eq(projects.accountId, accountId)));
+        .where(and(sql`${tasks.status} != 'done'`, eq(projects.accountId, accountId), restrictedCond));
       const overdueTaskCount = await db
         .select({ count: sql<number>`count(*)` })
         .from(tasks)
         .innerJoin(projects, eq(tasks.projectId, projects.id))
-        .where(and(sql`${tasks.status} != 'done' AND ${tasks.dueDate} IS NOT NULL AND ${tasks.dueDate} < NOW()`, eq(projects.accountId, accountId)));
+        .where(and(sql`${tasks.status} != 'done' AND ${tasks.dueDate} IS NOT NULL AND ${tasks.dueDate} < NOW()`, eq(projects.accountId, accountId), restrictedCond));
       const totalMediaCount = await db
         .select({ count: sql<number>`count(*)` })
         .from(media)
         .innerJoin(projects, eq(media.projectId, projects.id))
-        .where(eq(projects.accountId, accountId));
+        .where(and(eq(projects.accountId, accountId), restrictedCond));
 
       res.json({
         activities: activities.slice(0, limit),
@@ -6558,7 +6574,10 @@ export async function registerRoutes(
 
       const project = await storage.getProject(projectId);
       if (!project) return res.status(404).json({ message: "Project not found" });
-      if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
+      // Tenant + restricted (creator/assignment) in one check — plain
+      // accountId comparison let restricted users drill into any account
+      // project by guessing integer IDs.
+      if (!(await userCanAccessProject(req, projectId))) return res.status(403).json({ message: "Access denied" });
 
       const dayMedia = await db
         .select({
