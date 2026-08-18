@@ -1359,6 +1359,13 @@ export async function registerRoutes(
       if (parsed.endsAt < parsed.startsAt) {
         return res.status(400).json({ message: "End time must be after start time." });
       }
+      // Caller-supplied projectId must be a project the user can access
+      // (tenant + restricted rule). No-project events stay creatable by
+      // anyone — matches the calendar read rule.
+      const parsedProjectId = (parsed as any).projectId as number | null | undefined;
+      if (parsedProjectId != null && !(await userCanAccessProject(req, parsedProjectId))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
       const created = await storage.createCalendarEvent(parsed);
       let syncStatus: string = "disabled";
       let syncMessage: string | null = null;
@@ -1381,6 +1388,11 @@ export async function registerRoutes(
       const accountId = req.user.accountId;
       const existing = await storage.getCalendarEvent(id);
       if (!existing || existing.accountId !== accountId) return res.status(404).json({ message: "Event not found" });
+      // Project-linked events: editable only with project access (tenant is
+      // already checked above; for non-restricted this resolves true).
+      if (existing.projectId != null && !(await userCanAccessProject(req, existing.projectId))) {
+        return res.status(404).json({ message: "Event not found" });
+      }
       const data: any = { ...req.body };
       if (data.startsAt) data.startsAt = new Date(data.startsAt);
       if (data.endsAt) data.endsAt = new Date(data.endsAt);
@@ -1400,6 +1412,10 @@ export async function registerRoutes(
       const accountId = req.user.accountId;
       const existing = await storage.getCalendarEvent(id);
       if (!existing || existing.accountId !== accountId) return res.status(404).json({ message: "Event not found" });
+      // Same gate as PATCH: project-linked events require project access.
+      if (existing.projectId != null && !(await userCanAccessProject(req, existing.projectId))) {
+        return res.status(404).json({ message: "Event not found" });
+      }
       await storage.deleteCalendarEvent(id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -1774,7 +1790,10 @@ export async function registerRoutes(
       if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
       const project = await storage.getProject(projectId);
       if (!project) return res.status(404).json({ message: "Project not found" });
-      if (project.accountId !== req.user.accountId) return res.status(403).json({ message: "Access denied" });
+      // Tenant + restricted (creator/assignment) in one check — the plain
+      // accountId compare let restricted users create tasks in projects
+      // they cannot read.
+      if (!(await userCanAccessProject(req, projectId))) return res.status(403).json({ message: "Access denied" });
       // requiredPhotoCount: admin-only; silently ignored otherwise
       // (defaults to 0 = no requirement).
       const canSetRequirement = req.user.role === "admin";

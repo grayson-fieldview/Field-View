@@ -17,6 +17,7 @@ import {
 } from "@shared/schema";
 import { accounts } from "@shared/models/auth";
 import { requireReadAccess, requireWriteAccess } from "./replit_integrations/auth";
+import { requireAdminOrManager } from "./middleware/auth";
 import { getObjectStream, extractS3KeyFromUrl, isS3Url } from "./s3";
 
 // ---------------------------------------------------------------------------
@@ -538,7 +539,12 @@ export function registerShowcaseRoutes(app: Express): void {
     }
   });
 
-  app.patch("/api/showcase-settings", requireWriteAccess, async (req: any, res) => {
+  // Deliberately admin/manager-only (Aug 2026): account-wide portfolio
+  // branding, slug, and publish state should not be editable by standard or
+  // restricted field users. NOTE: showcase-edit.tsx also PATCHes
+  // { showcaseTags } from the tag editor — standard users editing showcases
+  // will now get 403 when adding a new tag (flagged at rollout).
+  app.patch("/api/showcase-settings", requireWriteAccess, requireAdminOrManager, async (req: any, res) => {
     try {
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
