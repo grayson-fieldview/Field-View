@@ -131,10 +131,10 @@ export function AccountSettingsCard() {
 
           <div className="flex items-center justify-between gap-4" data-testid="row-photo-overlay">
             <div>
-              <p className="text-sm font-medium">Timestamp &amp; address on report photos</p>
+              <p className="text-sm font-medium">Timestamp &amp; address overlay</p>
               <p className="text-xs text-muted-foreground mt-1">
-                Adds a small date/time and project address strip to photos in report PDFs.
-                Original photos are never modified. Projects can override this individually.
+                Adds the date, time, and project address to photos. Original photos are
+                never modified. Projects can override this individually.
               </p>
             </div>
             <Switch
