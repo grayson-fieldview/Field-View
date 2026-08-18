@@ -47,6 +47,11 @@ import { BeforeAfterSlider } from "@/components/before-after-slider";
 import { isUnauthorizedError } from "@/lib/auth-utils";
 import { useAuth } from "@/hooks/use-auth";
 import PhotoViewer from "@/components/photo-viewer";
+import {
+  PhotoSearchResults,
+  useDebouncedValue,
+  useMediaSearch,
+} from "@/components/photo-search-results";
 import TaskFormDialog from "@/components/task-form-dialog";
 import { ChecklistSectionEditor } from "@/components/checklist-section-editor";
 import ProjectShareDialog from "@/components/project-share-dialog";
@@ -92,6 +97,7 @@ import {
   Play,
   File as FileIcon,
   FileSpreadsheet,
+  Search as SearchIcon,
 } from "lucide-react";
 import {
   Tooltip,
@@ -284,6 +290,13 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const { toast } = useToast();
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<DetailTab>("photos");
+  // Photos-tab full-text search, scoped to this project. Debounced; the
+  // server query only runs for a non-empty q. While a search is active the
+  // results grid replaces the normal grid (view + open only — selection,
+  // compare, and date filters apply to the normal grid).
+  const [photoSearch, setPhotoSearch] = useState("");
+  const debouncedPhotoSearch = useDebouncedValue(photoSearch, 300);
+  const photoSearchActive = debouncedPhotoSearch.trim().length > 0;
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -442,6 +455,11 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const { data, isLoading } = useQuery<ProjectDetailData>({
     queryKey: ["/api/projects", id],
   });
+
+  const { data: photoSearchResults, isLoading: isPhotoSearching } = useMediaSearch(
+    debouncedPhotoSearch,
+    id ? parseInt(id) : undefined,
+  );
 
   // Single source of truth for photo visibility. Computed as a stable hook
   // before the early-return guards so it can also feed the prune effect below.
@@ -1564,6 +1582,18 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                 </div>
               )}
 
+              <div className="relative max-w-sm">
+                <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  type="search"
+                  placeholder="Search photos in this project..."
+                  value={photoSearch}
+                  onChange={(e) => setPhotoSearch(e.target.value)}
+                  className="pl-10"
+                  data-testid="input-search-project-photos"
+                />
+              </div>
+
               <div className="flex flex-wrap items-center justify-between gap-3 overflow-hidden">
                 <div className="flex flex-wrap items-center gap-2">
                   <DropdownMenu>
@@ -1812,7 +1842,18 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                 onInitialFilesConsumed={() => setPendingCameraFiles(null)}
               />
 
-              {projectMedia.length === 0 ? (
+              {photoSearchActive ? (
+                <PhotoSearchResults
+                  results={photoSearchResults}
+                  isLoading={isPhotoSearching}
+                  onSelect={(item) =>
+                    // Prefer the identical object from projectMedia so the
+                    // existing PhotoViewer (allMedia={projectMedia}) can
+                    // navigate from it; viewer itself is untouched.
+                    setSelectedMedia(projectMedia.find((p) => p.id === item.id) ?? item)
+                  }
+                />
+              ) : projectMedia.length === 0 ? (
                 <Card className="p-12">
                   <div className="text-center space-y-3">
                     <div className="flex h-12 w-12 items-center justify-center rounded-md bg-muted mx-auto">

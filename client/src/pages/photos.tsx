@@ -29,33 +29,45 @@ import {
   FolderKanban,
 } from "lucide-react";
 import type { Media, Project } from "@shared/schema";
+import {
+  PhotoSearchResults,
+  useDebouncedValue,
+  useMediaSearch,
+  type MediaSearchResult,
+} from "@/components/photo-search-results";
 
-type MediaWithProject = Media & {
-  project?: { name: string; color: string | null };
-  uploadedBy?: { firstName: string | null; lastName: string | null };
-};
+type MediaWithProject = MediaSearchResult;
 
 export default function PhotosPage() {
   const [search, setSearch] = useState("");
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [selectedPhoto, setSelectedPhoto] = useState<MediaWithProject | null>(null);
 
+  // Server-side full-text search when the box has text (debounced);
+  // empty box falls back to the normal /api/media listing — search is
+  // never called with an empty q.
+  const debouncedSearch = useDebouncedValue(search, 300);
+  const searchActive = debouncedSearch.trim().length > 0;
+  const searchProjectId = projectFilter !== "all" ? parseInt(projectFilter) : undefined;
+  const { data: searchResults, isLoading: isSearching } = useMediaSearch(
+    debouncedSearch,
+    searchProjectId,
+  );
+
   const { data: allMedia, isLoading } = useQuery<MediaWithProject[]>({
     queryKey: ["/api/media"],
+    enabled: !searchActive,
   });
 
   const { data: projects } = useQuery<Project[]>({
     queryKey: ["/api/projects"],
   });
 
-  const filtered = (allMedia || []).filter((m) => {
-    const matchesSearch =
-      (m.caption || "").toLowerCase().includes(search.toLowerCase()) ||
-      m.originalName.toLowerCase().includes(search.toLowerCase()) ||
-      (m.tags || []).some((t) => t.toLowerCase().includes(search.toLowerCase()));
-    const matchesProject = projectFilter === "all" || m.projectId.toString() === projectFilter;
-    return matchesSearch && matchesProject;
-  });
+  const filtered = searchActive
+    ? (searchResults || [])
+    : (allMedia || []).filter(
+        (m) => projectFilter === "all" || m.projectId.toString() === projectFilter,
+      );
 
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-7xl mx-auto">
@@ -95,7 +107,14 @@ export default function PhotosPage() {
         {filtered.length} photo{filtered.length !== 1 ? "s" : ""} found
       </div>
 
-      {isLoading ? (
+      {searchActive ? (
+        <PhotoSearchResults
+          results={searchResults}
+          isLoading={isSearching}
+          onSelect={setSelectedPhoto}
+          showProject
+        />
+      ) : isLoading ? (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
           {[1, 2, 3, 4, 5, 6].map((i) => (
             <Skeleton key={i} className="aspect-square rounded-md" />
@@ -107,10 +126,10 @@ export default function PhotosPage() {
             <div className="flex h-12 w-12 items-center justify-center rounded-md bg-muted mx-auto">
               <ImageIcon className="h-6 w-6 text-muted-foreground" />
             </div>
-            <h3 className="text-lg font-semibold" data-testid="text-no-photos">No photos found</h3>
+            <h3 className="text-lg font-semibold" data-testid="text-no-photos">No photos yet</h3>
             <p className="text-sm text-muted-foreground max-w-sm mx-auto">
-              {search || projectFilter !== "all"
-                ? "Try adjusting your search or filter."
+              {projectFilter !== "all"
+                ? "This project has no photos yet."
                 : "Upload photos to your projects to see them here."}
             </p>
           </div>
