@@ -34,6 +34,24 @@ export const AI_REPORT_MODEL = "claude-sonnet-4-6";
 export const AI_REPORT_MAX_TOKENS = 4000;
 export const AI_REPORT_MONTHLY_LIMIT = 1000;
 export const AI_REPORT_FEATURE = "report_generation";
+export const TRANSCRIPTION_MINUTES_FEATURE = "transcription_minutes";
+
+// Per-feature monthly limits. The three existing per-call features keep the
+// original shared 1000; transcription is metered in MINUTES, not calls —
+// 300 min/month = sixty 5-minute recordings per account, far above any
+// legitimate voice-note usage while capping Deepgram spend per account.
+// Unknown features fall back to AI_REPORT_MONTHLY_LIMIT (same behavior as
+// before the map existed).
+export const AI_FEATURE_MONTHLY_LIMITS: Record<string, number> = {
+  [AI_REPORT_FEATURE]: AI_REPORT_MONTHLY_LIMIT,
+  checklist_generation: AI_REPORT_MONTHLY_LIMIT,
+  walkthrough_generation: AI_REPORT_MONTHLY_LIMIT,
+  [TRANSCRIPTION_MINUTES_FEATURE]: 300,
+};
+
+export function featureMonthlyLimit(feature: string): number {
+  return AI_FEATURE_MONTHLY_LIMITS[feature] ?? AI_REPORT_MONTHLY_LIMIT;
+}
 
 /**
  * Classify an Anthropic APIError for the generate routes' catch-alls.
@@ -407,15 +425,17 @@ export async function getReportGenerationCount(accountId: string): Promise<numbe
 export async function tryReserveReportGeneration(
   accountId: string,
   feature: string = AI_REPORT_FEATURE,
+  amount: number = 1,
 ): Promise<{ admitted: boolean; periodMonth: string }> {
   const periodMonth = currentPeriodMonth();
+  const limit = featureMonthlyLimit(feature);
   const rows = await db
     .insert(aiUsage)
-    .values({ accountId, feature, periodMonth, count: 1 })
+    .values({ accountId, feature, periodMonth, count: amount })
     .onConflictDoUpdate({
       target: [aiUsage.accountId, aiUsage.feature, aiUsage.periodMonth],
-      set: { count: sql`${aiUsage.count} + 1`, updatedAt: new Date() },
-      setWhere: sql`${aiUsage.count} < ${AI_REPORT_MONTHLY_LIMIT}`,
+      set: { count: sql`${aiUsage.count} + ${amount}`, updatedAt: new Date() },
+      setWhere: sql`${aiUsage.count} + ${amount} <= ${limit}`,
     })
     .returning({ count: aiUsage.count });
   // With setWhere unmet, ON CONFLICT DO UPDATE updates nothing → no row returned.
@@ -433,11 +453,12 @@ export async function releaseReportGeneration(
   accountId: string,
   periodMonth: string,
   feature: string = AI_REPORT_FEATURE,
+  amount: number = 1,
 ): Promise<void> {
   try {
     await db
       .update(aiUsage)
-      .set({ count: sql`GREATEST(${aiUsage.count} - 1, 0)`, updatedAt: new Date() })
+      .set({ count: sql`GREATEST(${aiUsage.count} - ${amount}, 0)`, updatedAt: new Date() })
       .where(
         and(
           eq(aiUsage.accountId, accountId),
@@ -449,6 +470,44 @@ export async function releaseReportGeneration(
     console.warn("[ai-reports] failed to release reserved generation slot:", (err as Error)?.message);
     try {
       Sentry.captureException(err, { tags: { source: "ai_reports" }, extra: { accountId } });
+    } catch {
+      // never throw from a compensation path
+    }
+  }
+}
+
+/**
+ * Post-hoc reconciliation for amount-based features (e.g. transcription
+ * minutes): after the provider reports ACTUAL usage, adjust the bucket by
+ * (actual - reserved). Positive deltas increment WITHOUT the limit check —
+ * the spend has already happened, so the bucket must reflect it even if it
+ * overshoots the cap (the next reservation will then be denied). Negative
+ * deltas release via GREATEST(count - x, 0). Best-effort like release:
+ * never throws.
+ */
+export async function reconcileUsage(
+  accountId: string,
+  periodMonth: string,
+  feature: string,
+  delta: number,
+): Promise<void> {
+  if (!Number.isFinite(delta) || Math.round(delta) === 0) return;
+  const d = Math.round(delta);
+  if (d < 0) {
+    return releaseReportGeneration(accountId, periodMonth, feature, -d);
+  }
+  try {
+    await db
+      .insert(aiUsage)
+      .values({ accountId, feature, periodMonth, count: d })
+      .onConflictDoUpdate({
+        target: [aiUsage.accountId, aiUsage.feature, aiUsage.periodMonth],
+        set: { count: sql`${aiUsage.count} + ${d}`, updatedAt: new Date() },
+      });
+  } catch (err) {
+    console.warn("[ai-reports] failed to reconcile usage:", (err as Error)?.message);
+    try {
+      Sentry.captureException(err, { tags: { source: "ai_reports" }, extra: { accountId, feature, delta: d } });
     } catch {
       // never throw from a compensation path
     }

@@ -19,7 +19,9 @@ if (!API_KEY) {
 
 const deepgram: DeepgramClient | null = API_KEY ? new DeepgramClient({ apiKey: API_KEY }) : null;
 
-export async function transcribeAudioFromUrl(url: string): Promise<string> {
+export async function transcribeAudioFromUrl(
+  url: string,
+): Promise<{ transcript: string; durationSeconds: number | null }> {
   if (!deepgram) {
     throw new Error("Transcription is not configured (DEEPGRAM_API_KEY missing)");
   }
@@ -38,5 +40,12 @@ export async function transcribeAudioFromUrl(url: string): Promise<string> {
   if (typeof transcript !== "string") {
     throw new Error("Deepgram returned no transcript");
   }
-  return transcript.trim();
+  // metadata.duration = seconds of audio Deepgram processed (what it bills
+  // on) — used by the caller to reconcile the minutes-based usage bucket.
+  const rawDuration = (response as any)?.metadata?.duration;
+  const durationSeconds =
+    typeof rawDuration === "number" && Number.isFinite(rawDuration) && rawDuration >= 0
+      ? rawDuration
+      : null;
+  return { transcript: transcript.trim(), durationSeconds };
 }

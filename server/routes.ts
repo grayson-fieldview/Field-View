@@ -22,7 +22,7 @@ import { db } from "./db";
 import { eq, sql, and, or, inArray, count, isNull, desc } from "drizzle-orm";
 import { sanitizeUserForViewer, sanitizeTimeEntryForViewer, isManagerRole } from "./lib/userVisibility";
 import { z } from "zod";
-import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, getPresignedGetUrl, deleteFromS3, getObjectStream, getS3Url, inlineContentDisposition } from "./s3";
+import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, getPresignedGetUrl, deleteFromS3, getObjectStream, getObjectSize, getS3Url, inlineContentDisposition } from "./s3";
 import { queueThumbnailGeneration } from "./lib/thumbnails";
 import { queueCaptionGeneration } from "./lib/aiCaptions";
 import { transcribeAudioFromUrl } from "./lib/transcription";
@@ -33,6 +33,8 @@ import {
   classifyAnthropicApiError,
   tryReserveReportGeneration,
   releaseReportGeneration,
+  reconcileUsage,
+  TRANSCRIPTION_MINUTES_FEATURE,
   AI_REPORT_MONTHLY_LIMIT,
   REPORT_TYPES,
   type ReportType,
@@ -787,12 +789,63 @@ export async function registerRoutes(
     if (!key.startsWith("audio/") || key.includes("..") || key.includes("\\")) {
       return res.status(400).json({ message: "Invalid audio key" });
     }
+    const accountId = req.user.accountId;
+    if (!accountId) return res.status(403).json({ message: "No account associated" });
+    // Metering (Deepgram bills per minute of audio):
+    //   1. Hard byte cap via HeadObject — the actual spend bound per call.
+    //   2. Reserve estimated minutes from bytes (64kbps AAC assumption).
+    //   3. Reconcile to Deepgram's metadata.duration after success;
+    //      release the full reservation on failure (reports pattern).
+    const MAX_TRANSCRIBE_AUDIO_BYTES = 10 * 1024 * 1024; // 10MB ≈ 4x headroom over 5min @ 64kbps AAC (~2.4MB)
+    const ESTIMATE_BYTES_PER_MINUTE = 480_000; // 64kbps mobile recorder bitrate
+    let reservation: { periodMonth: string; reserved: number } | null = null;
     try {
+      let sizeBytes: number;
+      try {
+        sizeBytes = await getObjectSize(key);
+      } catch {
+        return res.status(400).json({ message: "Audio not found — upload it first via the presign endpoint" });
+      }
+      if (sizeBytes > MAX_TRANSCRIBE_AUDIO_BYTES) {
+        return res.status(413).json({ message: "Audio file is too large to transcribe (10MB max)" });
+      }
+      const estimatedMinutes = Math.max(1, Math.ceil(sizeBytes / ESTIMATE_BYTES_PER_MINUTE));
+      const { admitted, periodMonth } = await tryReserveReportGeneration(
+        accountId,
+        TRANSCRIPTION_MINUTES_FEATURE,
+        estimatedMinutes,
+      );
+      if (!admitted) {
+        return res.status(429).json({
+          message: "Monthly transcription limit reached for your account. It resets at the start of next month — type your note instead.",
+        });
+      }
+      reservation = { periodMonth, reserved: estimatedMinutes };
       const url = await getPresignedGetUrl(key, 300); // 5 min is plenty
-      const transcript = await transcribeAudioFromUrl(url);
+      const { transcript, durationSeconds } = await transcribeAudioFromUrl(url);
+      // Success — reconcile the estimate to actual billed minutes. If
+      // Deepgram didn't report a duration, keep the byte-based estimate.
+      if (durationSeconds !== null) {
+        const actualMinutes = Math.max(1, Math.ceil(durationSeconds / 60));
+        await reconcileUsage(
+          accountId,
+          reservation.periodMonth,
+          TRANSCRIPTION_MINUTES_FEATURE,
+          actualMinutes - reservation.reserved,
+        );
+      }
+      reservation = null; // consumed — don't release in a later failure path
       res.json({ transcript });
     } catch (error: any) {
       console.error("Transcription error:", error?.message || error);
+      if (reservation) {
+        await releaseReportGeneration(
+          accountId,
+          reservation.periodMonth,
+          TRANSCRIPTION_MINUTES_FEATURE,
+          reservation.reserved,
+        );
+      }
       res.status(503).json({ message: "Transcription failed. Please try again or type your note." });
     } finally {
       // Fire-and-forget cleanup on every path — a failed delete must never

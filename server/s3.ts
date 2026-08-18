@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Readable } from "stream";
 import path from "path";
@@ -119,6 +119,15 @@ export async function putObject(
     })
   );
   return getS3Url(key);
+}
+
+/** Object size in bytes via HeadObject. Throws if the object doesn't exist. */
+export async function getObjectSize(key: string): Promise<number> {
+  const result = await s3Client.send(new HeadObjectCommand({ Bucket: BUCKET, Key: key }));
+  if (typeof result.ContentLength !== "number") {
+    throw new Error(`No ContentLength for S3 key: ${key}`);
+  }
+  return result.ContentLength;
 }
 
 export async function deleteFromS3(key: string): Promise<void> {
