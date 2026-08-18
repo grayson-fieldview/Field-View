@@ -1850,7 +1850,9 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                     // Prefer the identical object from projectMedia so the
                     // existing PhotoViewer (allMedia={projectMedia}) can
                     // navigate from it; viewer itself is untouched.
-                    setSelectedMedia(projectMedia.find((p) => p.id === item.id) ?? item)
+                    // Cast: search result's uploadedBy lacks profileImageUrl,
+                    // which the viewer state type includes (optional at runtime).
+                    setSelectedMedia(projectMedia.find((p) => p.id === item.id) ?? (item as any))
                   }
                 />
               ) : projectMedia.length === 0 ? (
