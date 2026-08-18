@@ -118,6 +118,7 @@ import type { User } from "@shared/models/auth";
 import { AnnotationOverlay } from "@/lib/annotation-svg";
 import { UploadPhotosDialog } from "@/components/upload-photos-dialog";
 import { UploadFilesDialog } from "@/components/upload-files-dialog";
+import { ProjectContactsSection } from "@/components/project-contacts";
 
 type ProjectFileWithUploader = ProjectFile & { uploadedByName: string | null };
 
@@ -1419,6 +1420,11 @@ export default function ProjectDetailPage({ id }: { id: string }) {
               </div>
             </div>
           </div>
+        </div>
+
+        {/* Client contacts — renders nothing for non-admin/manager roles. */}
+        <div className="px-4 sm:px-6 mt-3">
+          <ProjectContactsSection projectId={project.id} />
         </div>
 
         <div className="px-4 sm:px-6 mt-4 mb-1">

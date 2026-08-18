@@ -19,6 +19,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useTheme } from "@/components/theme-provider";
 import { BrandingCard } from "@/components/branding-card";
 import { AccountSettingsCard } from "@/components/account-settings-card";
+import { ContactsDirectoryCard } from "@/components/project-contacts";
 import { useToast } from "@/hooks/use-toast";
 import {
   fetchExportManifest,
@@ -1439,6 +1440,9 @@ export default function SettingsPage() {
 
       <TagManagerCard type="photo" title="Photo Tags" icon={Camera} />
       <TagManagerCard type="project" title="Project Tags" icon={FolderKanban} />
+
+      {/* Renders nothing for non-admin/manager roles (contact PII). */}
+      <ContactsDirectoryCard />
 
       {user?.role === "admin" && <SeatCountWidget />}
 
