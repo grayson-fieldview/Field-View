@@ -1573,6 +1573,34 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/media/search", requireReadAccess, async (req: any, res) => {
+    try {
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+      if (!q) return res.status(400).json({ message: "Query parameter 'q' is required" });
+      const projectIdRaw = req.query.projectId;
+      let projectId: number | undefined;
+      if (projectIdRaw !== undefined) {
+        projectId = parseInt(projectIdRaw as string);
+        if (!Number.isInteger(projectId) || projectId <= 0) {
+          return res.status(400).json({ message: "Invalid projectId" });
+        }
+      }
+      const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 50, 1), 200);
+      const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
+      // Same restricted rule as GET /api/media (getAllMedia precedent).
+      const restrictedToUserId = req.user.role === "restricted" ? req.user.id : undefined;
+      const results = await presignMediaUrls(
+        await storage.searchMedia(accountId, q, { projectId, limit, offset }, restrictedToUserId),
+      );
+      res.json(results);
+    } catch (error) {
+      console.error("[API] GET /api/media/search failed:", error);
+      res.status(500).json({ message: "Failed to search media" });
+    }
+  });
+
   app.get("/api/media", requireReadAccess, async (req: any, res) => {
     try {
       const accountId = req.user.accountId;

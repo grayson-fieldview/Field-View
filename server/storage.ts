@@ -145,6 +145,7 @@ export interface IStorage {
   deleteProject(id: number): Promise<void>;
 
   getMediaByProject(projectId: number): Promise<(Media & { uploadedBy?: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }; uploader?: { id: string; firstName: string | null; lastName: string | null } })[]>;
+  searchMedia(accountId: string, q: string, opts: { projectId?: number; limit: number; offset: number }, restrictedToUserId?: string): Promise<(Media & { project?: { name: string; color: string | null }; uploadedBy?: { firstName: string | null; lastName: string | null } })[]>;
   getAllMedia(accountId: string, restrictedToUserId?: string): Promise<(Media & { project?: { name: string; color: string | null }; uploadedBy?: { firstName: string | null; lastName: string | null } })[]>;
   getMedia(id: number): Promise<Media | undefined>;
   createMedia(item: InsertMedia): Promise<Media>;
@@ -510,6 +511,62 @@ export class DatabaseStorage implements IStorage {
       // Omitted (undefined) when the uploading user was deleted — matches
       // the comments join's behavior.
       uploader: r.uploader?.id ? r.uploader : undefined,
+    }));
+  }
+
+  async searchMedia(
+    accountId: string,
+    q: string,
+    opts: { projectId?: number; limit: number; offset: number },
+    restrictedToUserId?: string,
+  ) {
+    // Full-text search over media.search_vector (generated column, GIN
+    // indexed). websearch_to_tsquery gives quoted phrases and OR/- for
+    // free and NEVER errors on malformed input — a query with no valid
+    // terms yields an empty tsquery that matches nothing (empty result).
+    // Same joins/shape and the same restricted rule as getAllMedia.
+    const tsquery = sql`websearch_to_tsquery('simple', ${q})`;
+    const rows = await db
+      .select({
+        media: media,
+        project: {
+          name: projects.name,
+          color: projects.color,
+        },
+        uploadedBy: {
+          firstName: users.firstName,
+          lastName: users.lastName,
+        },
+        rank: sql<number>`ts_rank_cd(${media.searchVector}, ${tsquery})`,
+      })
+      .from(media)
+      .innerJoin(projects, eq(media.projectId, projects.id))
+      .leftJoin(users, eq(media.uploadedById, users.id))
+      .where(and(
+        eq(projects.accountId, accountId),
+        sql`${media.searchVector} @@ ${tsquery}`,
+        ...(opts.projectId != null ? [eq(media.projectId, opts.projectId)] : []),
+        ...(restrictedToUserId
+          ? [sql`(${projects.createdById} = ${restrictedToUserId} OR EXISTS (
+              SELECT 1 FROM ${projectAssignments}
+              WHERE ${projectAssignments.projectId} = ${media.projectId}
+                AND ${projectAssignments.userId} = ${restrictedToUserId}
+            ))`]
+          : []),
+      ))
+      .orderBy(
+        sql`ts_rank_cd(${media.searchVector}, ${tsquery}) DESC`,
+        sql`COALESCE(${media.takenAt}, ${media.createdAt}) DESC`,
+      )
+      .limit(opts.limit)
+      .offset(opts.offset);
+
+    // Same shape as getAllMedia (photos grid consumes it as-is); rank is
+    // internal to the ORDER BY and not exposed.
+    return rows.map((r) => ({
+      ...r.media,
+      project: r.project?.name ? r.project : undefined,
+      uploadedBy: r.uploadedBy?.firstName ? r.uploadedBy : undefined,
     }));
   }
 
