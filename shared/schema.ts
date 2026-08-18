@@ -450,7 +450,12 @@ export const sharedGalleries = pgTable("shared_galleries", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   token: varchar("token", { length: 32 }).notNull().unique(),
   projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }).notNull(),
+  // Snapshot galleries serve exactly these mediaIds forever. Live galleries
+  // (isLive) resolve photos from the project at request time; mediaIds is
+  // still stored as a record of the original selection but is not consulted
+  // when serving the gallery.
   mediaIds: integer("media_ids").array().notNull(),
+  isLive: boolean("is_live").default(false).notNull(),
   includeMetadata: boolean("include_metadata").default(false).notNull(),
   includeDescriptions: boolean("include_descriptions").default(false).notNull(),
   createdById: varchar("created_by_id").references(() => users.id),

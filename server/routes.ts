@@ -6624,7 +6624,7 @@ export async function registerRoutes(
 
   app.post("/api/galleries", requireWriteAccess, async (req: any, res) => {
     try {
-      const { projectId, mediaIds, includeMetadata, includeDescriptions } = req.body;
+      const { projectId, mediaIds, includeMetadata, includeDescriptions, isLive } = req.body;
       if (!projectId || !Array.isArray(mediaIds) || mediaIds.length === 0) {
         return res.status(400).json({ message: "projectId and mediaIds are required" });
       }
@@ -6634,6 +6634,9 @@ export async function registerRoutes(
         token,
         projectId,
         mediaIds,
+        // Live galleries resolve photos at request time; mediaIds is kept
+        // as a record of the original selection.
+        isLive: isLive === true,
         includeMetadata: includeMetadata || false,
         includeDescriptions: includeDescriptions || false,
         createdById: req.user!.id,
@@ -6657,6 +6660,7 @@ export async function registerRoutes(
       res.json(galleries.map(g => ({
         token: g.token,
         createdAt: g.createdAt,
+        isLive: g.isLive,
         photoCount: g.mediaIds.length,
         includeMetadata: g.includeMetadata,
         includeDescriptions: g.includeDescriptions,
@@ -6695,7 +6699,13 @@ export async function registerRoutes(
       }
       const project = await storage.getProject(gallery.projectId);
       const allMedia = await presignMediaUrls(await storage.getMediaByProject(gallery.projectId));
-      const galleryMedia = allMedia.filter(m => gallery.mediaIds.includes(m.id));
+      // Live galleries show every project photo at request time, newest
+      // first (capture time preferred). Snapshot galleries serve exactly
+      // the mediaIds captured at creation, as before.
+      const galleryMedia = gallery.isLive
+        ? [...allMedia].sort((a, b) =>
+            new Date(b.takenAt ?? b.createdAt).getTime() - new Date(a.takenAt ?? a.createdAt).getTime())
+        : allMedia.filter(m => gallery.mediaIds.includes(m.id));
       res.json({
         token: gallery.token,
         projectName: project?.name || "Project",

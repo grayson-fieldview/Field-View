@@ -201,7 +201,7 @@ const reportTypeLabels: Record<string, string> = {
   daily: "Daily",
 };
 
-type DetailTab = "photos" | "tasks" | "files" | "checklists" | "reports" | "daily-log";
+type DetailTab = "photos" | "tasks" | "files" | "checklists" | "reports" | "daily-log" | "contacts";
 
 // Per-project override for the report-PDF timestamp/address overlay.
 // null = inherit account setting; true/false = explicit override.
@@ -380,6 +380,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const [showShareDialog, setShowShareDialog] = useState(false);
   const [showProjectShareDialog, setShowProjectShareDialog] = useState(false);
   const [shareStep, setShareStep] = useState<"options" | "link">("options");
+  const [shareIsLive, setShareIsLive] = useState(false);
   const [shareIncludeMetadata, setShareIncludeMetadata] = useState(false);
   const [shareIncludeDescriptions, setShareIncludeDescriptions] = useState(false);
   const [shareLink, setShareLink] = useState("");
@@ -813,12 +814,13 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   });
 
   const createGallery = useMutation({
-    mutationFn: async (params: { mediaIds: number[]; includeMetadata: boolean; includeDescriptions: boolean }) => {
+    mutationFn: async (params: { mediaIds: number[]; includeMetadata: boolean; includeDescriptions: boolean; isLive: boolean }) => {
       const res = await apiRequest("POST", "/api/galleries", {
         projectId: Number(id),
         mediaIds: params.mediaIds,
         includeMetadata: params.includeMetadata,
         includeDescriptions: params.includeDescriptions,
+        isLive: params.isLive,
       });
       return res.json();
     },
@@ -837,6 +839,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   type GalleryLink = {
     token: string;
     createdAt: string;
+    isLive: boolean;
     photoCount: number;
     includeMetadata: boolean;
     includeDescriptions: boolean;
@@ -969,6 +972,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
 
   const openShareDialog = useCallback(() => {
     setShareStep("options");
+    setShareIsLive(false);
     setShareIncludeMetadata(false);
     setShareIncludeDescriptions(false);
     setShareLink("");
@@ -981,8 +985,9 @@ export default function ProjectDetailPage({ id }: { id: string }) {
       mediaIds: Array.from(selectedIds),
       includeMetadata: shareIncludeMetadata,
       includeDescriptions: shareIncludeDescriptions,
+      isLive: shareIsLive,
     });
-  }, [selectedIds, shareIncludeMetadata, shareIncludeDescriptions, createGallery]);
+  }, [selectedIds, shareIncludeMetadata, shareIncludeDescriptions, shareIsLive, createGallery]);
 
   const handleCopyLink = useCallback(async () => {
     try {
@@ -1115,6 +1120,9 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     { key: "reports", label: "Reports", count: projectReports.length },
     { key: "files", label: "Files", count: projectFiles.length },
     { key: "daily-log", label: "Daily Log", count: 0 },
+    // Contact PII — tab hidden entirely for non-admin/manager roles (the
+    // server 403s them on every contacts route as well).
+    ...(canManageMembers ? [{ key: "contacts" as DetailTab, label: "Contacts", count: 0 }] : []),
   ];
 
   const todoCount = projectTasks.filter(t => t.status === "todo").length;
@@ -1420,11 +1428,6 @@ export default function ProjectDetailPage({ id }: { id: string }) {
               </div>
             </div>
           </div>
-        </div>
-
-        {/* Client contacts — renders nothing for non-admin/manager roles. */}
-        <div className="px-4 sm:px-6 mt-3">
-          <ProjectContactsSection projectId={project.id} />
         </div>
 
         <div className="px-4 sm:px-6 mt-4 mb-1">
@@ -2431,6 +2434,12 @@ export default function ProjectDetailPage({ id }: { id: string }) {
             </div>
           )}
 
+          {activeTab === "contacts" && canManageMembers && (
+            <div className="px-4 sm:px-6 py-4">
+              <ProjectContactsSection projectId={project.id} />
+            </div>
+          )}
+
           {activeTab === "daily-log" && (
             <DailyLogTab projectId={id} />
           )}
@@ -2556,6 +2565,30 @@ export default function ProjectDetailPage({ id }: { id: string }) {
 
           {shareStep === "options" ? (
             <div className="space-y-4">
+              <div className="space-y-2" role="radiogroup" aria-label="Gallery mode">
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={!shareIsLive}
+                  onClick={() => setShareIsLive(false)}
+                  className={`w-full text-left rounded-md border p-3 ${!shareIsLive ? "border-primary bg-primary/5" : "hover-elevate"}`}
+                  data-testid="option-gallery-snapshot"
+                >
+                  <p className="text-sm font-medium">Snapshot — these photos only</p>
+                  <p className="text-xs text-muted-foreground">The link always shows exactly the {selectedIds.size} photo{selectedIds.size !== 1 ? "s" : ""} you selected, even as the project changes.</p>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={shareIsLive}
+                  onClick={() => setShareIsLive(true)}
+                  className={`w-full text-left rounded-md border p-3 ${shareIsLive ? "border-primary bg-primary/5" : "hover-elevate"}`}
+                  data-testid="option-gallery-live"
+                >
+                  <p className="text-sm font-medium">Live — always show the latest photos from this project</p>
+                  <p className="text-xs text-muted-foreground">The link shows all project photos, newest first, updating as photos are added or removed.</p>
+                </button>
+              </div>
               <label className="flex items-center gap-3 cursor-pointer" data-testid="toggle-include-metadata">
                 <button
                   type="button"
@@ -2601,7 +2634,11 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                     {galleriesQuery.data.map((g) => (
                       <div key={g.token} className="flex items-center gap-2 text-xs rounded-md border px-2 py-1.5" data-testid={`row-gallery-${g.token}`}>
                         <span className="flex-1 min-w-0 truncate">
-                          {new Date(g.createdAt).toLocaleDateString()} · {g.photoCount} photo{g.photoCount === 1 ? "" : "s"}
+                          <span className={`inline-block rounded-full px-1.5 py-px text-[10px] font-medium mr-1.5 align-middle ${g.isLive ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
+                            {g.isLive ? "Live" : "Snapshot"}
+                          </span>
+                          {new Date(g.createdAt).toLocaleDateString()}
+                          {g.isLive ? " · all project photos" : ` · ${g.photoCount} photo${g.photoCount === 1 ? "" : "s"}`}
                           {g.createdBy?.firstName ? ` · ${g.createdBy.firstName} ${g.createdBy.lastName ?? ""}`.trimEnd() : ""}
                         </span>
                         <Button
