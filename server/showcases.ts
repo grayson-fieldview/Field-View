@@ -17,7 +17,6 @@ import {
 } from "@shared/schema";
 import { accounts } from "@shared/models/auth";
 import { requireReadAccess, requireWriteAccess } from "./replit_integrations/auth";
-import { requireAdminOrManager } from "./middleware/auth";
 import { getObjectStream, extractS3KeyFromUrl, isS3Url } from "./s3";
 
 // ---------------------------------------------------------------------------
@@ -539,16 +538,28 @@ export function registerShowcaseRoutes(app: Express): void {
     }
   });
 
-  // Deliberately admin/manager-only (Aug 2026): account-wide portfolio
-  // branding, slug, and publish state should not be editable by standard or
-  // restricted field users. NOTE: showcase-edit.tsx also PATCHes
-  // { showcaseTags } from the tag editor — standard users editing showcases
-  // will now get 403 when adding a new tag (flagged at rollout).
-  app.patch("/api/showcase-settings", requireWriteAccess, requireAdminOrManager, async (req: any, res) => {
+  // Per-field authorization (Aug 2026):
+  // - showcaseTags: any write-access non-restricted user — it's part of the
+  //   normal showcase-editing flow (tag editor in showcase-edit.tsx).
+  // - everything else (slug, branding, publish state, CTA…): admin/manager
+  //   only — account-wide portfolio identity.
+  // A non-admin request mixing tags WITH a portfolio field is rejected
+  // whole (403), never partially applied. Restricted users reach neither.
+  app.patch("/api/showcase-settings", requireWriteAccess, async (req: any, res) => {
     try {
       const accountId = req.user.accountId;
       if (!accountId) return res.status(403).json({ message: "No account associated" });
+      if (req.user.role === "restricted") return res.status(403).json({ message: "Access denied" });
       const patch = settingsPatchSchema.parse(req.body);
+      const isAdminOrManager = req.user.role === "admin" || req.user.role === "manager";
+      if (!isAdminOrManager) {
+        const portfolioFields = Object.keys(patch).filter(
+          (k) => k !== "showcaseTags" && (patch as any)[k] !== undefined,
+        );
+        if (portfolioFields.length > 0) {
+          return res.status(403).json({ message: "Only admins and managers can change portfolio settings" });
+        }
+      }
       const settings = await getOrCreateSettings(accountId);
       if (patch.portfolioSlug !== undefined && patch.portfolioSlug !== null) {
         const [clash] = await db.select({ accountId: showcaseSettings.accountId }).from(showcaseSettings)
