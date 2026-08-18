@@ -22,6 +22,8 @@ import {
   checklistTemplateSections,
   checklistTemplateItemOptions,
   accountTags,
+  contacts,
+  projectContacts,
   calendarConnections,
   calendarEvents,
   type Project,
@@ -81,6 +83,10 @@ import {
   type AccountSettings,
   type AccountSettingsPatch,
   type PhotoAspectRatio,
+  type Contact,
+  type ProjectContact,
+  type CreateContactInput,
+  type UpdateContactInput,
 } from "@shared/schema";
 import { users, accounts, photoAspectRatioEnum, type User } from "@shared/models/auth";
 import { db } from "./db";
@@ -258,6 +264,20 @@ export interface IStorage {
   // internally. Throws if the account does not exist.
   getAccountSettings(accountId: string): Promise<AccountSettings>;
   updateAccountSettings(accountId: string, patch: AccountSettingsPatch): Promise<AccountSettings>;
+
+  // Client contacts (PII — admin/manager only at the route layer; never
+  // expose on public/share payloads).
+  getContacts(accountId: string): Promise<(Contact & { projectCount: number })[]>;
+  getContact(id: number): Promise<Contact | undefined>;
+  createContact(accountId: string, createdById: string | null, data: CreateContactInput): Promise<Contact>;
+  updateContact(id: number, data: UpdateContactInput): Promise<Contact | undefined>;
+  /** Returns false (and does not delete) when the contact is still attached to any project. */
+  deleteContactIfUnreferenced(id: number): Promise<{ deleted: boolean; referencedByProjects: number }>;
+  getProjectContacts(projectId: number): Promise<(ProjectContact & { contact: Contact })[]>;
+  getProjectContact(projectId: number, contactId: number): Promise<ProjectContact | undefined>;
+  attachProjectContact(projectId: number, contactId: number, data: { contactType: string; recapFrequency: string }): Promise<ProjectContact>;
+  updateProjectContact(projectId: number, contactId: number, data: { contactType?: string; recapFrequency?: string }): Promise<ProjectContact | undefined>;
+  detachProjectContact(projectId: number, contactId: number): Promise<boolean>;
 
   createSharedGallery(gallery: InsertSharedGallery): Promise<SharedGallery>;
   getSharedGalleryByToken(token: string): Promise<SharedGallery | undefined>;
@@ -1708,6 +1728,115 @@ export class DatabaseStorage implements IStorage {
       defaultPhotoAspectRatio: dbToWireRatio(updated.defaultPhotoAspectRatio),
       photoOverlayEnabled: updated.photoOverlayEnabled,
     };
+  }
+
+  // ── Client contacts ──────────────────────────────────────────────────────
+  async getContacts(accountId: string): Promise<(Contact & { projectCount: number })[]> {
+    const rows = await db
+      .select({
+        contact: contacts,
+        projectCount: sql<number>`(SELECT COUNT(*)::int FROM ${projectContacts} WHERE ${projectContacts.contactId} = ${contacts.id})`,
+      })
+      .from(contacts)
+      .where(eq(contacts.accountId, accountId))
+      .orderBy(asc(contacts.firstName), asc(contacts.lastName));
+    return rows.map((r) => ({ ...r.contact, projectCount: r.projectCount }));
+  }
+
+  async getContact(id: number): Promise<Contact | undefined> {
+    const [row] = await db.select().from(contacts).where(eq(contacts.id, id));
+    return row;
+  }
+
+  async createContact(accountId: string, createdById: string | null, data: CreateContactInput): Promise<Contact> {
+    const [created] = await db
+      .insert(contacts)
+      .values({ ...data, accountId, createdById } as any)
+      .returning();
+    return created;
+  }
+
+  async updateContact(id: number, data: UpdateContactInput): Promise<Contact | undefined> {
+    if (Object.keys(data).length === 0) return this.getContact(id);
+    const [updated] = await db
+      .update(contacts)
+      .set({ ...data, updatedAt: new Date() } as any)
+      .where(eq(contacts.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteContactIfUnreferenced(id: number): Promise<{ deleted: boolean; referencedByProjects: number }> {
+    // Block (don't cascade) when still attached to projects — the FK would
+    // cascade, but a silent cascade from a directory-level delete is how
+    // recap subscriptions vanish by accident.
+    const [ref] = await db
+      .select({ count: sql<number>`COUNT(DISTINCT ${projectContacts.projectId})::int` })
+      .from(projectContacts)
+      .where(eq(projectContacts.contactId, id));
+    if (ref && ref.count > 0) return { deleted: false, referencedByProjects: ref.count };
+    await db.delete(contacts).where(eq(contacts.id, id));
+    return { deleted: true, referencedByProjects: 0 };
+  }
+
+  async getProjectContacts(projectId: number): Promise<(ProjectContact & { contact: Contact })[]> {
+    const rows = await db
+      .select({ pc: projectContacts, contact: contacts })
+      .from(projectContacts)
+      .innerJoin(contacts, eq(projectContacts.contactId, contacts.id))
+      .where(eq(projectContacts.projectId, projectId))
+      .orderBy(asc(contacts.firstName), asc(contacts.lastName));
+    return rows.map((r) => ({ ...r.pc, contact: r.contact }));
+  }
+
+  async getProjectContact(projectId: number, contactId: number): Promise<ProjectContact | undefined> {
+    const [row] = await db
+      .select()
+      .from(projectContacts)
+      .where(and(eq(projectContacts.projectId, projectId), eq(projectContacts.contactId, contactId)));
+    return row;
+  }
+
+  async attachProjectContact(
+    projectId: number,
+    contactId: number,
+    data: { contactType: string; recapFrequency: string },
+  ): Promise<ProjectContact> {
+    const [created] = await db
+      .insert(projectContacts)
+      .values({
+        projectId,
+        contactId,
+        contactType: data.contactType as any,
+        recapFrequency: data.recapFrequency as any,
+      })
+      .returning();
+    return created;
+  }
+
+  async updateProjectContact(
+    projectId: number,
+    contactId: number,
+    data: { contactType?: string; recapFrequency?: string },
+  ): Promise<ProjectContact | undefined> {
+    if (Object.keys(data).length === 0) return this.getProjectContact(projectId, contactId);
+    const [updated] = await db
+      .update(projectContacts)
+      .set({
+        ...(data.contactType !== undefined ? { contactType: data.contactType as any } : {}),
+        ...(data.recapFrequency !== undefined ? { recapFrequency: data.recapFrequency as any } : {}),
+      })
+      .where(and(eq(projectContacts.projectId, projectId), eq(projectContacts.contactId, contactId)))
+      .returning();
+    return updated;
+  }
+
+  async detachProjectContact(projectId: number, contactId: number): Promise<boolean> {
+    const deleted = await db
+      .delete(projectContacts)
+      .where(and(eq(projectContacts.projectId, projectId), eq(projectContacts.contactId, contactId)))
+      .returning({ id: projectContacts.id });
+    return deleted.length > 0;
   }
 
   async createSharedGallery(gallery: InsertSharedGallery): Promise<SharedGallery> {

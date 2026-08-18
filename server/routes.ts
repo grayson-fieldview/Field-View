@@ -10,7 +10,7 @@ import { normalizeEmail } from "./lib/normalizeEmail";
 import { apiV1Router } from "./apiV1";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
-import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistSectionSchema, insertChecklistItemOptionSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, checklistItems, checklistSections, checklistItemOptions, checklistItemPhotos, taskPhotos, checklistTemplates, checklistTemplateSections, checklistTemplateItems, checklistTemplateItemOptions, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, templateConfigSchema, accountSettingsPatchSchema, apiKeys, appInstallPromptEvents } from "@shared/schema";
+import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistSectionSchema, insertChecklistItemOptionSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, checklistItems, checklistSections, checklistItemOptions, checklistItemPhotos, taskPhotos, checklistTemplates, checklistTemplateSections, checklistTemplateItems, checklistTemplateItemOptions, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, templateConfigSchema, accountSettingsPatchSchema, apiKeys, appInstallPromptEvents, createContactSchema, updateContactSchema, attachProjectContactSchema, updateProjectContactSchema } from "@shared/schema";
 import { executeAutoClockOut } from "./lib/timesheets";
 import { formatLocalTime } from "./lib/geo";
 import { users, invitations, accounts, assignedProjectIdsSchema } from "@shared/models/auth";
@@ -1612,6 +1612,186 @@ export async function registerRoutes(
       res.json(updated);
     } catch (error) {
       res.status(500).json({ message: "Failed to update media" });
+    }
+  });
+
+  // ── Client contacts ────────────────────────────────────────────────────
+  // PII: names, emails, phones, home addresses. Admin/manager ONLY — every
+  // route (including GETs) checks isManagerRole explicitly, so restricted
+  // AND standard users get 403 on reads as well as writes. Contact rows
+  // must never leak into public/share payloads (see shared/schema.ts).
+  const requireManagerForContacts = (req: any, res: any): boolean => {
+    if (!isManagerRole(req.user?.role)) {
+      res.status(403).json({ message: "Only admins and managers can access contacts" });
+      return false;
+    }
+    return true;
+  };
+
+  app.get("/api/contacts", requireReadAccess, async (req: any, res) => {
+    try {
+      if (!requireManagerForContacts(req, res)) return;
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      res.json(await storage.getContacts(accountId));
+    } catch (error) {
+      console.error("[API] GET /api/contacts failed:", error);
+      res.status(500).json({ message: "Failed to fetch contacts" });
+    }
+  });
+
+  app.post("/api/contacts", requireWriteAccess, async (req: any, res) => {
+    try {
+      if (!requireManagerForContacts(req, res)) return;
+      const accountId = req.user.accountId;
+      if (!accountId) return res.status(403).json({ message: "No account associated" });
+      const parsed = createContactSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: "Invalid body", errors: parsed.error.flatten() });
+      const created = await storage.createContact(accountId, req.user.id ?? null, parsed.data);
+      res.status(201).json(created);
+    } catch (error) {
+      console.error("[API] POST /api/contacts failed:", error);
+      res.status(500).json({ message: "Failed to create contact" });
+    }
+  });
+
+  app.patch("/api/contacts/:id", requireWriteAccess, async (req: any, res) => {
+    try {
+      if (!requireManagerForContacts(req, res)) return;
+      const id = parseInt(req.params.id as string);
+      if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ message: "Contact not found" });
+      const contact = await storage.getContact(id);
+      if (!contact || contact.accountId !== req.user.accountId) {
+        return res.status(404).json({ message: "Contact not found" });
+      }
+      const parsed = updateContactSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: "Invalid body", errors: parsed.error.flatten() });
+      const updated = await storage.updateContact(id, parsed.data);
+      res.json(updated);
+    } catch (error) {
+      console.error("[API] PATCH /api/contacts/:id failed:", error);
+      res.status(500).json({ message: "Failed to update contact" });
+    }
+  });
+
+  app.delete("/api/contacts/:id", requireWriteAccess, async (req: any, res) => {
+    try {
+      if (!requireManagerForContacts(req, res)) return;
+      const id = parseInt(req.params.id as string);
+      if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ message: "Contact not found" });
+      const contact = await storage.getContact(id);
+      if (!contact || contact.accountId !== req.user.accountId) {
+        return res.status(404).json({ message: "Contact not found" });
+      }
+      const result = await storage.deleteContactIfUnreferenced(id);
+      if (!result.deleted) {
+        return res.status(409).json({
+          message: `This contact is attached to ${result.referencedByProjects} project${result.referencedByProjects === 1 ? "" : "s"}. Remove them from those projects first.`,
+        });
+      }
+      res.status(204).end();
+    } catch (error) {
+      console.error("[API] DELETE /api/contacts/:id failed:", error);
+      res.status(500).json({ message: "Failed to delete contact" });
+    }
+  });
+
+  app.get("/api/projects/:id/contacts", requireReadAccess, async (req: any, res) => {
+    try {
+      if (!requireManagerForContacts(req, res)) return;
+      const projectId = parseInt(req.params.id as string);
+      if (!Number.isInteger(projectId) || projectId <= 0) return res.status(404).json({ message: "Project not found" });
+      const project = await storage.getProject(projectId);
+      if (!project || project.accountId !== req.user.accountId) {
+        return res.status(404).json({ message: "Project not found" });
+      }
+      res.json(await storage.getProjectContacts(projectId));
+    } catch (error) {
+      console.error("[API] GET /api/projects/:id/contacts failed:", error);
+      res.status(500).json({ message: "Failed to fetch project contacts" });
+    }
+  });
+
+  app.post("/api/projects/:id/contacts", requireWriteAccess, async (req: any, res) => {
+    try {
+      if (!requireManagerForContacts(req, res)) return;
+      const projectId = parseInt(req.params.id as string);
+      if (!Number.isInteger(projectId) || projectId <= 0) return res.status(404).json({ message: "Project not found" });
+      const project = await storage.getProject(projectId);
+      if (!project || project.accountId !== req.user.accountId) {
+        return res.status(404).json({ message: "Project not found" });
+      }
+      const parsed = attachProjectContactSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: "Invalid body", errors: parsed.error.flatten() });
+
+      let contactId: number;
+      if (parsed.data.contactId !== undefined) {
+        const contact = await storage.getContact(parsed.data.contactId);
+        if (!contact || contact.accountId !== req.user.accountId) {
+          return res.status(404).json({ message: "Contact not found" });
+        }
+        contactId = contact.id;
+      } else {
+        const created = await storage.createContact(req.user.accountId, req.user.id ?? null, parsed.data.contact!);
+        contactId = created.id;
+      }
+
+      const existing = await storage.getProjectContact(projectId, contactId);
+      if (existing) return res.status(409).json({ message: "Contact is already attached to this project" });
+
+      const attached = await storage.attachProjectContact(projectId, contactId, {
+        contactType: parsed.data.contactType,
+        recapFrequency: parsed.data.recapFrequency,
+      });
+      const contact = await storage.getContact(contactId);
+      res.status(201).json({ ...attached, contact });
+    } catch (error) {
+      console.error("[API] POST /api/projects/:id/contacts failed:", error);
+      res.status(500).json({ message: "Failed to attach contact" });
+    }
+  });
+
+  app.patch("/api/projects/:id/contacts/:contactId", requireWriteAccess, async (req: any, res) => {
+    try {
+      if (!requireManagerForContacts(req, res)) return;
+      const projectId = parseInt(req.params.id as string);
+      const contactId = parseInt(req.params.contactId as string);
+      if (!Number.isInteger(projectId) || projectId <= 0 || !Number.isInteger(contactId) || contactId <= 0) {
+        return res.status(404).json({ message: "Not found" });
+      }
+      const project = await storage.getProject(projectId);
+      if (!project || project.accountId !== req.user.accountId) {
+        return res.status(404).json({ message: "Project not found" });
+      }
+      const parsed = updateProjectContactSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: "Invalid body", errors: parsed.error.flatten() });
+      const updated = await storage.updateProjectContact(projectId, contactId, parsed.data);
+      if (!updated) return res.status(404).json({ message: "Contact is not attached to this project" });
+      res.json(updated);
+    } catch (error) {
+      console.error("[API] PATCH /api/projects/:id/contacts/:contactId failed:", error);
+      res.status(500).json({ message: "Failed to update project contact" });
+    }
+  });
+
+  app.delete("/api/projects/:id/contacts/:contactId", requireWriteAccess, async (req: any, res) => {
+    try {
+      if (!requireManagerForContacts(req, res)) return;
+      const projectId = parseInt(req.params.id as string);
+      const contactId = parseInt(req.params.contactId as string);
+      if (!Number.isInteger(projectId) || projectId <= 0 || !Number.isInteger(contactId) || contactId <= 0) {
+        return res.status(404).json({ message: "Not found" });
+      }
+      const project = await storage.getProject(projectId);
+      if (!project || project.accountId !== req.user.accountId) {
+        return res.status(404).json({ message: "Project not found" });
+      }
+      const detached = await storage.detachProjectContact(projectId, contactId);
+      if (!detached) return res.status(404).json({ message: "Contact is not attached to this project" });
+      res.status(204).end();
+    } catch (error) {
+      console.error("[API] DELETE /api/projects/:id/contacts/:contactId failed:", error);
+      res.status(500).json({ message: "Failed to detach contact" });
     }
   });
 
