@@ -105,9 +105,17 @@ function validatePairs(photos: PhotoInput[]): string | null {
   return null;
 }
 
-async function verifyShowcaseAccess(id: number, accountId: string) {
-  const [row] = await db.select().from(showcases).where(and(eq(showcases.id, id), eq(showcases.accountId, accountId))).limit(1);
-  return row || null;
+// Tenant check + restricted-role creator check in one place, so every route
+// (reads AND writes) inherits both. Restricted users get null — indistin-
+// guishable from not-found — for showcases they didn't create; a showcase is
+// creator-owned for them (createdById nullable on legacy rows → hidden).
+// Non-restricted: same single SELECT + account compare as before, then the
+// role test short-circuits — byte-identical behavior.
+async function verifyShowcaseAccess(id: number, user: { accountId: string; id: string; role: string }) {
+  const [row] = await db.select().from(showcases).where(and(eq(showcases.id, id), eq(showcases.accountId, user.accountId))).limit(1);
+  if (!row) return null;
+  if (user.role === "restricted" && row.createdById !== user.id) return null;
+  return row;
 }
 
 // Public image variant URL — resized + EXIF-stripped, never the original.
@@ -297,12 +305,8 @@ export function registerShowcaseRoutes(app: Express): void {
     try {
       const id = parseInt(req.params.id);
       if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid id" });
-      const row = await verifyShowcaseAccess(id, req.user.accountId);
+      const row = await verifyShowcaseAccess(id, req.user);
       if (!row) return res.status(404).json({ message: "Showcase not found" });
-      // Restricted: creator-only, 404 (not 403) to avoid confirming existence.
-      if (req.user.role === "restricted" && row.createdById !== req.user.id) {
-        return res.status(404).json({ message: "Showcase not found" });
-      }
       const photos = await loadShowcasePhotoRows([id]);
       const mediaIds = photos.map((p) => p.mediaId);
       const mediaRows = mediaIds.length
@@ -322,7 +326,7 @@ export function registerShowcaseRoutes(app: Express): void {
   app.patch("/api/showcases/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id);
-      const existing = await verifyShowcaseAccess(id, req.user.accountId);
+      const existing = await verifyShowcaseAccess(id, req.user);
       if (!existing) return res.status(404).json({ message: "Showcase not found" });
       const patch = showcasePatchSchema.parse(req.body);
 
@@ -400,7 +404,7 @@ export function registerShowcaseRoutes(app: Express): void {
   app.delete("/api/showcases/:id", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id);
-      const existing = await verifyShowcaseAccess(id, req.user.accountId);
+      const existing = await verifyShowcaseAccess(id, req.user);
       if (!existing) return res.status(404).json({ message: "Showcase not found" });
       await db.delete(showcases).where(and(eq(showcases.id, id), eq(showcases.accountId, req.user.accountId)));
       res.json({ success: true });
@@ -414,7 +418,7 @@ export function registerShowcaseRoutes(app: Express): void {
   app.put("/api/showcases/:id/photos", requireWriteAccess, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id);
-      const existing = await verifyShowcaseAccess(id, req.user.accountId);
+      const existing = await verifyShowcaseAccess(id, req.user);
       if (!existing) return res.status(404).json({ message: "Showcase not found" });
       const body = z.object({ photos: z.array(photoInputSchema).max(200) }).parse(req.body);
       const pairError = validatePairs(body.photos);
