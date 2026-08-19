@@ -14,6 +14,7 @@ import {
   buildAccountContextBlock,
   type AccountAiCustomization,
 } from "./aiContext";
+import { recordAnthropicUsageEvent } from "./aiUsageEvents";
 
 export const AI_CHECKLIST_MODEL = "claude-haiku-4-5"; // short structured output — Sonnet not needed
 export const AI_CHECKLIST_MAX_TOKENS = 2000;
@@ -74,25 +75,44 @@ export type GeneratedChecklistContent = {
 };
 
 export async function generateChecklistContent(input: {
+  accountId: string;
+  userId: string | null;
   projectId: number;
   note: string;
   aiCustomization: AccountAiCustomization;
 }): Promise<GeneratedChecklistContent> {
-  const { projectId, note, aiCustomization } = input;
+  const { accountId, userId, projectId, note, aiCustomization } = input;
 
   // Call + extract, retrying ONCE on a missing/invalid tool_use block only.
   // API errors (network, 429s, auth) propagate immediately — they are not
   // retried here. Same contract as aiReports.ts.
   let parsed: any;
   for (let attempt = 0; ; attempt++) {
-    const response = await getClient().messages.create({
+    let response: Anthropic.Message;
+    try {
+      response = await getClient().messages.create({
+        model: AI_CHECKLIST_MODEL,
+        max_tokens: AI_CHECKLIST_MAX_TOKENS,
+        system: buildChecklistSystemPrompt(aiCustomization),
+        messages: [{ role: "user", content: [{ type: "text", text: note }] }],
+        tools: [SUBMIT_CHECKLIST_TOOL],
+        // Force the tool call — structured output guaranteed, not requested.
+        tool_choice: { type: "tool", name: "submit_checklist" },
+      });
+    } catch (error) {
+      await recordAnthropicUsageEvent({
+        attribution: { accountId, userId },
+        feature: "checklist_generation",
+        model: AI_CHECKLIST_MODEL,
+        error,
+      });
+      throw error;
+    }
+    await recordAnthropicUsageEvent({
+      attribution: { accountId, userId },
+      feature: "checklist_generation",
       model: AI_CHECKLIST_MODEL,
-      max_tokens: AI_CHECKLIST_MAX_TOKENS,
-      system: buildChecklistSystemPrompt(aiCustomization),
-      messages: [{ role: "user", content: [{ type: "text", text: note }] }],
-      tools: [SUBMIT_CHECKLIST_TOOL],
-      // Force the tool call — structured output guaranteed, not requested.
-      tool_choice: { type: "tool", name: "submit_checklist" },
+      response,
     });
 
     if (response.stop_reason === "max_tokens") {

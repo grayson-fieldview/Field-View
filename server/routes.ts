@@ -35,6 +35,7 @@ import {
   tryReserveReportGeneration,
   releaseReportGeneration,
   reconcileUsage,
+  AI_REPORT_FEATURE,
   TRANSCRIPTION_MINUTES_FEATURE,
   AI_REPORT_MONTHLY_LIMIT,
   AI_FEATURE_MONTHLY_LIMITS,
@@ -852,7 +853,10 @@ export async function registerRoutes(
       }
       reservation = { periodMonth, reserved: estimatedMinutes };
       const url = await getPresignedGetUrl(key, 300); // 5 min is plenty
-      const { transcript, durationSeconds } = await transcribeAudioFromUrl(url);
+      const { transcript, durationSeconds } = await transcribeAudioFromUrl(url, {
+        accountId,
+        userId: req.user.id ?? null,
+      });
       // Success — reconcile the estimate to actual billed minutes. If
       // Deepgram didn't report a duration, keep the byte-based estimate.
       if (durationSeconds !== null) {
@@ -901,7 +905,13 @@ export async function registerRoutes(
       if (!parsed.success) {
         return res.status(400).json({ message: "Provide 'text' between 1 and 2000 characters" });
       }
-      const translation = await translateText(parsed.data.text);
+      if (!req.user.accountId) {
+        return res.status(403).json({ message: "No account associated with user" });
+      }
+      const translation = await translateText(parsed.data.text, {
+        accountId: req.user.accountId,
+        userId: req.user.id ?? null,
+      });
       res.json({ translation });
     } catch (error: any) {
       const apiErr = classifyAnthropicApiError(error);
@@ -2785,6 +2795,8 @@ export async function registerRoutes(
         let content: Awaited<ReturnType<typeof generateChecklistContent>>;
         try {
           content = await generateChecklistContent({
+            accountId: req.user.accountId,
+            userId: req.user.id ?? null,
             projectId,
             note: parsed.data.note,
             aiCustomization,
@@ -3560,6 +3572,9 @@ export async function registerRoutes(
       try {
         try {
           content = await generateReportContent({
+            accountId: req.user.accountId,
+            userId: req.user.id ?? null,
+            usageFeature: AI_REPORT_FEATURE,
             reportId: id,
             projectId: access.projectId,
             mediaIds: parsed.data.mediaIds,
@@ -3675,6 +3690,12 @@ export async function registerRoutes(
     let content: Awaited<ReturnType<typeof generateReportContent>>;
     try {
       content = await generateReportContent({
+        accountId,
+        userId,
+        usageFeature:
+          feature === "walkthrough_generation"
+            ? "walkthrough_generation"
+            : AI_REPORT_FEATURE,
         reportId: existingReportId ?? 0, // sync path: no row yet — Sentry context only
         projectId,
         mediaIds,

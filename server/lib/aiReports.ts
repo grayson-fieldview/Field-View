@@ -28,6 +28,10 @@ import {
   buildAccountContextBlock,
   type AccountAiCustomization,
 } from "./aiContext";
+import {
+  recordAnthropicUsageEvent,
+  type AiUsageFeature,
+} from "./aiUsageEvents";
 
 export const AI_REPORT_MODEL = "claude-sonnet-4-6";
 // At the 75-photo cap, realistic output is ~2,500 tokens (title + cover +
@@ -225,6 +229,9 @@ The contractor's note is a transcript of them narrating while walking the site a
 The contractor was talking while walking the site, so the narration IS the report. Photo descriptions exist only to fill gaps. Where narration and description both apply to a photo, the narration leads and the description supports.`;
 
 export async function generateReportContent(input: {
+  accountId: string;
+  userId: string | null;
+  usageFeature: Extract<AiUsageFeature, "report_generation" | "walkthrough_generation">;
   reportId: number;
   projectId: number;
   mediaIds: number[];
@@ -237,6 +244,9 @@ export async function generateReportContent(input: {
   aiCustomization: AccountAiCustomization;
 }): Promise<GeneratedReportContent> {
   const {
+    accountId,
+    userId,
+    usageFeature,
     reportId,
     projectId,
     mediaIds,
@@ -303,21 +313,38 @@ export async function generateReportContent(input: {
   // function runs.
   let parsed: any;
   for (let attempt = 0; ; attempt++) {
-    const response = await getClient().messages.create({
+    let response: Anthropic.Message;
+    try {
+      response = await getClient().messages.create({
+        model: AI_REPORT_MODEL,
+        max_tokens: AI_REPORT_MAX_TOKENS,
+        // The entire system prefix is stable for an account/report type.
+        // Dynamic notes, photo descriptions, and timing remain in `messages`
+        // and are deliberately outside the ephemeral cache breakpoint.
+        system: [{
+          type: "text",
+          text: buildReportSystemPrompt(reportType, aiCustomization, transcriptIsNarration),
+          cache_control: { type: "ephemeral" },
+        }],
+        messages: [{ role: "user", content: [{ type: "text", text: userText }] }],
+        tools: [SUBMIT_REPORT_TOOL],
+        // Force the tool call — structured output guaranteed, not requested.
+        tool_choice: { type: "tool", name: "submit_report" },
+      });
+    } catch (error) {
+      await recordAnthropicUsageEvent({
+        attribution: { accountId, userId },
+        feature: usageFeature,
+        model: AI_REPORT_MODEL,
+        error,
+      });
+      throw error;
+    }
+    await recordAnthropicUsageEvent({
+      attribution: { accountId, userId },
+      feature: usageFeature,
       model: AI_REPORT_MODEL,
-      max_tokens: AI_REPORT_MAX_TOKENS,
-      // The entire system prefix is stable for an account/report type.
-      // Dynamic notes, photo descriptions, and timing remain in `messages`
-      // and are deliberately outside the ephemeral cache breakpoint.
-      system: [{
-        type: "text",
-        text: buildReportSystemPrompt(reportType, aiCustomization, transcriptIsNarration),
-        cache_control: { type: "ephemeral" },
-      }],
-      messages: [{ role: "user", content: [{ type: "text", text: userText }] }],
-      tools: [SUBMIT_REPORT_TOOL],
-      // Force the tool call — structured output guaranteed, not requested.
-      tool_choice: { type: "tool", name: "submit_report" },
+      response,
     });
 
     // Truncated output cannot be a complete tool call — name the stop_reason

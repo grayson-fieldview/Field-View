@@ -31,8 +31,9 @@ import { waitUntil } from "@vercel/functions";
 import { eq, isNull, and } from "drizzle-orm";
 import pLimit from "p-limit";
 import { db } from "../db";
-import { media } from "@shared/schema";
+import { media, projects } from "@shared/schema";
 import { Sentry } from "./sentry";
+import { recordAnthropicUsageEvent } from "./aiUsageEvents";
 
 export const AI_CAPTION_MODEL = "claude-haiku-4-5";
 export const AI_CAPTION_MAX_TOKENS = 150;
@@ -105,19 +106,56 @@ export async function generateCaption(row: CaptionSource): Promise<boolean> {
     // Auditable source line (backfill output shows url-vs-thumbUrl).
     console.log(`[ai-captions] media ${row.id}: captioning from ${imageSource} (${row.mimeType})`);
 
-    const response = await getClient().messages.create({
+    // Resolve attribution from the persisted media row so upload-triggered,
+    // HEIC-thumbnail-triggered, and backfill calls all use the same source.
+    // Refuse the provider call when an orphan row cannot satisfy the event
+    // table's required account_id — every provider call must be attributable.
+    const [attribution] = await db
+      .select({ accountId: projects.accountId, userId: media.uploadedById })
+      .from(media)
+      .innerJoin(projects, eq(media.projectId, projects.id))
+      .where(eq(media.id, row.id))
+      .limit(1);
+    if (!attribution?.accountId) {
+      throw new Error(`Cannot attribute media ${row.id} to an account`);
+    }
+    const usageAttribution = {
+      accountId: attribution.accountId,
+      userId: attribution.userId,
+    };
+
+    let response: Anthropic.Message;
+    try {
+      response = await getClient().messages.create({
+        model: AI_CAPTION_MODEL,
+        max_tokens: AI_CAPTION_MAX_TOKENS,
+        system: AI_CAPTION_SYSTEM_PROMPT,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "image", source: { type: "url", url: imageUrl } },
+              { type: "text", text: "Caption this job site photo." },
+            ],
+          },
+        ],
+      });
+    } catch (error) {
+      await recordAnthropicUsageEvent({
+        attribution: usageAttribution,
+        feature: "caption",
+        model: AI_CAPTION_MODEL,
+        error,
+        imageCount: 1,
+      });
+      throw error;
+    }
+    await recordAnthropicUsageEvent({
+      attribution: usageAttribution,
+      feature: "caption",
       model: AI_CAPTION_MODEL,
-      max_tokens: AI_CAPTION_MAX_TOKENS,
-      system: AI_CAPTION_SYSTEM_PROMPT,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "image", source: { type: "url", url: imageUrl } },
-            { type: "text", text: "Caption this job site photo." },
-          ],
-        },
-      ],
+      response,
+      imageCount: 1,
     });
 
     let text = response.content

@@ -9,6 +9,10 @@
  * import never throws; a missing key fails per-request inside translateText.
  */
 import Anthropic from "@anthropic-ai/sdk";
+import {
+  recordAnthropicUsageEvent,
+  type AiUsageAttribution,
+} from "./aiUsageEvents";
 
 export const TRANSLATION_MODEL = "claude-haiku-4-5";
 export const TRANSLATION_MAX_TOKENS = 1000;
@@ -29,12 +33,32 @@ function getClient(): Anthropic {
  * Translate one text. Throws on API failure — the route decides the
  * user-facing response (classifyAnthropicApiError, then generic 503).
  */
-export async function translateText(text: string): Promise<string> {
-  const response = await getClient().messages.create({
+export async function translateText(
+  text: string,
+  attribution: AiUsageAttribution,
+): Promise<string> {
+  let response: Anthropic.Message;
+  try {
+    response = await getClient().messages.create({
+      model: TRANSLATION_MODEL,
+      max_tokens: TRANSLATION_MAX_TOKENS,
+      system: TRANSLATION_SYSTEM_PROMPT,
+      messages: [{ role: "user", content: text }],
+    });
+  } catch (error) {
+    await recordAnthropicUsageEvent({
+      attribution,
+      feature: "translation",
+      model: TRANSLATION_MODEL,
+      error,
+    });
+    throw error;
+  }
+  await recordAnthropicUsageEvent({
+    attribution,
+    feature: "translation",
     model: TRANSLATION_MODEL,
-    max_tokens: TRANSLATION_MAX_TOKENS,
-    system: TRANSLATION_SYSTEM_PROMPT,
-    messages: [{ role: "user", content: text }],
+    response,
   });
   const block = response.content.find((b) => b.type === "text");
   const translation = block && block.type === "text" ? block.text.trim() : "";

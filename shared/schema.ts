@@ -1,5 +1,5 @@
 import { sql, relations } from "drizzle-orm";
-import { pgTable, text, varchar, integer, bigint, timestamp, boolean, real, pgEnum, jsonb, index, uniqueIndex, unique, customType } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, bigint, timestamp, boolean, real, numeric, serial, pgEnum, jsonb, index, uniqueIndex, unique, customType } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { INDUSTRY_VALUES } from "./constants";
@@ -1288,6 +1288,42 @@ export const aiUsage = pgTable("ai_usage", {
 ]);
 
 export type AiUsage = typeof aiUsage.$inferSelect;
+
+// Append-only provider-call telemetry. This is intentionally separate from
+// ai_usage: ai_usage remains the monthly admission meter, while these rows
+// preserve the provider usage needed for cost analysis and future credit
+// accounting. Failures have nullable usage/cost fields but still retain the
+// attempted provider/model and error code.
+export const aiUsageEvents = pgTable("ai_usage_events", {
+  id: serial("id").primaryKey(),
+  accountId: varchar("account_id").references(() => accounts.id, { onDelete: "cascade" }).notNull(),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "set null" }),
+  feature: text("feature").notNull(),
+  provider: text("provider").notNull(),
+  model: text("model").notNull(),
+  inputTokens: integer("input_tokens"),
+  outputTokens: integer("output_tokens"),
+  cacheCreationTokens: integer("cache_creation_tokens"),
+  cacheReadTokens: integer("cache_read_tokens"),
+  audioSeconds: numeric("audio_seconds", { precision: 12, scale: 3 }),
+  imageCount: integer("image_count"),
+  success: boolean("success").notNull(),
+  errorCode: text("error_code"),
+  providerRequestId: text("provider_request_id"),
+  costUsd: numeric("cost_usd", { precision: 10, scale: 6 }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index("ai_usage_events_account_created_idx").on(table.accountId, table.createdAt),
+  index("ai_usage_events_feature_created_idx").on(table.feature, table.createdAt),
+]);
+
+export const aiUsageEventsRelations = relations(aiUsageEvents, ({ one }) => ({
+  account: one(accounts, { fields: [aiUsageEvents.accountId], references: [accounts.id] }),
+  user: one(users, { fields: [aiUsageEvents.userId], references: [users.id] }),
+}));
+
+export type AiUsageEvent = typeof aiUsageEvents.$inferSelect;
+export type InsertAiUsageEvent = typeof aiUsageEvents.$inferInsert;
 
 export const showcaseViews = pgTable("showcase_views", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
