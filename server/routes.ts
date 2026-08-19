@@ -10,7 +10,7 @@ import { normalizeEmail } from "./lib/normalizeEmail";
 import { apiV1Router } from "./apiV1";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
-import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistSectionSchema, insertChecklistItemOptionSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, checklistItems, checklistSections, checklistItemOptions, checklistItemPhotos, taskPhotos, checklistTemplates, checklistTemplateSections, checklistTemplateItems, checklistTemplateItemOptions, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, templateConfigSchema, accountSettingsPatchSchema, apiKeys, appInstallPromptEvents, createContactSchema, updateContactSchema, attachProjectContactSchema, updateProjectContactSchema, projectMessages, projectThreadReads, notifications, createProjectMessageSchema } from "@shared/schema";
+import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistSectionSchema, insertChecklistItemOptionSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, checklistItems, checklistSections, checklistItemOptions, checklistItemPhotos, taskPhotos, checklistTemplates, checklistTemplateSections, checklistTemplateItems, checklistTemplateItemOptions, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, templateConfigSchema, accountSettingsPatchSchema, apiKeys, appInstallPromptEvents, createContactSchema, updateContactSchema, attachProjectContactSchema, updateProjectContactSchema, projectMessages, projectThreadReads, notifications, createProjectMessageSchema, aiUsage } from "@shared/schema";
 import { executeAutoClockOut } from "./lib/timesheets";
 import { formatLocalTime } from "./lib/geo";
 import { users, invitations, accounts, assignedProjectIdsSchema } from "@shared/models/auth";
@@ -37,6 +37,8 @@ import {
   reconcileUsage,
   TRANSCRIPTION_MINUTES_FEATURE,
   AI_REPORT_MONTHLY_LIMIT,
+  AI_FEATURE_MONTHLY_LIMITS,
+  currentPeriodMonth,
   REPORT_TYPES,
   type ReportType,
 } from "./lib/aiReports";
@@ -2089,6 +2091,34 @@ export async function registerRoutes(
     } catch (error) {
       console.error("[API] POST /api/notifications/read-all failed:", error);
       res.status(500).json({ message: "Failed to mark notifications read" });
+    }
+  });
+
+  // GET /api/ai/usage — the caller's account AI usage for the current
+  // period. One row per feature in the limits map; features with no
+  // ai_usage row this month report used=0. Read-only, any authenticated
+  // user in the account.
+  app.get("/api/ai/usage", requireReadAccess, async (req: any, res) => {
+    try {
+      const periodMonth = currentPeriodMonth();
+      const rows = await db
+        .select({ feature: aiUsage.feature, count: aiUsage.count })
+        .from(aiUsage)
+        .where(
+          and(
+            eq(aiUsage.accountId, req.user.accountId),
+            eq(aiUsage.periodMonth, periodMonth),
+          ),
+        );
+      const usedByFeature = new Map(rows.map((r) => [r.feature, r.count]));
+      const features = Object.entries(AI_FEATURE_MONTHLY_LIMITS).map(([feature, limit]) => {
+        const used = usedByFeature.get(feature) ?? 0;
+        return { feature, used, limit, remaining: Math.max(0, limit - used) };
+      });
+      res.json({ periodMonth, features });
+    } catch (error) {
+      console.error("[API] GET /api/ai/usage failed:", error);
+      res.status(500).json({ message: "Failed to fetch AI usage" });
     }
   });
 
