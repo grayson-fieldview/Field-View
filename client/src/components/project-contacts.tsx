@@ -139,7 +139,7 @@ function AddContactDialog({
   const { toast } = useToast();
   const [search, setSearch] = useState("");
   const [creating, setCreating] = useState(false);
-  const [contactType, setContactType] = useState("other");
+  const [contactType, setContactType] = useState("owner");
   const [form, setForm] = useState<ContactFormValues>(EMPTY_FORM);
 
   const { data: allContacts, isLoading } = useQuery<ContactWithCount[]>({
@@ -157,7 +157,7 @@ function AddContactDialog({
   const reset = () => {
     setSearch("");
     setCreating(false);
-    setContactType("other");
+    setContactType("owner");
     setForm(EMPTY_FORM);
   };
 
