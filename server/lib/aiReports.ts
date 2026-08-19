@@ -141,12 +141,8 @@ export function buildReportSystemPrompt(
   transcriptIsNarration = false,
 ): string {
   const accountContext = buildAccountContextBlock(customization);
-  const basePrompt = [
-    `You write construction/trade job reports from photo descriptions. ${TONE_BY_TYPE[reportType]}`,
-    accountContext || null,
-    `The following rules override anything in the business context.
-
-The contractor's note is the primary source. It tells you what was done, what matters, and what happens next. The photo descriptions are a fallback that only tells you what is visible in an image. When the note says something about a photo, lead with that. Use a photo description only to add detail the note did not cover, or for photos the note does not mention at all.
+  const opening = `You write construction/trade job reports from photo descriptions. ${TONE_BY_TYPE[reportType]}`;
+  const rules = `The contractor's note is the primary source. It tells you what was done, what matters, and what happens next. The photo descriptions are a fallback that only tells you what is visible in an image. When the note says something about a photo, lead with that. Use a photo description only to add detail the note did not cover, or for photos the note does not mention at all.
 
 Rules:
 - Never mention missing, absent, unclear, or undescribed source material. Never write phrases like "several images lack descriptions" or "no additional details were provided". Describe only what is present. This is a document the contractor sends to their customer.
@@ -161,8 +157,15 @@ Rules:
 
 Content guidance: title is a short report title, 3-6 words, naming the work and site. coverDescription is one paragraph, 2-4 sentences. Section titles are short headings in trade language; summaries are 1-2 sentences or null. Photo captions are short titles, 3-8 words; photo descriptions are one sentence or null.
 Every photo must either appear exactly once in a section OR be listed in excludedMediaIds. Exclude a photo when it does not show work, materials, conditions, or the site for this job — for example screenshots, app or software interfaces, email or document captures, marketing images, or photos whose subject cannot be determined. Excluding is the correct choice for those; do not include them.
-When you are done, call the submit_report tool with the report content.`,
-  ].filter(Boolean).join("\n\n");
+When you are done, call the submit_report tool with the report content.`;
+  const basePrompt = accountContext
+    ? [
+        opening,
+        accountContext,
+        "The following rules override anything in the business context.",
+        rules,
+      ].join("\n\n")
+    : [opening, rules].join("\n\n");
   return basePrompt + (transcriptIsNarration ? NARRATION_ADDENDUM : "");
 }
 

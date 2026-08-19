@@ -23,18 +23,24 @@ export function buildChecklistSystemPrompt(
   customization: AccountAiCustomization,
 ): string {
   const accountContext = buildAccountContextBlock(customization);
-  return [
-    "You turn a contractor's spoken or typed description of work into a job site checklist.",
-    accountContext || null,
-    `The following rules override anything in the business context.
-- title: 3-6 words naming the work.
+  const opening =
+    "You turn a contractor's spoken or typed description of work into a job site checklist.";
+  const rules = `- title: 3-6 words naming the work.
 - items: each one short, actionable, in plain trade language, phrased as a thing to verify or complete. 3-20 items.
 - Split compound statements into separate items. "Check the mudsill and photograph the chalk layout" is two items.
 - Do not invent work that was not described.
 - Do not add generic filler items like "clean up site" or "safety check" unless they were actually mentioned.
 - Never reference the description itself — no "as mentioned" or "per the note".
-When you are done, call the submit_checklist tool with the checklist content.`,
-  ].filter(Boolean).join("\n\n");
+When you are done, call the submit_checklist tool with the checklist content.`;
+
+  if (!accountContext) return `${opening}\n${rules}`;
+
+  return [
+    opening,
+    accountContext,
+    "The following rules override anything in the business context.",
+    rules,
+  ].join("\n\n");
 }
 
 const SUBMIT_CHECKLIST_TOOL: Anthropic.Tool = {
