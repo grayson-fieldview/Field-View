@@ -11,6 +11,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { NotificationBell } from "@/components/notification-bell";
 import { Button } from "@/components/ui/button";
 import {
   LayoutDashboard,
@@ -73,12 +74,15 @@ export function AppSidebar() {
   return (
     <Sidebar>
       <SidebarHeader className="p-4 pb-3">
-        <Link href="/" data-testid="link-home">
-          <div className="flex items-center gap-2.5" data-testid="img-logo">
-            <img src={faviconImg} alt="Field View" className="h-9 w-9 rounded-md" />
-            <span className="text-lg font-bold tracking-tight text-sidebar-foreground">Field View</span>
-          </div>
-        </Link>
+        <div className="flex items-center justify-between gap-2">
+          <Link href="/" data-testid="link-home">
+            <div className="flex items-center gap-2.5" data-testid="img-logo">
+              <img src={faviconImg} alt="Field View" className="h-9 w-9 rounded-md" />
+              <span className="text-lg font-bold tracking-tight text-sidebar-foreground">Field View</span>
+            </div>
+          </Link>
+          <NotificationBell />
+        </div>
       </SidebarHeader>
 
       <SidebarContent>

@@ -32,6 +32,7 @@ import {
   Search,
   FolderKanban,
   Image as ImageIcon,
+  MessageSquare,
 } from "lucide-react";
 import type { Project } from "@shared/schema";
 import { useCreateProject, createProjectSchema } from "@/hooks/use-create-project";
@@ -54,6 +55,18 @@ export default function ProjectsPage() {
 
   const { data: projects, isLoading } = useQuery<ProjectWithDetails[]>({
     queryKey: ["/api/projects"],
+  });
+
+  // One batched call for every project's unread message badge — never
+  // per-project requests. Absent key = zero unread.
+  const { data: unreadCounts } = useQuery<{ counts: Record<number, number>; total: number }>({
+    queryKey: ["/api/messages/unread-counts"],
+    queryFn: async () => {
+      const res = await fetch("/api/messages/unread-counts", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch unread counts");
+      return res.json();
+    },
+    refetchInterval: 60_000,
   });
 
   const form = useForm({
@@ -276,9 +289,20 @@ export default function ProjectsPage() {
               </div>
 
               <div className="flex-1 min-w-0 space-y-0.5">
-                <h3 className="font-semibold text-sm sm:text-base truncate" data-testid={`text-project-name-${project.id}`}>
-                  {project.name}
-                </h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-semibold text-sm sm:text-base truncate" data-testid={`text-project-name-${project.id}`}>
+                    {project.name}
+                  </h3>
+                  {(unreadCounts?.counts?.[project.id] ?? 0) > 0 && (
+                    <span
+                      className="inline-flex items-center gap-1 shrink-0 px-1.5 h-5 rounded-full bg-primary text-primary-foreground text-[10px] font-semibold"
+                      data-testid={`badge-project-unread-${project.id}`}
+                    >
+                      <MessageSquare className="h-3 w-3" />
+                      {unreadCounts!.counts[project.id] > 9 ? "9+" : unreadCounts!.counts[project.id]}
+                    </span>
+                  )}
+                </div>
                 <p className="text-xs sm:text-sm text-muted-foreground truncate">
                   {project.address || "No address"}
                 </p>

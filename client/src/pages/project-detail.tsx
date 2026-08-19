@@ -119,6 +119,7 @@ import { AnnotationOverlay } from "@/lib/annotation-svg";
 import { UploadPhotosDialog } from "@/components/upload-photos-dialog";
 import { UploadFilesDialog } from "@/components/upload-files-dialog";
 import { ProjectContactsSection } from "@/components/project-contacts";
+import { ProjectMessagesTab, useProjectUnreadCount } from "@/components/project-messages";
 
 type ProjectFileWithUploader = ProjectFile & { uploadedByName: string | null };
 
@@ -201,7 +202,9 @@ const reportTypeLabels: Record<string, string> = {
   daily: "Daily",
 };
 
-type DetailTab = "photos" | "tasks" | "files" | "checklists" | "reports" | "daily-log";
+type DetailTab = "photos" | "tasks" | "files" | "checklists" | "reports" | "daily-log" | "messages";
+
+const VALID_DETAIL_TABS: DetailTab[] = ["photos", "tasks", "files", "checklists", "reports", "daily-log", "messages"];
 
 // Per-project override for the report-PDF timestamp/address overlay.
 // null = inherit account setting; true/false = explicit override.
@@ -348,7 +351,13 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<DetailTab>("photos");
+  // ?tab= deep link (used by the notification bell: mention → messages,
+  // task_assigned → tasks). wouter's location excludes the query string,
+  // so read window.location.search once on mount.
+  const [activeTab, setActiveTab] = useState<DetailTab>(() => {
+    const t = new URLSearchParams(window.location.search).get("tab") as DetailTab | null;
+    return t && VALID_DETAIL_TABS.includes(t) ? t : "photos";
+  });
   // Photos-tab full-text search, scoped to this project. Debounced; the
   // server query only runs for a non-empty q. While a search is active the
   // results grid replaces the normal grid (view + open only — selection,
@@ -1097,6 +1106,9 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     setFilterRoles((prev) =>
       prev.includes(role) ? prev.filter((r) => r !== role) : [...prev, role],
     );
+  const { data: unreadData } = useProjectUnreadCount(id);
+  const messagesUnread = unreadData?.unread ?? 0;
+
   const clearAllFilters = () => {
     setFilterStartDate(undefined);
     setFilterEndDate(undefined);
@@ -1113,13 +1125,14 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const formatFilterDate = (d: Date) =>
     d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 
-  const tabs: { key: DetailTab; label: string; count: number }[] = [
+  const tabs: { key: DetailTab; label: string; count: number; unread?: number }[] = [
     { key: "photos", label: "Photos", count: projectMedia.length },
     { key: "tasks", label: "Tasks", count: projectTasks.length },
     { key: "checklists", label: "Checklists", count: projectChecklists.length },
     { key: "reports", label: "Reports", count: projectReports.length },
     { key: "files", label: "Files", count: projectFiles.length },
     { key: "daily-log", label: "Daily Log", count: 0 },
+    { key: "messages", label: "Messages", count: 0, unread: messagesUnread },
   ];
 
   const todoCount = projectTasks.filter(t => t.status === "todo").length;
@@ -1449,6 +1462,14 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                 {tab.count > 0 && (
                   <span className={`ml-1.5 text-xs font-normal ${activeTab === tab.key ? "text-muted-foreground" : "text-muted-foreground/60"}`}>
                     {tab.count}
+                  </span>
+                )}
+                {(tab.unread ?? 0) > 0 && (
+                  <span
+                    className="ml-1.5 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-semibold"
+                    data-testid={`badge-unread-${tab.key}`}
+                  >
+                    {(tab.unread ?? 0) > 9 ? "9+" : tab.unread}
                   </span>
                 )}
               </button>
@@ -2438,6 +2459,10 @@ export default function ProjectDetailPage({ id }: { id: string }) {
 
           {activeTab === "daily-log" && (
             <DailyLogTab projectId={id} />
+          )}
+
+          {activeTab === "messages" && (
+            <ProjectMessagesTab projectId={id} />
           )}
         </div>
       </div>

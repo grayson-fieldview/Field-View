@@ -10,6 +10,7 @@ import { GoogleReCaptchaProvider } from "react-google-recaptcha-v3";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { NotificationBell } from "@/components/notification-bell";
 import { AppSidebar } from "@/components/app-sidebar";
 import { AppInstallPrompt } from "@/components/app-install-prompt";
 import { ThemeProvider } from "@/components/theme-provider";
@@ -227,6 +228,9 @@ function AuthenticatedLayout() {
           <div className="md:hidden flex items-center gap-2 px-3 py-2 border-b bg-background">
             <SidebarTrigger data-testid="button-mobile-menu" />
             <span className="text-sm font-medium text-foreground">Field View</span>
+            <div className="ml-auto">
+              <NotificationBell />
+            </div>
           </div>
           {/* Session 3 BUG 4 fix: BillingBanner moved INSIDE the main
               content column (after AppSidebar, inside the flex-1 main
