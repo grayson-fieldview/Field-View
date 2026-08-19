@@ -21,6 +21,10 @@ export const photoAspectRatioEnum = pgEnum("photo_aspect_ratio", ["4_3", "1_1", 
 export const accounts = pgTable("accounts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
+  // Set once when the account is created. AI credit cycles derive their UTC
+  // anniversary day/time from this value; billing-provider changes never
+  // update it.
+  creditsAnchorAt: timestamp("credits_anchor_at", { withTimezone: true }).defaultNow().notNull(),
   ownerId: varchar("owner_id"),
   stripeCustomerId: varchar("stripe_customer_id"),
   stripeSubscriptionId: varchar("stripe_subscription_id"),

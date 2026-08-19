@@ -1289,6 +1289,53 @@ export const aiUsage = pgTable("ai_usage", {
 
 export type AiUsage = typeof aiUsage.$inferSelect;
 
+// AI credit hot row — one per account. Unlike ai_usage (a monotonic monthly
+// admission counter), this row stores spendable balances and is mutated only
+// by conditional, transactional credit operations.
+export const accountCreditBalances = pgTable("account_credit_balances", {
+  accountId: varchar("account_id")
+    .primaryKey()
+    .references(() => accounts.id, { onDelete: "cascade" }),
+  cycleStart: timestamp("cycle_start", { withTimezone: true }).notNull(),
+  monthlyRemaining: integer("monthly_remaining").notNull(),
+  purchasedRemaining: integer("purchased_remaining").notNull().default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Append-only audit trail for every credit grant, debit, refund, purchase, and
+// manual adjustment. idempotency_key is nullable because imported/manual
+// history may not have a natural operation id; non-null keys are globally
+// unique and protect runtime operations from duplicate application.
+export const creditLedger = pgTable("credit_ledger", {
+  id: serial("id").primaryKey(),
+  accountId: varchar("account_id").references(() => accounts.id, { onDelete: "cascade" }).notNull(),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "set null" }),
+  delta: integer("delta").notNull(),
+  kind: text("kind").notNull(),
+  bucket: text("bucket"),
+  feature: text("feature"),
+  refType: text("ref_type"),
+  refId: integer("ref_id"),
+  idempotencyKey: text("idempotency_key"),
+  cycleStart: timestamp("cycle_start", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("credit_ledger_idempotency_key_unique").on(table.idempotencyKey),
+  index("credit_ledger_account_created_idx").on(table.accountId, table.createdAt),
+]);
+
+export const accountCreditBalancesRelations = relations(accountCreditBalances, ({ one }) => ({
+  account: one(accounts, { fields: [accountCreditBalances.accountId], references: [accounts.id] }),
+}));
+
+export const creditLedgerRelations = relations(creditLedger, ({ one }) => ({
+  account: one(accounts, { fields: [creditLedger.accountId], references: [accounts.id] }),
+  user: one(users, { fields: [creditLedger.userId], references: [users.id] }),
+}));
+
+export type AccountCreditBalance = typeof accountCreditBalances.$inferSelect;
+export type CreditLedgerEntry = typeof creditLedger.$inferSelect;
+
 // Append-only provider-call telemetry. This is intentionally separate from
 // ai_usage: ai_usage remains the monthly admission meter, while these rows
 // preserve the provider usage needed for cost analysis and future credit

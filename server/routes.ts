@@ -43,6 +43,13 @@ import {
   REPORT_TYPES,
   type ReportType,
 } from "./lib/aiReports";
+import {
+  getAccountCreditSnapshot,
+  INSUFFICIENT_AI_CREDITS_CODE,
+  refundGenerationCredit,
+  reserveGenerationCredit,
+  type CreditReservation,
+} from "./lib/aiCredits";
 import archiver from "archiver";
 import { sendInvitationEmail, sendAccountDeletionEmail } from "./services/email";
 import { sendGhlEvent, syncUsageToGhl } from "./lib/ghl";
@@ -63,6 +70,15 @@ import {
   getAffiliateById as rewardfulGetAffiliateById,
   extractReferralCode,
 } from "./lib/rewardful";
+
+async function releaseBillableGeneration(
+  accountId: string,
+  periodMonth: string,
+  creditReservation: CreditReservation,
+): Promise<void> {
+  await releaseReportGeneration(accountId, periodMonth, creditReservation.feature);
+  await refundGenerationCredit(creditReservation);
+}
 
 async function streamReportPdfById(id: number, res: any): Promise<void> {
   const data = await storage.getReportForPdf(id);
@@ -2137,6 +2153,25 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/credits", requireReadAccess, async (req: any, res) => {
+    try {
+      const accountId = req.user.accountId;
+      if (!accountId) {
+        return res.status(403).json({ message: "No account associated" });
+      }
+      const snapshot = await getAccountCreditSnapshot(accountId);
+      res.json({
+        monthly_remaining: snapshot.monthlyRemaining,
+        purchased_remaining: snapshot.purchasedRemaining,
+        cycle_start: snapshot.cycleStart,
+        next_reset_at: snapshot.nextResetAt,
+      });
+    } catch (error) {
+      console.error("[API] GET /api/credits failed:", error);
+      res.status(500).json({ message: "Failed to fetch AI credits" });
+    }
+  });
+
   app.get("/api/tags", requireReadAccess, async (req: any, res) => {
     try {
       const accountId = req.user.accountId;
@@ -3564,6 +3599,28 @@ export async function registerRoutes(
         });
       }
 
+      let creditResult: Awaited<ReturnType<typeof reserveGenerationCredit>>;
+      try {
+        creditResult = await reserveGenerationCredit({
+          accountId: req.user.accountId,
+          userId: req.user.id ?? null,
+          feature: AI_REPORT_FEATURE,
+          refType: "report",
+          refId: id,
+        });
+      } catch (creditError) {
+        await releaseReportGeneration(req.user.accountId, periodMonth);
+        throw creditError;
+      }
+      if (!creditResult.admitted) {
+        await releaseReportGeneration(req.user.accountId, periodMonth);
+        return res.status(402).json({
+          code: INSUFFICIENT_AI_CREDITS_CODE,
+          message: "Insufficient AI credits",
+        });
+      }
+      const creditReservation = creditResult.reservation;
+
       // 2. Generate content (throws on model/parse failure — nothing written).
       let content: Awaited<ReturnType<typeof generateReportContent>>;
       try {
@@ -3581,7 +3638,7 @@ export async function registerRoutes(
           });
         } catch (err: any) {
           if (err?.statusCode === 400) {
-            await releaseReportGeneration(req.user.accountId, periodMonth);
+            await releaseBillableGeneration(req.user.accountId, periodMonth, creditReservation);
             return res.status(400).json({ message: err.message });
           }
           throw err;
@@ -3615,8 +3672,8 @@ export async function registerRoutes(
             .where(eq(reports.id, id));
         });
       } catch (err) {
-        // Model error or write failure — release the reserved slot.
-        await releaseReportGeneration(req.user.accountId, periodMonth);
+        // Model error or write failure — release both admission gates.
+        await releaseBillableGeneration(req.user.accountId, periodMonth, creditReservation);
         throw err;
       }
 
@@ -3656,6 +3713,8 @@ export async function registerRoutes(
     aiCustomization: AccountAiCustomization;
     /** From the caller's tryReserveReportGeneration call. */
     periodMonth: string;
+    /** From the caller's reserveGenerationCredit call. */
+    creditReservation: CreditReservation;
     /** Must match the feature the slot was reserved under. */
     feature?: string;
     /**
@@ -3677,6 +3736,7 @@ export async function registerRoutes(
       transcriptIsNarration,
       aiCustomization,
       periodMonth,
+      creditReservation,
       feature,
       existingReportId,
     } = opts;
@@ -3703,7 +3763,7 @@ export async function registerRoutes(
         aiCustomization,
       });
     } catch (err) {
-      await releaseReportGeneration(accountId, periodMonth, feature);
+      await releaseBillableGeneration(accountId, periodMonth, creditReservation);
       throw err;
     }
 
@@ -3770,8 +3830,8 @@ export async function registerRoutes(
       });
       return { report, content };
     } catch (err) {
-      // Write failure — release the slot; transaction rollback means no report row.
-      await releaseReportGeneration(accountId, periodMonth, feature);
+      // Write failure — release both gates; transaction rollback means no report row.
+      await releaseBillableGeneration(accountId, periodMonth, creditReservation);
       throw err;
     }
   }
@@ -3797,6 +3857,26 @@ export async function registerRoutes(
         });
       }
 
+      let creditResult: Awaited<ReturnType<typeof reserveGenerationCredit>>;
+      try {
+        creditResult = await reserveGenerationCredit({
+          accountId: req.user.accountId,
+          userId: req.user.id ?? null,
+          feature: AI_REPORT_FEATURE,
+          refType: "report",
+        });
+      } catch (creditError) {
+        await releaseReportGeneration(req.user.accountId, periodMonth);
+        throw creditError;
+      }
+      if (!creditResult.admitted) {
+        await releaseReportGeneration(req.user.accountId, periodMonth);
+        return res.status(402).json({
+          code: INSUFFICIENT_AI_CREDITS_CODE,
+          message: "Insufficient AI credits",
+        });
+      }
+
       // 2+3. Generate then persist (slot released on any failure inside).
       let result: Awaited<ReturnType<typeof generateAndPersistReport>>;
       try {
@@ -3809,6 +3889,7 @@ export async function registerRoutes(
           reportType: parsed.data.reportType,
           aiCustomization,
           periodMonth,
+          creditReservation: creditResult.reservation,
         });
       } catch (err: any) {
         if (err?.statusCode === 400) return res.status(400).json({ message: err.message });
@@ -3871,6 +3952,27 @@ export async function registerRoutes(
       const userId: string = req.user.id;
       const { transcript, mediaIds, photoOffsets } = parsed.data;
 
+      let creditResult: Awaited<ReturnType<typeof reserveGenerationCredit>>;
+      try {
+        creditResult = await reserveGenerationCredit({
+          accountId,
+          userId,
+          feature: "walkthrough_generation",
+          refType: "report",
+        });
+      } catch (creditError) {
+        await releaseReportGeneration(accountId, periodMonth, "walkthrough_generation");
+        throw creditError;
+      }
+      if (!creditResult.admitted) {
+        await releaseReportGeneration(accountId, periodMonth, "walkthrough_generation");
+        return res.status(402).json({
+          code: INSUFFICIENT_AI_CREDITS_CODE,
+          message: "Insufficient AI credits",
+        });
+      }
+      const creditReservation = creditResult.reservation;
+
       // Stub row up-front so clients can render a truthful in-progress
       // entry. If this insert fails we have consumed nothing user-visible:
       // release the slot and 500 (still before any response).
@@ -3887,7 +3989,7 @@ export async function registerRoutes(
         } as any);
         stubReportId = stub.id;
       } catch (stubErr) {
-        await releaseReportGeneration(accountId, periodMonth, "walkthrough_generation");
+        await releaseBillableGeneration(accountId, periodMonth, creditReservation);
         throw stubErr;
       }
 
@@ -3910,6 +4012,7 @@ export async function registerRoutes(
             transcriptIsNarration: true,
             aiCustomization,
             periodMonth,
+            creditReservation,
             feature: "walkthrough_generation",
             existingReportId: stubReportId,
           }));
