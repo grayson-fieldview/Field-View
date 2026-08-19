@@ -13,3 +13,4 @@
 - [Annotation text fontSize contract](annotation-text-fontsize.md) — fontSize = px at 1000px-tall image; all renderers scale via shared resolveFontSize/FONT_REFERENCE_HEIGHT=1000; SVG text anchors text-before-edge/start.
 - [sharp cannot decode HEIC](sharp-heic-limitation.md) — prebuilt libvips is AVIF-only; decode .heic via WASM heic-decode → raw RGBA → sharp, no .rotate(), never in the request path.
 - [Meta pixel/CAPI dedup pairing](meta-pixel-capi-dedup.md) — pixel fires only when the server response flag confirms an ID-matched CAPI twin; wire name/event_id/flag in lockstep.
+- [Account AI context boundaries](account-ai-context-boundaries.md) — apply account context only to reports/checklists; callers resolve it, immutable rules follow it, and only report prefixes are cached.

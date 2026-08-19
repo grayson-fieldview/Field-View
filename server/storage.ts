@@ -1693,6 +1693,8 @@ export class DatabaseStorage implements IStorage {
       .select({
         defaultPhotoAspectRatio: accounts.defaultPhotoAspectRatio,
         photoOverlayEnabled: accounts.photoOverlayEnabled,
+        industry: accounts.industry,
+        aiContext: accounts.aiContext,
       })
       .from(accounts)
       .where(eq(accounts.id, accountId))
@@ -1701,15 +1703,28 @@ export class DatabaseStorage implements IStorage {
     return {
       defaultPhotoAspectRatio: dbToWireRatio(row.defaultPhotoAspectRatio),
       photoOverlayEnabled: row.photoOverlayEnabled,
+      industry: row.industry,
+      aiContext: row.aiContext,
     };
   }
   async updateAccountSettings(accountId: string, patch: AccountSettingsPatch): Promise<AccountSettings> {
-    const set: { defaultPhotoAspectRatio?: DbAspectRatio; photoOverlayEnabled?: boolean } = {};
+    const set: {
+      defaultPhotoAspectRatio?: DbAspectRatio;
+      photoOverlayEnabled?: boolean;
+      industry?: string | null;
+      aiContext?: string | null;
+    } = {};
     if (patch.defaultPhotoAspectRatio !== undefined) {
       set.defaultPhotoAspectRatio = wireToDbRatio(patch.defaultPhotoAspectRatio);
     }
     if (patch.photoOverlayEnabled !== undefined) {
       set.photoOverlayEnabled = patch.photoOverlayEnabled;
+    }
+    if (patch.industry !== undefined) {
+      set.industry = patch.industry;
+    }
+    if (patch.aiContext !== undefined) {
+      set.aiContext = patch.aiContext?.trim() || null;
     }
     // Empty patch ({} after .strict() validation) → no-op UPDATE would be
     // wasteful; just read and return current state.
@@ -1722,11 +1737,15 @@ export class DatabaseStorage implements IStorage {
       .returning({
         defaultPhotoAspectRatio: accounts.defaultPhotoAspectRatio,
         photoOverlayEnabled: accounts.photoOverlayEnabled,
+        industry: accounts.industry,
+        aiContext: accounts.aiContext,
       });
     if (!updated) throw new Error(`Account ${accountId} not found`);
     return {
       defaultPhotoAspectRatio: dbToWireRatio(updated.defaultPhotoAspectRatio),
       photoOverlayEnabled: updated.photoOverlayEnabled,
+      industry: updated.industry,
+      aiContext: updated.aiContext,
     };
   }
 

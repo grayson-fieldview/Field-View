@@ -53,6 +53,7 @@ import { registerShowcaseRoutes } from "./showcases";
 import { Sentry } from "./lib/sentry";
 import { sendPushNotification } from "./lib/push";
 import { waitUntil } from "@vercel/functions";
+import type { AccountAiCustomization } from "./lib/aiContext";
 import {
   RewardfulError,
   REWARDFUL_CAMPAIGN_ID,
@@ -541,6 +542,13 @@ export async function registerRoutes(
   await setupAuth(app);
   registerAuthRoutes(app);
   registerShowcaseRoutes(app);
+
+  async function getAccountAiCustomization(
+    accountId: string,
+  ): Promise<AccountAiCustomization> {
+    const settings = await storage.getAccountSettings(accountId);
+    return { industry: settings.industry, aiContext: settings.aiContext };
+  }
 
   // Install-prompt telemetry (modal/banner shown/clicked/dismissed).
   // Append-only, returns 204 immediately after a single insert.
@@ -2760,6 +2768,7 @@ export async function registerRoutes(
       if (!(await userCanAccessProject(req, projectId))) return res.status(403).json({ message: "Access denied" });
       const parsed = generateChecklistBodySchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ message: "Provide 'note' between 1 and 5000 characters" });
+      const aiCustomization = await getAccountAiCustomization(req.user.accountId);
 
       // 1. Usage gate — atomic reservation; released on every failure below.
       const { admitted, periodMonth } = await tryReserveReportGeneration(
@@ -2775,7 +2784,11 @@ export async function registerRoutes(
         // 2. Generate (throws on model/parse failure — nothing written).
         let content: Awaited<ReturnType<typeof generateChecklistContent>>;
         try {
-          content = await generateChecklistContent({ projectId, note: parsed.data.note });
+          content = await generateChecklistContent({
+            projectId,
+            note: parsed.data.note,
+            aiCustomization,
+          });
         } catch (err: any) {
           if (err?.statusCode === 400) {
             await releaseReportGeneration(req.user.accountId, periodMonth, AI_CHECKLIST_FEATURE);
@@ -3528,6 +3541,7 @@ export async function registerRoutes(
       if (targetReport.status === "generating") {
         return res.status(409).json({ message: "Report is still generating" });
       }
+      const aiCustomization = await getAccountAiCustomization(req.user.accountId);
       const parsed = generateReportBodySchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
 
@@ -3551,6 +3565,7 @@ export async function registerRoutes(
             mediaIds: parsed.data.mediaIds,
             note: parsed.data.note,
             reportType: parsed.data.reportType,
+            aiCustomization,
           });
         } catch (err: any) {
           if (err?.statusCode === 400) {
@@ -3626,6 +3641,7 @@ export async function registerRoutes(
     reportType: ReportType;
     photoOffsets?: Map<number, number>;
     transcriptIsNarration?: boolean;
+    aiCustomization: AccountAiCustomization;
     /** From the caller's tryReserveReportGeneration call. */
     periodMonth: string;
     /** Must match the feature the slot was reserved under. */
@@ -3638,7 +3654,20 @@ export async function registerRoutes(
      */
     existingReportId?: number;
   }): Promise<{ report: { id: number; title: string }; content: Awaited<ReturnType<typeof generateReportContent>> }> {
-    const { projectId, accountId, userId, mediaIds, note, reportType, photoOffsets, transcriptIsNarration, periodMonth, feature, existingReportId } = opts;
+    const {
+      projectId,
+      accountId,
+      userId,
+      mediaIds,
+      note,
+      reportType,
+      photoOffsets,
+      transcriptIsNarration,
+      aiCustomization,
+      periodMonth,
+      feature,
+      existingReportId,
+    } = opts;
 
     // 1. Generate BEFORE writing content. Any failure releases the
     // slot and rethrows — sync path: no report row exists yet;
@@ -3653,6 +3682,7 @@ export async function registerRoutes(
         reportType,
         photoOffsets,
         transcriptIsNarration,
+        aiCustomization,
       });
     } catch (err) {
       await releaseReportGeneration(accountId, periodMonth, feature);
@@ -3739,6 +3769,7 @@ export async function registerRoutes(
       if (!(await userCanAccessProject(req, projectId))) return res.status(403).json({ message: "Access denied" });
       const parsed = generateReportBodySchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+      const aiCustomization = await getAccountAiCustomization(req.user.accountId);
 
       // 1. Usage gate FIRST — on denial nothing is created.
       const { admitted, periodMonth } = await tryReserveReportGeneration(req.user.accountId);
@@ -3758,6 +3789,7 @@ export async function registerRoutes(
           mediaIds: parsed.data.mediaIds,
           note: parsed.data.note,
           reportType: parsed.data.reportType,
+          aiCustomization,
           periodMonth,
         });
       } catch (err: any) {
@@ -3802,6 +3834,7 @@ export async function registerRoutes(
       if (!(await userCanAccessProject(req, projectId))) return res.status(403).json({ message: "Access denied" });
       const parsed = walkthroughBodySchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+      const aiCustomization = await getAccountAiCustomization(req.user.accountId);
 
       // Usage gate FIRST — on denial nothing is created, nothing deferred.
       const { admitted, periodMonth } = await tryReserveReportGeneration(
@@ -3857,6 +3890,7 @@ export async function registerRoutes(
               ? new Map(photoOffsets.map((o) => [o.mediaId, o.offsetMs]))
               : undefined,
             transcriptIsNarration: true,
+            aiCustomization,
             periodMonth,
             feature: "walkthrough_generation",
             existingReportId: stubReportId,

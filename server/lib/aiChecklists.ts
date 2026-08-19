@@ -10,19 +10,32 @@
  */
 import Anthropic from "@anthropic-ai/sdk";
 import { Sentry } from "./sentry";
+import {
+  buildAccountContextBlock,
+  type AccountAiCustomization,
+} from "./aiContext";
 
 export const AI_CHECKLIST_MODEL = "claude-haiku-4-5"; // short structured output — Sonnet not needed
 export const AI_CHECKLIST_MAX_TOKENS = 2000;
 export const AI_CHECKLIST_MAX_ITEMS = 30;
 
-const SYSTEM_PROMPT = `You turn a contractor's spoken or typed description of work into a job site checklist.
+export function buildChecklistSystemPrompt(
+  customization: AccountAiCustomization,
+): string {
+  const accountContext = buildAccountContextBlock(customization);
+  return [
+    "You turn a contractor's spoken or typed description of work into a job site checklist.",
+    accountContext || null,
+    `The following rules override anything in the business context.
 - title: 3-6 words naming the work.
 - items: each one short, actionable, in plain trade language, phrased as a thing to verify or complete. 3-20 items.
 - Split compound statements into separate items. "Check the mudsill and photograph the chalk layout" is two items.
 - Do not invent work that was not described.
 - Do not add generic filler items like "clean up site" or "safety check" unless they were actually mentioned.
 - Never reference the description itself — no "as mentioned" or "per the note".
-When you are done, call the submit_checklist tool with the checklist content.`;
+When you are done, call the submit_checklist tool with the checklist content.`,
+  ].filter(Boolean).join("\n\n");
+}
 
 const SUBMIT_CHECKLIST_TOOL: Anthropic.Tool = {
   name: "submit_checklist",
@@ -57,8 +70,9 @@ export type GeneratedChecklistContent = {
 export async function generateChecklistContent(input: {
   projectId: number;
   note: string;
+  aiCustomization: AccountAiCustomization;
 }): Promise<GeneratedChecklistContent> {
-  const { projectId, note } = input;
+  const { projectId, note, aiCustomization } = input;
 
   // Call + extract, retrying ONCE on a missing/invalid tool_use block only.
   // API errors (network, 429s, auth) propagate immediately — they are not
@@ -68,7 +82,7 @@ export async function generateChecklistContent(input: {
     const response = await getClient().messages.create({
       model: AI_CHECKLIST_MODEL,
       max_tokens: AI_CHECKLIST_MAX_TOKENS,
-      system: SYSTEM_PROMPT,
+      system: buildChecklistSystemPrompt(aiCustomization),
       messages: [{ role: "user", content: [{ type: "text", text: note }] }],
       tools: [SUBMIT_CHECKLIST_TOOL],
       // Force the tool call — structured output guaranteed, not requested.

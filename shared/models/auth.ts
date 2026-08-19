@@ -44,6 +44,9 @@ export const accounts = pgTable("accounts", {
   // apple_original_transaction_id. Schema-only prep; no code reads this yet.
   googlePlayPurchaseToken: varchar("google_play_purchase_token"),
   industry: varchar("industry"),
+  // Optional account-authored business description used as reference context
+  // for AI reports and checklists. Immutable prompt rules always follow it.
+  aiContext: text("ai_context"),
   companySize: varchar("company_size"),
   // S46 GHL: idempotency guard for the activation_milestone lifecycle event
   // (≥1 project AND ≥5 photos). Set exactly once via an atomic conditional

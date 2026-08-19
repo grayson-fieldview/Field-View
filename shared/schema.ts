@@ -2,6 +2,7 @@ import { sql, relations } from "drizzle-orm";
 import { pgTable, text, varchar, integer, bigint, timestamp, boolean, real, pgEnum, jsonb, index, uniqueIndex, unique, customType } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+import { INDUSTRY_VALUES } from "./constants";
 
 export * from "./models/auth";
 import { users, accounts, invitations } from "./models/auth";
@@ -839,11 +840,23 @@ export type PhotoAspectRatio = "4:3" | "1:1" | "16:9";
 export type AccountSettings = {
   defaultPhotoAspectRatio: PhotoAspectRatio;
   photoOverlayEnabled: boolean;
+  industry: string | null;
+  aiContext: string | null;
 };
 export const photoAspectRatioWireSchema = z.enum(["4:3", "1:1", "16:9"]);
+const accountIndustrySchema = z.string().refine(
+  (value) => (INDUSTRY_VALUES as readonly string[]).includes(value),
+  "Invalid industry",
+);
+const aiContextSchema = z.string().trim().refine(
+  (value) => !value || value.split(/\s+/).length <= 500,
+  "Business context must be 500 words or fewer",
+);
 export const accountSettingsPatchSchema = z.object({
   defaultPhotoAspectRatio: photoAspectRatioWireSchema.optional(),
   photoOverlayEnabled: z.boolean().optional(),
+  industry: accountIndustrySchema.nullable().optional(),
+  aiContext: aiContextSchema.nullable().optional(),
 }).strict();
 export type AccountSettingsPatch = z.infer<typeof accountSettingsPatchSchema>;
 

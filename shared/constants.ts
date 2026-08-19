@@ -16,6 +16,14 @@ export const INDUSTRIES = [
   { value: "inspection", label: "Inspection" },
   { value: "restoration", label: "Restoration" },
   { value: "property_management", label: "Property Management" },
+  { value: "pool", label: "Pool / Spa" },
+  { value: "fencing", label: "Fencing" },
+  { value: "decks", label: "Decks" },
+  { value: "solar", label: "Solar" },
+  { value: "siding", label: "Siding" },
+  { value: "gutters", label: "Gutters" },
+  { value: "drywall", label: "Drywall" },
+  { value: "pressure_washing", label: "Pressure Washing" },
   { value: "other", label: "Other" },
 ] as const;
 

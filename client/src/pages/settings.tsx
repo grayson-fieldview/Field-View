@@ -19,6 +19,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useTheme } from "@/components/theme-provider";
 import { BrandingCard } from "@/components/branding-card";
 import { AccountSettingsCard } from "@/components/account-settings-card";
+import { AiCustomizationCard } from "@/components/ai-customization-card";
 import { ContactsDirectoryCard } from "@/components/project-contacts";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -1380,6 +1381,8 @@ export default function SettingsPage() {
       <BrandingCard />
 
       <AccountSettingsCard />
+
+      <AiCustomizationCard />
 
       <Card className="p-6" data-testid="card-appearance">
         <div className="flex items-center gap-2 mb-4">

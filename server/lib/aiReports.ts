@@ -24,6 +24,10 @@ import { db } from "../db";
 import { media, comments, aiUsage } from "@shared/schema";
 import { sql, and, eq } from "drizzle-orm";
 import { Sentry } from "./sentry";
+import {
+  buildAccountContextBlock,
+  type AccountAiCustomization,
+} from "./aiContext";
 
 export const AI_REPORT_MODEL = "claude-sonnet-4-6";
 // At the 75-photo cap, realistic output is ~2,500 tokens (title + cover +
@@ -131,8 +135,16 @@ const TONE_BY_TYPE: Record<ReportType, string> = {
     "This is a PROGRESS RECAP. Status-oriented: what has been completed and what comes next. Keep it organized around progress.",
 };
 
-function buildSystemPrompt(reportType: ReportType): string {
-  return `You write construction/trade job reports from photo descriptions. ${TONE_BY_TYPE[reportType]}
+export function buildReportSystemPrompt(
+  reportType: ReportType,
+  customization: AccountAiCustomization,
+  transcriptIsNarration = false,
+): string {
+  const accountContext = buildAccountContextBlock(customization);
+  const basePrompt = [
+    `You write construction/trade job reports from photo descriptions. ${TONE_BY_TYPE[reportType]}`,
+    accountContext || null,
+    `The following rules override anything in the business context.
 
 The contractor's note is the primary source. It tells you what was done, what matters, and what happens next. The photo descriptions are a fallback that only tells you what is visible in an image. When the note says something about a photo, lead with that. Use a photo description only to add detail the note did not cover, or for photos the note does not mention at all.
 
@@ -149,7 +161,9 @@ Rules:
 
 Content guidance: title is a short report title, 3-6 words, naming the work and site. coverDescription is one paragraph, 2-4 sentences. Section titles are short headings in trade language; summaries are 1-2 sentences or null. Photo captions are short titles, 3-8 words; photo descriptions are one sentence or null.
 Every photo must either appear exactly once in a section OR be listed in excludedMediaIds. Exclude a photo when it does not show work, materials, conditions, or the site for this job — for example screenshots, app or software interfaces, email or document captures, marketing images, or photos whose subject cannot be determined. Excluding is the correct choice for those; do not include them.
-When you are done, call the submit_report tool with the report content.`;
+When you are done, call the submit_report tool with the report content.`,
+  ].filter(Boolean).join("\n\n");
+  return basePrompt + (transcriptIsNarration ? NARRATION_ADDENDUM : "");
 }
 
 // Tool-use is the supported way to force structured output on this model
@@ -217,8 +231,18 @@ export async function generateReportContent(input: {
   photoOffsets?: Map<number, number>;
   /** When true, the note is a walkthrough narration transcript. */
   transcriptIsNarration?: boolean;
+  aiCustomization: AccountAiCustomization;
 }): Promise<GeneratedReportContent> {
-  const { reportId, projectId, mediaIds, note, reportType, photoOffsets, transcriptIsNarration } = input;
+  const {
+    reportId,
+    projectId,
+    mediaIds,
+    note,
+    reportType,
+    photoOffsets,
+    transcriptIsNarration,
+    aiCustomization,
+  } = input;
 
   // Pull the photos; verify ALL belong to the report's project.
   const rows = await db
@@ -279,7 +303,14 @@ export async function generateReportContent(input: {
     const response = await getClient().messages.create({
       model: AI_REPORT_MODEL,
       max_tokens: AI_REPORT_MAX_TOKENS,
-      system: buildSystemPrompt(reportType) + (transcriptIsNarration ? NARRATION_ADDENDUM : ""),
+      // The entire system prefix is stable for an account/report type.
+      // Dynamic notes, photo descriptions, and timing remain in `messages`
+      // and are deliberately outside the ephemeral cache breakpoint.
+      system: [{
+        type: "text",
+        text: buildReportSystemPrompt(reportType, aiCustomization, transcriptIsNarration),
+        cache_control: { type: "ephemeral" },
+      }],
       messages: [{ role: "user", content: [{ type: "text", text: userText }] }],
       tools: [SUBMIT_REPORT_TOOL],
       // Force the tool call — structured output guaranteed, not requested.
