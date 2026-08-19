@@ -35,7 +35,7 @@ function getClient(): Anthropic {
  */
 export async function translateText(
   text: string,
-  attribution: AiUsageAttribution,
+  attribution: AiUsageAttribution | null,
 ): Promise<string> {
   let response: Anthropic.Message;
   try {
@@ -46,20 +46,24 @@ export async function translateText(
       messages: [{ role: "user", content: text }],
     });
   } catch (error) {
+    if (attribution) {
+      await recordAnthropicUsageEvent({
+        attribution,
+        feature: "translation",
+        model: TRANSLATION_MODEL,
+        error,
+      });
+    }
+    throw error;
+  }
+  if (attribution) {
     await recordAnthropicUsageEvent({
       attribution,
       feature: "translation",
       model: TRANSLATION_MODEL,
-      error,
+      response,
     });
-    throw error;
   }
-  await recordAnthropicUsageEvent({
-    attribution,
-    feature: "translation",
-    model: TRANSLATION_MODEL,
-    response,
-  });
   const block = response.content.find((b) => b.type === "text");
   const translation = block && block.type === "text" ? block.text.trim() : "";
   if (!translation) throw new Error("Empty translation response");

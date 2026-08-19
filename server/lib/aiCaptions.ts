@@ -33,7 +33,10 @@ import pLimit from "p-limit";
 import { db } from "../db";
 import { media, projects } from "@shared/schema";
 import { Sentry } from "./sentry";
-import { recordAnthropicUsageEvent } from "./aiUsageEvents";
+import {
+  recordAnthropicUsageEvent,
+  type AiUsageAttribution,
+} from "./aiUsageEvents";
 
 export const AI_CAPTION_MODEL = "claude-haiku-4-5";
 export const AI_CAPTION_MAX_TOKENS = 150;
@@ -108,21 +111,31 @@ export async function generateCaption(row: CaptionSource): Promise<boolean> {
 
     // Resolve attribution from the persisted media row so upload-triggered,
     // HEIC-thumbnail-triggered, and backfill calls all use the same source.
-    // Refuse the provider call when an orphan row cannot satisfy the event
-    // table's required account_id — every provider call must be attributable.
+    // Caption generation must not depend on telemetry: orphaned legacy media
+    // still proceeds to Anthropic, but cannot produce an attributed event.
     const [attribution] = await db
       .select({ accountId: projects.accountId, userId: media.uploadedById })
       .from(media)
       .innerJoin(projects, eq(media.projectId, projects.id))
       .where(eq(media.id, row.id))
       .limit(1);
-    if (!attribution?.accountId) {
-      throw new Error(`Cannot attribute media ${row.id} to an account`);
+    let usageAttribution: AiUsageAttribution | null = null;
+    if (attribution?.accountId) {
+      usageAttribution = {
+        accountId: attribution.accountId,
+        userId: attribution.userId,
+      };
+    } else {
+      try {
+        Sentry.captureMessage("ai-captions: skipped unattributable usage event", {
+          level: "warning",
+          tags: { source: "ai_captions" },
+          extra: { mediaId: row.id },
+        });
+      } catch {
+        // Captions must remain independent from observability.
+      }
     }
-    const usageAttribution = {
-      accountId: attribution.accountId,
-      userId: attribution.userId,
-    };
 
     let response: Anthropic.Message;
     try {
@@ -141,22 +154,26 @@ export async function generateCaption(row: CaptionSource): Promise<boolean> {
         ],
       });
     } catch (error) {
+      if (usageAttribution) {
+        await recordAnthropicUsageEvent({
+          attribution: usageAttribution,
+          feature: "caption",
+          model: AI_CAPTION_MODEL,
+          error,
+          imageCount: 1,
+        });
+      }
+      throw error;
+    }
+    if (usageAttribution) {
       await recordAnthropicUsageEvent({
         attribution: usageAttribution,
         feature: "caption",
         model: AI_CAPTION_MODEL,
-        error,
+        response,
         imageCount: 1,
       });
-      throw error;
     }
-    await recordAnthropicUsageEvent({
-      attribution: usageAttribution,
-      feature: "caption",
-      model: AI_CAPTION_MODEL,
-      response,
-      imageCount: 1,
-    });
 
     let text = response.content
       .filter((b): b is Anthropic.TextBlock => b.type === "text")

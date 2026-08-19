@@ -905,13 +905,10 @@ export async function registerRoutes(
       if (!parsed.success) {
         return res.status(400).json({ message: "Provide 'text' between 1 and 2000 characters" });
       }
-      if (!req.user.accountId) {
-        return res.status(403).json({ message: "No account associated with user" });
-      }
-      const translation = await translateText(parsed.data.text, {
-        accountId: req.user.accountId,
-        userId: req.user.id ?? null,
-      });
+      const attribution = req.user.accountId
+        ? { accountId: req.user.accountId, userId: req.user.id ?? null }
+        : null;
+      const translation = await translateText(parsed.data.text, attribution);
       res.json({ translation });
     } catch (error: any) {
       const apiErr = classifyAnthropicApiError(error);
