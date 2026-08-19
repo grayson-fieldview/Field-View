@@ -530,6 +530,9 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     id ? parseInt(id) : undefined,
   );
 
+  const { data: unreadData } = useProjectUnreadCount(id);
+  const messagesUnread = unreadData?.unread ?? 0;
+
   // Single source of truth for photo visibility. Computed as a stable hook
   // before the early-return guards so it can also feed the prune effect below.
   // Handles `data` not yet loaded by filtering an empty list.
@@ -1106,9 +1109,6 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     setFilterRoles((prev) =>
       prev.includes(role) ? prev.filter((r) => r !== role) : [...prev, role],
     );
-  const { data: unreadData } = useProjectUnreadCount(id);
-  const messagesUnread = unreadData?.unread ?? 0;
-
   const clearAllFilters = () => {
     setFilterStartDate(undefined);
     setFilterEndDate(undefined);
