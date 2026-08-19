@@ -156,6 +156,7 @@ export default function GalleryPage({ token }: { token: string }) {
                       takenAt={photo.takenAt}
                       createdAt={null}
                       address={gallery.projectAddress || null}
+                      size="small"
                     />
                   )}
                 </div>
