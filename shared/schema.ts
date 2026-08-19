@@ -605,6 +605,63 @@ export const updateProjectContactSchema = z.object({
   recapFrequency: recapFrequencySchema.optional(),
 }).strict();
 
+// ── Project messaging ────────────────────────────────────────────────────
+// One thread per project. Mentions are stored as a validated array of user
+// ids (varchar, matching users.id) — display names are resolved at render
+// time, never stored. Deliberately separate from the media-scoped comments
+// table: different auth path (userCanAccessProject), different lifecycle.
+export const projectMessages = pgTable("project_messages", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }).notNull(),
+  userId: varchar("user_id").references(() => users.id).notNull(),
+  content: text("content").notNull(),
+  // Server-validated mentioned user ids (invalid/out-of-visibility ids are
+  // silently dropped at POST time — see routes).
+  mentions: varchar("mentions").array().notNull().default([]),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("project_messages_project_created_idx").on(table.projectId, table.createdAt),
+]);
+
+// Per-user-per-thread last-read watermark. Absent row = everything unread.
+export const projectThreadReads = pgTable("project_thread_reads", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }).notNull(),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+  lastReadAt: timestamp("last_read_at").notNull(),
+}, (table) => [
+  uniqueIndex("project_thread_reads_project_user_idx").on(table.projectId, table.userId),
+]);
+
+// Personally-directed notification inbox rows (mentions, task assignments).
+// NOT an activity feed — /api/activity stays computed on the fly.
+export const notifications = pgTable("notifications", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+  accountId: varchar("account_id").references(() => accounts.id, { onDelete: "cascade" }).notNull(),
+  type: text("type").notNull(), // "project_mention" | "task_assigned"
+  projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }),
+  messageId: integer("message_id").references(() => projectMessages.id, { onDelete: "cascade" }),
+  taskId: integer("task_id").references(() => tasks.id, { onDelete: "cascade" }),
+  actorUserId: varchar("actor_user_id").references(() => users.id),
+  readAt: timestamp("read_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("notifications_user_created_idx").on(table.userId, table.createdAt),
+  index("notifications_user_unread_idx").on(table.userId).where(sql`${table.readAt} IS NULL`),
+]);
+
+export type ProjectMessage = typeof projectMessages.$inferSelect;
+export type ProjectThreadRead = typeof projectThreadReads.$inferSelect;
+export type Notification = typeof notifications.$inferSelect;
+
+export const createProjectMessageSchema = z.object({
+  content: z.string().trim().min(1).max(5000),
+  mentions: z.array(z.string().trim().min(1)).max(50).default([]),
+}).strict();
+export type CreateProjectMessageInput = z.infer<typeof createProjectMessageSchema>;
+
 export const calendarConnections = pgTable("calendar_connections", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),

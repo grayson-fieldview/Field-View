@@ -10,7 +10,7 @@ import { normalizeEmail } from "./lib/normalizeEmail";
 import { apiV1Router } from "./apiV1";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
-import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistSectionSchema, insertChecklistItemOptionSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, checklistItems, checklistSections, checklistItemOptions, checklistItemPhotos, taskPhotos, checklistTemplates, checklistTemplateSections, checklistTemplateItems, checklistTemplateItemOptions, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, templateConfigSchema, accountSettingsPatchSchema, apiKeys, appInstallPromptEvents, createContactSchema, updateContactSchema, attachProjectContactSchema, updateProjectContactSchema } from "@shared/schema";
+import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertChecklistSchema, insertChecklistItemSchema, insertChecklistSectionSchema, insertChecklistItemOptionSchema, insertChecklistTemplateSchema, insertChecklistTemplateItemSchema, insertCalendarEventSchema, annotationStrokesSchema, projects, media, comments, tasks, checklists, checklistItems, checklistSections, checklistItemOptions, checklistItemPhotos, taskPhotos, checklistTemplates, checklistTemplateSections, checklistTemplateItems, checklistTemplateItemOptions, reports, reportSections, reportSectionPhotos, projectAssignments, timeEntries, templateConfigSchema, accountSettingsPatchSchema, apiKeys, appInstallPromptEvents, createContactSchema, updateContactSchema, attachProjectContactSchema, updateProjectContactSchema, projectMessages, projectThreadReads, notifications, createProjectMessageSchema } from "@shared/schema";
 import { executeAutoClockOut } from "./lib/timesheets";
 import { formatLocalTime } from "./lib/geo";
 import { users, invitations, accounts, assignedProjectIdsSchema } from "@shared/models/auth";
@@ -351,7 +351,7 @@ async function verifyTaskAccess(taskId: number, user: AccessUser): Promise<boole
 // requiredPhotoCount) so callers that need the task don't query twice.
 // Scopes through projects.accountId, matching the media access pattern.
 async function getTaskWithAccess(taskId: number, user: AccessUser): Promise<
-  { ok: false } | { ok: true; task: { id: number; projectId: number; status: string; requiredPhotoCount: number } }
+  { ok: false } | { ok: true; task: { id: number; projectId: number; status: string; requiredPhotoCount: number; assignedToId: string | null } }
 > {
   const result = await db.select({
       accountId: projects.accountId,
@@ -360,6 +360,7 @@ async function getTaskWithAccess(taskId: number, user: AccessUser): Promise<
       projectId: tasks.projectId,
       status: tasks.status,
       requiredPhotoCount: tasks.requiredPhotoCount,
+      assignedToId: tasks.assignedToId,
     })
     .from(tasks)
     .innerJoin(projects, eq(tasks.projectId, projects.id))
@@ -1795,6 +1796,302 @@ export async function registerRoutes(
     }
   });
 
+  // ── Project messaging + notifications ───────────────────────────────────
+  // One thread per project (project_messages), per-user last-read watermark
+  // (project_thread_reads), and a personally-directed notification inbox
+  // (notifications: project_mention, task_assigned). Deliberately separate
+  // from media comments and /api/activity — different scoping and auth path.
+  // All project routes gate through userCanAccessProject (tenant + restricted
+  // assignment rule).
+
+  const MESSAGE_PAGE_DEFAULT = 50;
+  const MESSAGE_PAGE_MAX = 100;
+  function parsePagination(req: any): { limit: number; before: number | null } {
+    const rawLimit = typeof req.query.limit === "string" ? parseInt(req.query.limit) : NaN;
+    const limit = Number.isInteger(rawLimit) && rawLimit >= 1 && rawLimit <= MESSAGE_PAGE_MAX
+      ? rawLimit : MESSAGE_PAGE_DEFAULT;
+    const rawBefore = typeof req.query.before === "string" ? parseInt(req.query.before) : NaN;
+    const before = Number.isInteger(rawBefore) && rawBefore > 0 ? rawBefore : null;
+    return { limit, before };
+  }
+
+  // Non-fatal notification insert — a failed inbox row must never fail the
+  // operation that triggered it (same ethos as fire-and-forget pushes).
+  async function createNotificationNonFatal(row: {
+    userId: string; accountId: string; type: string;
+    projectId?: number | null; messageId?: number | null;
+    taskId?: number | null; actorUserId?: string | null;
+  }): Promise<void> {
+    try {
+      await db.insert(notifications).values(row);
+    } catch (err) {
+      console.error("[notifications] insert failed (non-fatal):", err);
+    }
+  }
+
+  // GET /api/projects/:id/messages — paginated, newest LAST (chronological
+  // for thread rendering). Cursor: ?before=<messageId> returns the page of
+  // messages older than that id; ?limit 1-100 (default 50).
+  app.get("/api/projects/:id/messages", requireReadAccess, async (req: any, res) => {
+    try {
+      const projectId = parseInt(req.params.id as string);
+      if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
+      if (!(await userCanAccessProject(req, projectId))) return res.status(403).json({ message: "Access denied" });
+      const { limit, before } = parsePagination(req);
+      const conditions = [eq(projectMessages.projectId, projectId)];
+      if (before !== null) conditions.push(sql`${projectMessages.id} < ${before}`);
+      const rows = await db
+        .select({
+          message: projectMessages,
+          author: {
+            id: users.id,
+            firstName: users.firstName,
+            lastName: users.lastName,
+            profileImageUrl: users.profileImageUrl,
+          },
+        })
+        .from(projectMessages)
+        .leftJoin(users, eq(projectMessages.userId, users.id))
+        .where(and(...conditions))
+        .orderBy(desc(projectMessages.id))
+        .limit(limit);
+      // Fetched newest-first for the cursor; reverse so the page reads
+      // oldest→newest (newest last).
+      const messages = rows.reverse().map((r) => ({ ...r.message, author: r.author }));
+      res.json({ messages, hasMore: rows.length === limit });
+    } catch (error) {
+      console.error("[API] GET /api/projects/:id/messages failed:", error);
+      res.status(500).json({ message: "Failed to fetch messages" });
+    }
+  });
+
+  // POST /api/projects/:id/messages — body { content, mentions: userId[] }.
+  // Mention ids are RE-VALIDATED server-side against the same visibility
+  // rule as GET /api/users?assignableForProjectId: same account, and
+  // restricted users only if assigned to (or creator of) this project.
+  // Invalid ids are SILENTLY DROPPED, not rejected — matches the house
+  // strip-don't-reject pattern (requiredPhotoCount, assignable picker
+  // fallback): a stale client-side user list (member removed mid-compose)
+  // must not fail the whole message. The message still posts; only the
+  // invalid mention loses its notification.
+  app.post("/api/projects/:id/messages", requireWriteAccess, async (req: any, res) => {
+    try {
+      const projectId = parseInt(req.params.id as string);
+      if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
+      if (!(await userCanAccessProject(req, projectId))) return res.status(403).json({ message: "Access denied" });
+      const parsed = createProjectMessageSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+
+      // Re-validate mentions against project visibility.
+      let validMentions: string[] = [];
+      const requested = Array.from(new Set(parsed.data.mentions));
+      if (requested.length > 0) {
+        const project = await storage.getProject(projectId);
+        const candidates = await db
+          .select({ id: users.id, role: users.role })
+          .from(users)
+          .where(and(inArray(users.id, requested), eq(users.accountId, req.user.accountId)));
+        const restrictedIds = candidates.filter((u) => u.role === "restricted").map((u) => u.id);
+        let allowedRestricted = new Set<string>();
+        if (restrictedIds.length > 0) {
+          const assigned = await db
+            .select({ userId: projectAssignments.userId })
+            .from(projectAssignments)
+            .where(and(
+              eq(projectAssignments.projectId, projectId),
+              inArray(projectAssignments.userId, restrictedIds),
+            ));
+          allowedRestricted = new Set(assigned.map((a) => a.userId));
+        }
+        validMentions = candidates
+          .filter((u) => u.role !== "restricted"
+            || allowedRestricted.has(u.id)
+            || project?.createdById === u.id)
+          .map((u) => u.id);
+      }
+
+      // Message + notification rows atomically; push is fire-and-forget
+      // after commit (matching walkthrough/shift push semantics).
+      const notifyIds = validMentions.filter((id) => id !== req.user.id);
+      const message = await db.transaction(async (tx) => {
+        const [msg] = await tx.insert(projectMessages).values({
+          projectId,
+          userId: req.user.id,
+          content: parsed.data.content,
+          mentions: validMentions,
+        }).returning();
+        if (notifyIds.length > 0) {
+          await tx.insert(notifications).values(notifyIds.map((userId) => ({
+            userId,
+            accountId: req.user.accountId,
+            type: "project_mention",
+            projectId,
+            messageId: msg.id,
+            actorUserId: req.user.id,
+          })));
+        }
+        return msg;
+      });
+
+      const actorName = [req.user.firstName, req.user.lastName].filter(Boolean).join(" ") || "A teammate";
+      const preview = parsed.data.content.length > 140
+        ? `${parsed.data.content.slice(0, 137)}...` : parsed.data.content;
+      for (const userId of notifyIds) {
+        sendPushNotification({
+          userId,
+          title: `${actorName} mentioned you`,
+          body: preview,
+          data: { type: "project_mention", projectId, messageId: message.id },
+        }).catch((err) => console.error("[project-mention] push failed (non-fatal):", err));
+      }
+
+      res.status(201).json(message);
+    } catch (error) {
+      console.error("[API] POST /api/projects/:id/messages failed:", error);
+      res.status(500).json({ message: "Failed to post message" });
+    }
+  });
+
+  // POST /api/projects/:id/messages/read — upsert the last-read watermark.
+  app.post("/api/projects/:id/messages/read", requireWriteAccess, async (req: any, res) => {
+    try {
+      const projectId = parseInt(req.params.id as string);
+      if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
+      if (!(await userCanAccessProject(req, projectId))) return res.status(403).json({ message: "Access denied" });
+      const now = new Date();
+      await db.insert(projectThreadReads)
+        .values({ projectId, userId: req.user.id, lastReadAt: now })
+        .onConflictDoUpdate({
+          target: [projectThreadReads.projectId, projectThreadReads.userId],
+          set: { lastReadAt: now },
+        });
+      res.status(204).end();
+    } catch (error) {
+      console.error("[API] POST /api/projects/:id/messages/read failed:", error);
+      res.status(500).json({ message: "Failed to mark thread read" });
+    }
+  });
+
+  // GET /api/projects/:id/messages/unread-count — single-project badge.
+  app.get("/api/projects/:id/messages/unread-count", requireReadAccess, async (req: any, res) => {
+    try {
+      const projectId = parseInt(req.params.id as string);
+      if (Number.isNaN(projectId)) return res.status(404).json({ message: "Project not found" });
+      if (!(await userCanAccessProject(req, projectId))) return res.status(403).json({ message: "Access denied" });
+      const result = await db.execute(sql`
+        SELECT COUNT(*)::int AS unread
+          FROM project_messages pm
+          LEFT JOIN project_thread_reads r
+            ON r.project_id = pm.project_id AND r.user_id = ${req.user.id}
+         WHERE pm.project_id = ${projectId}
+           AND pm.user_id != ${req.user.id}
+           AND pm.created_at > COALESCE(r.last_read_at, 'epoch'::timestamp)
+      `);
+      res.json({ unread: (result.rows[0] as any)?.unread ?? 0 });
+    } catch (error) {
+      console.error("[API] GET /api/projects/:id/messages/unread-count failed:", error);
+      res.status(500).json({ message: "Failed to fetch unread count" });
+    }
+  });
+
+  // GET /api/messages/unread-counts — batched badge counts across every
+  // project the caller can access. Shape: { counts: { [projectId]: n },
+  // total } — an object keyed by project id (not an array) so clients do
+  // O(1) lookups when rendering project lists; projects with zero unread
+  // are OMITTED (absent key = 0), keeping the payload small on large
+  // accounts. One grouped query; own messages never count as unread.
+  app.get("/api/messages/unread-counts", requireReadAccess, async (req: any, res) => {
+    try {
+      // Accessible project ids under the same rule as userCanAccessProject.
+      const accountProjects = await db
+        .select({ id: projects.id, createdById: projects.createdById })
+        .from(projects)
+        .where(eq(projects.accountId, req.user.accountId));
+      let accessibleIds = accountProjects.map((p) => p.id);
+      if (req.user.role === "restricted") {
+        const assigned = await db
+          .select({ projectId: projectAssignments.projectId })
+          .from(projectAssignments)
+          .where(eq(projectAssignments.userId, req.user.id));
+        const allowed = new Set(assigned.map((a) => a.projectId));
+        accessibleIds = accountProjects
+          .filter((p) => allowed.has(p.id) || p.createdById === req.user.id)
+          .map((p) => p.id);
+      }
+      if (accessibleIds.length === 0) return res.json({ counts: {}, total: 0 });
+      const result = await db.execute(sql`
+        SELECT pm.project_id AS project_id, COUNT(*)::int AS unread
+          FROM project_messages pm
+          LEFT JOIN project_thread_reads r
+            ON r.project_id = pm.project_id AND r.user_id = ${req.user.id}
+         WHERE pm.project_id IN (${sql.join(accessibleIds.map((id) => sql`${id}`), sql`, `)})
+           AND pm.user_id != ${req.user.id}
+           AND pm.created_at > COALESCE(r.last_read_at, 'epoch'::timestamp)
+         GROUP BY pm.project_id
+      `);
+      const counts: Record<number, number> = {};
+      let total = 0;
+      for (const row of result.rows as any[]) {
+        counts[row.project_id] = row.unread;
+        total += row.unread;
+      }
+      res.json({ counts, total });
+    } catch (error) {
+      console.error("[API] GET /api/messages/unread-counts failed:", error);
+      res.status(500).json({ message: "Failed to fetch unread counts" });
+    }
+  });
+
+  // GET /api/notifications — the caller's inbox rows, newest first.
+  // Same ?limit/?before cursor as messages.
+  app.get("/api/notifications", requireReadAccess, async (req: any, res) => {
+    try {
+      const { limit, before } = parsePagination(req);
+      const conditions = [eq(notifications.userId, req.user.id)];
+      if (before !== null) conditions.push(sql`${notifications.id} < ${before}`);
+      const rows = await db
+        .select()
+        .from(notifications)
+        .where(and(...conditions))
+        .orderBy(desc(notifications.id))
+        .limit(limit);
+      res.json({ notifications: rows, hasMore: rows.length === limit });
+    } catch (error) {
+      console.error("[API] GET /api/notifications failed:", error);
+      res.status(500).json({ message: "Failed to fetch notifications" });
+    }
+  });
+
+  // POST /api/notifications/:id/read — mark one row read (idempotent).
+  app.post("/api/notifications/:id/read", requireWriteAccess, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id as string);
+      if (Number.isNaN(id)) return res.status(404).json({ message: "Notification not found" });
+      const [updated] = await db.update(notifications)
+        .set({ readAt: sql`COALESCE(${notifications.readAt}, NOW())` })
+        .where(and(eq(notifications.id, id), eq(notifications.userId, req.user.id)))
+        .returning();
+      if (!updated) return res.status(404).json({ message: "Notification not found" });
+      res.json(updated);
+    } catch (error) {
+      console.error("[API] POST /api/notifications/:id/read failed:", error);
+      res.status(500).json({ message: "Failed to mark notification read" });
+    }
+  });
+
+  // POST /api/notifications/read-all — mark every unread row read.
+  app.post("/api/notifications/read-all", requireWriteAccess, async (req: any, res) => {
+    try {
+      await db.update(notifications)
+        .set({ readAt: new Date() })
+        .where(and(eq(notifications.userId, req.user.id), isNull(notifications.readAt)));
+      res.status(204).end();
+    } catch (error) {
+      console.error("[API] POST /api/notifications/read-all failed:", error);
+      res.status(500).json({ message: "Failed to mark notifications read" });
+    }
+  });
+
   app.get("/api/tags", requireReadAccess, async (req: any, res) => {
     try {
       const accountId = req.user.accountId;
@@ -2131,6 +2428,18 @@ export async function registerRoutes(
         return res.status(400).json({ message: parsed.error.message });
       }
       const task = await storage.createTask(parsed.data);
+      // Inbox row for the assignee (not the creator assigning themselves).
+      // Non-fatal — assignment behavior is unchanged if this fails.
+      if (task.assignedToId && task.assignedToId !== req.user.id) {
+        await createNotificationNonFatal({
+          userId: task.assignedToId,
+          accountId: req.user.accountId,
+          type: "task_assigned",
+          projectId,
+          taskId: task.id,
+          actorUserId: req.user.id,
+        });
+      }
       res.status(201).json(task);
     } catch (error) {
       console.error("[API] POST /api/projects/:id/tasks failed:", error);
@@ -2194,6 +2503,22 @@ export async function registerRoutes(
       delete (filtered as any).completedAt;
       const updated = await storage.updateTask(id, filtered);
       if (!updated) return res.status(404).json({ message: "Task not found" });
+      // Inbox row when the assignee actually CHANGED to someone new (compared
+      // against the pre-update row; re-PATCHing the same assignee or
+      // self-assignment creates nothing). Non-fatal.
+      if ("assignedToId" in filtered
+        && filtered.assignedToId
+        && filtered.assignedToId !== access.task.assignedToId
+        && filtered.assignedToId !== req.user.id) {
+        await createNotificationNonFatal({
+          userId: filtered.assignedToId,
+          accountId: req.user.accountId,
+          type: "task_assigned",
+          projectId: access.task.projectId,
+          taskId: id,
+          actorUserId: req.user.id,
+        });
+      }
       if (filtered.status === "done") {
         try {
           const stamp = await db.execute(sql`
