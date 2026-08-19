@@ -31,12 +31,12 @@ export const ANTHROPIC_RATES_USD_PER_MILLION_TOKENS: Record<string, AnthropicRat
   },
 };
 
-// USD per minute for pre-recorded, monolingual Nova-3. Use the standard
-// non-promotional pay-as-you-go list rate so cost telemetry does not depend
-// on a temporary public discount. Verified on 2026-08-19.
+// USD per minute for the Deepgram pre-recorded/batch API (S3/object URL →
+// Deepgram), monolingual Nova-3. This is intentionally NOT the streaming
+// rate. Verified on 2026-08-19.
 // Source: https://deepgram.com/pricing
 export const DEEPGRAM_RATES_USD_PER_MINUTE: Record<string, number> = {
-  "nova-3": 0.0077,
+  "nova-3": 0.0043,
 };
 
 export function calculateAnthropicCostUsd(

@@ -29,12 +29,12 @@ test("calculates Claude Haiku 4.5 input, output, and cache costs", () => {
   );
 });
 
-test("calculates Nova-3 at the standard $0.0077 per-minute list rate", () => {
-  assert.equal(calculateDeepgramCostUsd("nova-3", 60), 0.0077);
+test("calculates pre-recorded Nova-3 at $0.0043 per minute", () => {
+  assert.equal(calculateDeepgramCostUsd("nova-3", 60), 0.0043);
 });
 
 test("preserves fractional seconds in sub-minute Nova-3 costs", () => {
-  const expected = (15.5 / 60) * 0.0077;
+  const expected = (15.5 / 60) * 0.0043;
   assert.equal(calculateDeepgramCostUsd("nova-3", 15.5), expected);
 });
 
