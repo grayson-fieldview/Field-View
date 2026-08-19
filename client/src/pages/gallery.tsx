@@ -1,12 +1,17 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { MapPin, Calendar, User, X } from "lucide-react";
+import { MapPin, Calendar, User, X, ChevronLeft, ChevronRight } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PhotoOverlayStrip } from "@/components/photo-overlay-strip";
 
 interface GalleryPhoto {
   id: number;
   url: string;
+  thumbUrl: string | null;
   caption: string | null;
+  // Capture time for the timestamp overlay (present only when the
+  // project's overlay setting is on).
+  takenAt: string | null;
   createdAt: string | null;
   uploadedBy: { firstName: string; lastName: string } | null;
   latitude: number | null;
@@ -19,6 +24,10 @@ interface GalleryData {
   projectAddress: string;
   includeMetadata: boolean;
   includeDescriptions: boolean;
+  // Resolved project timestamp/address overlay flag. CSS text only — the
+  // overlay does not survive right-click-save (pixel compositing is a
+  // later phase).
+  overlayEnabled: boolean;
   createdAt: string;
   photos: GalleryPhoto[];
 }
@@ -39,12 +48,44 @@ function formatTime(dateStr: string) {
   });
 }
 
+/** "Aug 18, 2026, 2:45 PM" — same shape the app uses for photo timestamps. */
+function formatDateTime(dateStr: string) {
+  return new Date(dateStr).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
 export default function GalleryPage({ token }: { token: string }) {
-  const [lightboxPhoto, setLightboxPhoto] = useState<GalleryPhoto | null>(null);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   const { data: gallery, isLoading, error } = useQuery<GalleryData>({
     queryKey: ["/api/galleries", token],
   });
+
+  const photoCount = gallery?.photos.length ?? 0;
+
+  const goPrev = useCallback(() => {
+    setLightboxIndex((i) => (i === null || photoCount === 0 ? i : (i - 1 + photoCount) % photoCount));
+  }, [photoCount]);
+  const goNext = useCallback(() => {
+    setLightboxIndex((i) => (i === null || photoCount === 0 ? i : (i + 1) % photoCount));
+  }, [photoCount]);
+
+  useEffect(() => {
+    if (lightboxIndex === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setLightboxIndex(null);
+      else if (e.key === "ArrowLeft") goPrev();
+      else if (e.key === "ArrowRight") goNext();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightboxIndex, goPrev, goNext]);
 
   if (isLoading) {
     return (
@@ -73,6 +114,8 @@ export default function GalleryPage({ token }: { token: string }) {
     );
   }
 
+  const lightboxPhoto = lightboxIndex !== null ? gallery.photos[lightboxIndex] : null;
+
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b bg-card">
@@ -95,19 +138,26 @@ export default function GalleryPage({ token }: { token: string }) {
           <p className="text-center text-muted-foreground py-12">No photos in this gallery.</p>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-            {gallery.photos.map((photo) => (
+            {gallery.photos.map((photo, index) => (
               <div
                 key={photo.id}
                 className="cursor-pointer group"
-                onClick={() => setLightboxPhoto(photo)}
+                onClick={() => setLightboxIndex(index)}
                 data-testid={`gallery-photo-${photo.id}`}
               >
-                <div className="aspect-[4/3] rounded-md overflow-hidden bg-muted">
+                <div className="relative aspect-[4/3] rounded-md overflow-hidden bg-muted">
                   <img
-                    src={photo.url}
+                    src={photo.thumbUrl ?? photo.url}
                     alt={photo.caption || "Photo"}
                     className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
                   />
+                  {gallery.overlayEnabled && (
+                    <PhotoOverlayStrip
+                      takenAt={photo.takenAt}
+                      createdAt={null}
+                      address={gallery.projectAddress || null}
+                    />
+                  )}
                 </div>
                 <div className="mt-1.5 space-y-0.5">
                   {gallery.includeDescriptions && photo.caption && (
@@ -115,7 +165,7 @@ export default function GalleryPage({ token }: { token: string }) {
                   )}
                   {gallery.includeMetadata && photo.createdAt && (
                     <p className="text-xs text-muted-foreground">
-                      {formatTime(photo.createdAt)}
+                      {formatDateTime(photo.createdAt)}
                       {photo.uploadedBy && (
                         <span> &middot; {photo.uploadedBy.firstName} {photo.uploadedBy.lastName}</span>
                       )}
@@ -128,27 +178,62 @@ export default function GalleryPage({ token }: { token: string }) {
         )}
       </main>
 
-      {lightboxPhoto && (
+      {lightboxPhoto && lightboxIndex !== null && (
         <div
-          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center"
-          onClick={() => setLightboxPhoto(null)}
+          className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-center"
+          onClick={() => setLightboxIndex(null)}
           data-testid="lightbox-overlay"
         >
           <button
             className="absolute top-4 right-4 text-white/80 hover:text-white z-10"
-            onClick={() => setLightboxPhoto(null)}
+            onClick={() => setLightboxIndex(null)}
             data-testid="button-close-lightbox"
           >
             <X className="h-8 w-8" />
           </button>
-          <div className="max-w-5xl max-h-[90vh] w-full px-4" onClick={(e) => e.stopPropagation()}>
-            <img
-              src={lightboxPhoto.url}
-              alt={lightboxPhoto.caption || "Photo"}
-              className="max-w-full max-h-[80vh] mx-auto object-contain rounded-md"
-              data-testid="lightbox-image"
-            />
-            <div className="mt-4 text-center text-white/80 space-y-1">
+
+          {gallery.photos.length > 1 && (
+            <>
+              <button
+                className="absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 z-10 rounded-full bg-black/50 p-2 text-white/80 hover:text-white"
+                onClick={(e) => { e.stopPropagation(); goPrev(); }}
+                aria-label="Previous photo"
+                data-testid="button-lightbox-prev"
+              >
+                <ChevronLeft className="h-7 w-7" />
+              </button>
+              <button
+                className="absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 z-10 rounded-full bg-black/50 p-2 text-white/80 hover:text-white"
+                onClick={(e) => { e.stopPropagation(); goNext(); }}
+                aria-label="Next photo"
+                data-testid="button-lightbox-next"
+              >
+                <ChevronRight className="h-7 w-7" />
+              </button>
+            </>
+          )}
+
+          <div className="max-w-5xl w-full px-4 min-h-0" onClick={(e) => e.stopPropagation()}>
+            <div className="text-center">
+              {/* inline-block shrink-wraps the img so the overlay corner
+                  aligns to the image itself, not the letterboxed box. */}
+              <div className="relative inline-block max-w-full">
+                <img
+                  src={lightboxPhoto.url}
+                  alt={lightboxPhoto.caption || "Photo"}
+                  className="max-w-full max-h-[70vh] object-contain rounded-md"
+                  data-testid="lightbox-image"
+                />
+                {gallery.overlayEnabled && (
+                  <PhotoOverlayStrip
+                    takenAt={lightboxPhoto.takenAt}
+                    createdAt={null}
+                    address={gallery.projectAddress || null}
+                  />
+                )}
+              </div>
+            </div>
+            <div className="mt-3 text-center text-white/80 space-y-1">
               {gallery.includeDescriptions && lightboxPhoto.caption && (
                 <p className="text-sm font-medium">{lightboxPhoto.caption}</p>
               )}
@@ -175,6 +260,27 @@ export default function GalleryPage({ token }: { token: string }) {
                 </div>
               )}
             </div>
+
+            {gallery.photos.length > 1 && (
+              <div
+                className="mt-3 flex gap-1.5 overflow-x-auto pb-1 justify-start sm:justify-center"
+                data-testid="lightbox-thumbnails"
+              >
+                {gallery.photos.map((p, i) => (
+                  <button
+                    key={p.id}
+                    onClick={() => setLightboxIndex(i)}
+                    className={`h-14 w-14 shrink-0 overflow-hidden rounded-sm border-2 ${
+                      i === lightboxIndex ? "border-white" : "border-transparent opacity-60 hover:opacity-100"
+                    }`}
+                    aria-label={`Photo ${i + 1}`}
+                    data-testid={`lightbox-thumb-${p.id}`}
+                  >
+                    <img src={p.thumbUrl ?? p.url} alt="" className="h-full w-full object-cover" />
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

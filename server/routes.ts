@@ -6706,18 +6706,32 @@ export async function registerRoutes(
         ? [...allMedia].sort((a, b) =>
             new Date(b.takenAt ?? b.createdAt).getTime() - new Date(a.takenAt ?? a.createdAt).getTime())
         : allMedia.filter(m => gallery.mediaIds.includes(m.id));
+      // Resolved timestamp/address overlay flag for this project (project
+      // override, else account setting). The overlay renders client-side as
+      // CSS text — no pixel compositing; it does not survive right-click-save.
+      // Payload stays strictly whitelisted: project name/address, overlay
+      // flag, and per-photo fields below. NEVER contacts or other PII.
+      let overlayEnabled = false;
+      if (project?.accountId) {
+        const settings = await storage.getAccountSettings(project.accountId);
+        overlayEnabled = resolvePhotoOverlay(project.photoOverlayEnabled, settings.photoOverlayEnabled);
+      }
       res.json({
         token: gallery.token,
         projectName: project?.name || "Project",
         projectAddress: project?.address || "",
         includeMetadata: gallery.includeMetadata,
         includeDescriptions: gallery.includeDescriptions,
+        overlayEnabled,
         createdAt: gallery.createdAt,
         photos: galleryMedia.map(m => ({
           id: m.id,
           url: m.url,
           thumbUrl: m.thumbUrl ?? null,
           caption: gallery.includeDescriptions ? m.caption : null,
+          // Capture time for the overlay — independent of includeMetadata
+          // (which gates the labeled who/when/where display below photos).
+          takenAt: overlayEnabled ? (m.takenAt ?? m.createdAt) : null,
           // Capture time preferred (field name kept for client compat).
           createdAt: gallery.includeMetadata ? (m.takenAt ?? m.createdAt) : null,
           uploadedBy: gallery.includeMetadata && m.uploadedBy ? {

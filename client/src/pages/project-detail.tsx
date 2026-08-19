@@ -201,7 +201,7 @@ const reportTypeLabels: Record<string, string> = {
   daily: "Daily",
 };
 
-type DetailTab = "photos" | "tasks" | "files" | "checklists" | "reports" | "daily-log" | "contacts";
+type DetailTab = "photos" | "tasks" | "files" | "checklists" | "reports" | "daily-log";
 
 // Per-project override for the report-PDF timestamp/address overlay.
 // null = inherit account setting; true/false = explicit override.
@@ -239,7 +239,7 @@ function ProjectOverlayControl({ project }: { project: Project }) {
 
   return (
     <div className="flex items-center gap-1.5" data-testid="control-photo-overlay">
-      <span className="text-xs text-muted-foreground whitespace-nowrap">PDF overlay:</span>
+      <span className="text-xs text-muted-foreground whitespace-nowrap">Timestamp overlay:</span>
       <Select
         value={value}
         disabled={mutation.isPending}
@@ -1120,9 +1120,6 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     { key: "reports", label: "Reports", count: projectReports.length },
     { key: "files", label: "Files", count: projectFiles.length },
     { key: "daily-log", label: "Daily Log", count: 0 },
-    // Contact PII — tab hidden entirely for non-admin/manager roles (the
-    // server 403s them on every contacts route as well).
-    ...(canManageMembers ? [{ key: "contacts" as DetailTab, label: "Contacts", count: 0 }] : []),
   ];
 
   const todoCount = projectTasks.filter(t => t.status === "todo").length;
@@ -1428,6 +1425,11 @@ export default function ProjectDetailPage({ id }: { id: string }) {
               </div>
             </div>
           </div>
+        </div>
+
+        {/* Client contacts — renders nothing for non-admin/manager roles. */}
+        <div className="px-4 sm:px-6 mt-3">
+          <ProjectContactsSection projectId={project.id} />
         </div>
 
         <div className="px-4 sm:px-6 mt-4 mb-1">
@@ -2431,12 +2433,6 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                   ))}
                 </div>
               )}
-            </div>
-          )}
-
-          {activeTab === "contacts" && canManageMembers && (
-            <div className="px-4 sm:px-6 py-4">
-              <ProjectContactsSection projectId={project.id} />
             </div>
           )}
 
