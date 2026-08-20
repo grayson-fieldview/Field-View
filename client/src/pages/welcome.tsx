@@ -41,11 +41,15 @@ export default function WelcomePage() {
     role: (user as any)?.role ?? null,
   });
 
-  const isAdmin = (user as any)?.role === "admin";
+  // Account fields belong to the account owner, not every admin. Invited
+  // admins complete their own profile without being asked to reconfigure the
+  // account they joined.
+  const isAccountOwner = (user as any)?.isOwner === true;
 
   const [firstName, setFirstName] = useState((user as any)?.firstName ?? "");
   const [lastName, setLastName] = useState((user as any)?.lastName ?? "");
   const [phone, setPhone] = useState("");
+  const [companyName, setCompanyName] = useState("");
   const [industry, setIndustry] = useState("");
   const [jobRole, setJobRole] = useState("");
   const [companySize, setCompanySize] = useState("");
@@ -68,18 +72,12 @@ export default function WelcomePage() {
         tcpaAccepted,
         metaEventId: metaEventIdRef.current,
       };
-      // Job role: optional, shown to ALL roles (person attribute, not a
-      // permission and not admin-gated server-side).
-      if (jobRole) {
-        body.jobRole = jobRole;
-      }
-      if (isAdmin) {
+      body.jobRole = jobRole;
+      if (isAccountOwner) {
+        body.companyName = companyName.trim();
         body.industry = industry;
         body.companySize = companySize;
-        // Optional acquisition attribute — admin-gated server-side.
-        if (heardAboutUs) {
-          body.heardAboutUs = heardAboutUs;
-        }
+        body.heardAboutUs = heardAboutUs;
       }
       const res = await apiRequest("PATCH", "/api/auth/me", body);
       return res.json();
@@ -138,6 +136,14 @@ export default function WelcomePage() {
     e.preventDefault();
     if (!firstName.trim() || !lastName.trim()) {
       toast({ title: "Name required", description: "Please enter your first and last name.", variant: "destructive" });
+      return;
+    }
+    if (!phone.trim() || !jobRole) {
+      toast({ title: "Profile required", description: "Please enter your phone number and select your role.", variant: "destructive" });
+      return;
+    }
+    if (isAccountOwner && (!companyName.trim() || !industry || !companySize || !heardAboutUs)) {
+      toast({ title: "Account details required", description: "Please complete all company details.", variant: "destructive" });
       return;
     }
     if (!tcpaAccepted) {
@@ -266,15 +272,16 @@ export default function WelcomePage() {
                   placeholder="(555) 123-4567"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
+                  required
                   className={FIELD_CLASS}
                   data-testid="input-phone"
                 />
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="jobRole">Your role (optional)</Label>
+                <Label htmlFor="jobRole">Your role</Label>
                 <Select value={jobRole} onValueChange={setJobRole}>
-                  <SelectTrigger id="jobRole" className={FIELD_CLASS} data-testid="select-job-role">
+                  <SelectTrigger id="jobRole" aria-required="true" className={FIELD_CLASS} data-testid="select-job-role">
                     <SelectValue placeholder="Select your role" />
                   </SelectTrigger>
                   <SelectContent>
@@ -287,12 +294,25 @@ export default function WelcomePage() {
                 </Select>
               </div>
 
-              {isAdmin && (
+              {isAccountOwner && (
                 <>
+                  <div className="space-y-2">
+                    <Label htmlFor="companyName">Company name</Label>
+                    <Input
+                      id="companyName"
+                      placeholder="Acme Construction LLC"
+                      value={companyName}
+                      onChange={(e) => setCompanyName(e.target.value)}
+                      required
+                      className={FIELD_CLASS}
+                      data-testid="input-company-name"
+                    />
+                  </div>
+
                   <div className="space-y-2">
                     <Label htmlFor="industry">Industry</Label>
                     <Select value={industry} onValueChange={setIndustry}>
-                      <SelectTrigger id="industry" className={FIELD_CLASS} data-testid="select-industry">
+                      <SelectTrigger id="industry" aria-required="true" className={FIELD_CLASS} data-testid="select-industry">
                         <SelectValue placeholder="Select your industry" />
                       </SelectTrigger>
                       <SelectContent>
@@ -308,7 +328,7 @@ export default function WelcomePage() {
                   <div className="space-y-2">
                     <Label htmlFor="companySize">Company size</Label>
                     <Select value={companySize} onValueChange={setCompanySize}>
-                      <SelectTrigger id="companySize" className={FIELD_CLASS} data-testid="select-company-size">
+                      <SelectTrigger id="companySize" aria-required="true" className={FIELD_CLASS} data-testid="select-company-size">
                         <SelectValue placeholder="Select company size" />
                       </SelectTrigger>
                       <SelectContent>
@@ -322,9 +342,9 @@ export default function WelcomePage() {
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="heardAboutUs">How did you hear about us? (optional)</Label>
+                    <Label htmlFor="heardAboutUs">How did you hear about us?</Label>
                     <Select value={heardAboutUs} onValueChange={setHeardAboutUs}>
-                      <SelectTrigger id="heardAboutUs" className={FIELD_CLASS} data-testid="select-heard-about-us">
+                      <SelectTrigger id="heardAboutUs" aria-required="true" className={FIELD_CLASS} data-testid="select-heard-about-us">
                         <SelectValue placeholder="Select an option" />
                       </SelectTrigger>
                       <SelectContent>

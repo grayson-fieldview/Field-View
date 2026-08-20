@@ -33,7 +33,59 @@ export function registerAuthRoutes(app: Express): void {
 
   app.patch("/api/auth/me", isAuthenticated, async (req: any, res) => {
     try {
-      const { firstName, lastName, phone, industry, companySize, jobRole, heardAboutUs, tcpaAccepted } = req.body || {};
+      const { firstName, lastName, phone, companyName, industry, companySize, jobRole, heardAboutUs, tcpaAccepted } = req.body || {};
+
+      // Read the existing user FIRST so required onboarding fields are
+      // enforced only while the profile is incomplete. Later Settings edits
+      // deliberately remain partial PATCHes.
+      const existing = await authStorage.getUser(req.user.id);
+      if (!existing) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      const isFirstCompletion = existing.profileCompletedAt == null;
+
+      // Account-level onboarding belongs to the account owner, not every
+      // admin. This keeps invited admins from changing the company they joined.
+      const [account] = existing.accountId
+        ? await db
+          .select({ ownerId: accounts.ownerId })
+          .from(accounts)
+          .where(eq(accounts.id, existing.accountId))
+          .limit(1)
+        : [];
+      const isAccountOwner = account?.ownerId === existing.id;
+
+      if (isFirstCompletion) {
+        if (typeof firstName !== "string" || !firstName.trim()) {
+          return res.status(400).json({ message: "First name is required" });
+        }
+        if (typeof lastName !== "string" || !lastName.trim()) {
+          return res.status(400).json({ message: "Last name is required" });
+        }
+        if (typeof phone !== "string" || !phone.trim()) {
+          return res.status(400).json({ message: "Phone is required" });
+        }
+        if (typeof jobRole !== "string" || !jobRole) {
+          return res.status(400).json({ message: "Job role is required" });
+        }
+        if (tcpaAccepted !== true) {
+          return res.status(400).json({ message: "SMS consent is required" });
+        }
+        if (isAccountOwner) {
+          if (typeof companyName !== "string" || !companyName.trim()) {
+            return res.status(400).json({ message: "Company name is required" });
+          }
+          if (typeof industry !== "string" || !industry) {
+            return res.status(400).json({ message: "Industry is required" });
+          }
+          if (typeof companySize !== "string" || !companySize) {
+            return res.status(400).json({ message: "Company size is required" });
+          }
+          if (typeof heardAboutUs !== "string" || !heardAboutUs) {
+            return res.status(400).json({ message: "How did you hear about us is required" });
+          }
+        }
+      }
 
       const userUpdate: Record<string, any> = {};
 
@@ -89,43 +141,38 @@ export function registerAuthRoutes(app: Express): void {
         userUpdate.jobRole = jobRole;
       }
 
-      // Account-level fields — admin only. Non-admins: silently ignore.
-      const isAdmin = req.user.role === "admin";
+      // Account-level fields belong to the account owner. Other users,
+      // including invited admins, cannot alter the account through a profile
+      // PATCH and their values are ignored.
       const accountUpdate: Record<string, any> = {};
-      if (isAdmin && industry !== undefined && industry !== null && industry !== "") {
+      if (isAccountOwner && companyName !== undefined && companyName !== null && companyName !== "") {
+        if (typeof companyName !== "string" || !companyName.trim()) {
+          return res.status(400).json({ message: "Company name must be a non-empty string" });
+        }
+        accountUpdate.name = companyName.trim().slice(0, 200);
+      }
+      if (isAccountOwner && industry !== undefined && industry !== null && industry !== "") {
         if (typeof industry !== "string" || !INDUSTRY_VALUES.includes(industry)) {
           return res.status(400).json({ message: "Invalid industry" });
         }
         accountUpdate.industry = industry;
       }
-      if (isAdmin && companySize !== undefined && companySize !== null && companySize !== "") {
+      if (isAccountOwner && companySize !== undefined && companySize !== null && companySize !== "") {
         if (typeof companySize !== "string" || !COMPANY_SIZE_VALUES.includes(companySize)) {
           return res.status(400).json({ message: "Invalid company size" });
         }
         accountUpdate.companySize = companySize;
       }
-      // "How did you hear about us?" — acquisition attribute. DELIBERATE
-      // divergence from jobRole: admin-gated alongside the account-level
-      // fields (it describes how the account was acquired, so only the
-      // admin completing setup sets it). Stored on users.heard_about_us.
-      // Non-admins silently ignored, consistent with industry/companySize.
+      // "How did you hear about us?" is an account-acquisition attribute,
+      // so it is collected only from the account owner. Stored on that
+      // owner's user row; invitees' values are ignored.
       // Never read in any authorization path.
-      if (isAdmin && heardAboutUs !== undefined && heardAboutUs !== null && heardAboutUs !== "") {
+      if (isAccountOwner && heardAboutUs !== undefined && heardAboutUs !== null && heardAboutUs !== "") {
         if (typeof heardAboutUs !== "string" || !HEARD_ABOUT_US_VALUES.includes(heardAboutUs)) {
           return res.status(400).json({ message: "Invalid heard-about-us value" });
         }
         userUpdate.heardAboutUs = heardAboutUs;
       }
-
-      // Read the existing user FIRST so we can detect the null→now() transition
-      // on profileCompletedAt — that's the moment a trial signup finishes Step 2
-      // (the /welcome page) and earns their verification email. Subsequent
-      // PATCHes (phone edit, etc.) re-stamp the timestamp but must NOT re-send.
-      const existing = await authStorage.getUser(req.user.id);
-      if (!existing) {
-        return res.status(404).json({ message: "User not found" });
-      }
-      const isFirstCompletion = existing.profileCompletedAt == null;
 
       // Always stamp profileCompletedAt on a successful PATCH so the post-signup
       // /welcome gate releases. Idempotent — re-PATCHing later just refreshes it.
