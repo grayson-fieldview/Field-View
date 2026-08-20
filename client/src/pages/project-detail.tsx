@@ -2928,7 +2928,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
         projectMedia={projectMedia}
         isPending={generateAiReport.isPending}
         credits={aiCredits}
-        isCreditsLoading={areAiCreditsLoading || areAiCreditsFetching}
+        isCreditsLoading={areAiCreditsLoading}
         creditsUnavailable={areAiCreditsUnavailable && !areAiCreditsFetching}
         isOutOfCredits={isAiCreditExhausted || hasNoAiCredits}
         outOfCreditsResetAt={aiCreditResetAt ?? undefined}

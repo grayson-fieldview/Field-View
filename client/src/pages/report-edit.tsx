@@ -693,7 +693,7 @@ export default function ReportEditPage({ id }: { id: string }) {
         isPending={generateWithAi.isPending}
         showReplaceWarning
         credits={aiCredits}
-        isCreditsLoading={areAiCreditsLoading || areAiCreditsFetching}
+        isCreditsLoading={areAiCreditsLoading}
         creditsUnavailable={areAiCreditsUnavailable && !areAiCreditsFetching}
         isOutOfCredits={isAiCreditExhausted || hasNoAiCredits}
         outOfCreditsResetAt={aiCreditResetAt ?? undefined}

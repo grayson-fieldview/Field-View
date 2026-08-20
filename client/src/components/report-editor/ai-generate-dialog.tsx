@@ -100,7 +100,9 @@ export function AiGenerateDialog({
     setSelectedIds((prev) => (prev.size === ids.length ? new Set() : new Set(ids)));
   }
 
-  const creditsRemaining = (credits?.monthly_remaining ?? 0) + (credits?.purchased_remaining ?? 0);
+  const displayedMonthlyCredits = isOutOfCredits ? 0 : (credits?.monthly_remaining ?? 0);
+  const displayedPurchasedCredits = isOutOfCredits ? 0 : (credits?.purchased_remaining ?? 0);
+  const displayedCreditsRemaining = displayedMonthlyCredits + displayedPurchasedCredits;
   const resetAt = formatCreditReset(outOfCreditsResetAt ?? credits?.next_reset_at);
   const creditsBlockGeneration = isCreditsLoading || creditsUnavailable || isOutOfCredits;
 
@@ -148,17 +150,16 @@ export function AiGenerateDialog({
 
           {credits &&
             !isCreditsLoading &&
-            !creditsUnavailable &&
-            (!isOutOfCredits || creditsRemaining === 0) && (
+            !creditsUnavailable && (
             <div
               className="rounded-md border bg-muted/40 px-3 py-2 text-sm"
               data-testid="text-ai-credits-remaining"
             >
               <span className="font-medium">
-                {creditsRemaining} AI credit{creditsRemaining === 1 ? "" : "s"} remaining
+                {displayedCreditsRemaining} AI credit{displayedCreditsRemaining === 1 ? "" : "s"} remaining
               </span>
               <span className="text-muted-foreground">
-                {" "}({credits.monthly_remaining} monthly, {credits.purchased_remaining} purchased)
+                {" "}({displayedMonthlyCredits} monthly, {displayedPurchasedCredits} purchased)
               </span>
             </div>
           )}
