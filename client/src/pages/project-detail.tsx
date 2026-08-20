@@ -130,6 +130,15 @@ import {
 
 type ProjectFileWithUploader = ProjectFile & { uploadedByName: string | null };
 
+const PROJECT_STATUS_OPTIONS = [
+  { value: "active", label: "Active" },
+  { value: "completed", label: "Completed" },
+  { value: "on_hold", label: "On Hold" },
+  { value: "archived", label: "Archived" },
+] as const;
+
+type ProjectStatus = (typeof PROJECT_STATUS_OPTIONS)[number]["value"];
+
 function fileIconForMime(mimeType: string): typeof FileText {
   if (mimeType === "application/pdf") return FileText;
   if (
@@ -856,6 +865,25 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     },
   });
 
+  const updateProjectStatus = useMutation({
+    mutationFn: async (status: ProjectStatus) => {
+      const res = await apiRequest("PATCH", `/api/projects/${id}`, { status });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects"], exact: true });
+      toast({ title: "Project status updated" });
+    },
+    onError: (error: Error) => {
+      if (isUnauthorizedError(error)) {
+        toast({ title: "Unauthorized", variant: "destructive" });
+        return;
+      }
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
   const handleRenameSubmit = () => {
     const trimmed = renameValue.trim();
     if (!trimmed || trimmed === project?.name) {
@@ -1210,8 +1238,10 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     active: { label: "Active", className: "bg-[#267D32]/15 text-[#267D32] border-[#267D32]/30" },
     completed: { label: "Completed", className: "bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30" },
     on_hold: { label: "On Hold", className: "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30" },
+    archived: { label: "Archived", className: "bg-slate-500/15 text-slate-600 dark:text-slate-400 border-slate-500/30" },
   };
   const currentStatus = statusConfig[project.status] || statusConfig.active;
+  const canEditProjectStatus = user?.role === "admin" || user?.role === "manager";
 
   return (
     <div className="h-full flex flex-col">
@@ -1332,9 +1362,32 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                       <Pencil className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
                     </button>
                   )}
-                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border shrink-0 ${currentStatus.className}`} data-testid="badge-project-status">
-                    {currentStatus.label}
-                  </span>
+                  {canEditProjectStatus ? (
+                    <Select
+                      value={project.status}
+                      disabled={updateProjectStatus.isPending}
+                      onValueChange={(status) => updateProjectStatus.mutate(status as ProjectStatus)}
+                    >
+                      <SelectTrigger
+                        aria-label="Project status"
+                        className={`h-7 w-[120px] rounded-full px-2 text-[11px] font-semibold shrink-0 ${currentStatus.className}`}
+                        data-testid="select-project-status"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {PROJECT_STATUS_OPTIONS.map((status) => (
+                          <SelectItem key={status.value} value={status.value}>
+                            {status.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border shrink-0 ${currentStatus.className}`} data-testid="badge-project-status">
+                      {currentStatus.label}
+                    </span>
+                  )}
                 </div>
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
                   {isEditingAddress ? (

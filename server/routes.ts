@@ -715,6 +715,15 @@ export async function registerRoutes(
           return res.status(400).json({ message: "photoOverlayEnabled must be true, false, or null (inherit account setting)" });
         }
       }
+      if ("status" in req.body) {
+        if (!isManagerRole(req.user.role)) {
+          return res.status(403).json({ message: "Only admins and managers can change project status" });
+        }
+        const validStatuses = ["active", "completed", "on_hold", "archived"];
+        if (typeof req.body.status !== "string" || !validStatuses.includes(req.body.status)) {
+          return res.status(400).json({ message: "Status must be active, completed, on_hold, or archived" });
+        }
+      }
       const allowed = ["name", "description", "status", "address", "latitude", "longitude", "color", "coverPhotoId", "tags", "photoOverlayEnabled"];
       const filtered: Record<string, any> = {};
       for (const key of allowed) {

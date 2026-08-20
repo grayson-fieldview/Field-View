@@ -44,7 +44,7 @@ interface ProjectWithDetails extends Project {
   recentUsers: { firstName: string | null; lastName: string | null; profileImageUrl: string | null }[];
 }
 
-type FilterTab = "all" | "active" | "completed" | "archived";
+type FilterTab = "all" | "active" | "on_hold" | "completed" | "archived";
 
 export default function ProjectsPage() {
   const [search, setSearch] = useState("");
@@ -124,6 +124,7 @@ export default function ProjectsPage() {
   const tabs: { key: FilterTab; label: string }[] = [
     { key: "all", label: "All" },
     { key: "active", label: "Active" },
+    { key: "on_hold", label: "On Hold" },
     { key: "completed", label: "Completed" },
     { key: "archived", label: "Archived" },
   ];
