@@ -120,6 +120,13 @@ import { UploadPhotosDialog } from "@/components/upload-photos-dialog";
 import { UploadFilesDialog } from "@/components/upload-files-dialog";
 import { ProjectContactsSection } from "@/components/project-contacts";
 import { ProjectMessagesTab, useProjectUnreadCount } from "@/components/project-messages";
+import {
+  AI_CREDITS_QUERY_KEY,
+  formatCreditReset,
+  getInsufficientAiCreditsError,
+  useAiCredits,
+  type AiCredits,
+} from "@/hooks/use-ai-credits";
 
 type ProjectFileWithUploader = ProjectFile & { uploadedByName: string | null };
 
@@ -382,6 +389,29 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   const [generateChecklistDialogOpen, setGenerateChecklistDialogOpen] = useState(false);
   const [isCreateReportOpen, setIsCreateReportOpen] = useState(false);
   const [isAiGenerateOpen, setIsAiGenerateOpen] = useState(false);
+  const [isAiCreditExhausted, setIsAiCreditExhausted] = useState(false);
+  const [aiCreditResetAt, setAiCreditResetAt] = useState<string | null>(null);
+  const {
+    data: aiCredits,
+    isLoading: areAiCreditsLoading,
+    isError: areAiCreditsUnavailable,
+    isFetching: areAiCreditsFetching,
+    refetch: refetchAiCredits,
+  } = useAiCredits();
+
+  const reconcileAiCredits = (snapshot: AiCredits | undefined) => {
+    if (!snapshot) return;
+    const exhausted = snapshot.monthly_remaining + snapshot.purchased_remaining === 0;
+    setIsAiCreditExhausted(exhausted);
+    setAiCreditResetAt(exhausted ? snapshot.next_reset_at : null);
+  };
+
+  const refreshAiCredits = async () => {
+    const refreshed = await refetchAiCredits();
+    if (!refreshed.isSuccess) return undefined;
+    reconcileAiCredits(refreshed.data);
+    return refreshed.data;
+  };
   const [expandedChecklist, setExpandedChecklist] = useState<number | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -731,8 +761,11 @@ export default function ProjectDetailPage({ id }: { id: string }) {
     },
     onSuccess: (data) => {
       setIsAiGenerateOpen(false);
+      setIsAiCreditExhausted(false);
+      setAiCreditResetAt(null);
       queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
       queryClient.invalidateQueries({ queryKey: ["/api/reports"] });
+      queryClient.invalidateQueries({ queryKey: AI_CREDITS_QUERY_KEY });
       const excluded = data.excludedCount ?? 0;
       toast({
         title: "Report generated",
@@ -743,7 +776,27 @@ export default function ProjectDetailPage({ id }: { id: string }) {
       });
       navigate(`/reports/${data.reportId}/edit`);
     },
-    onError: (e: Error) => {
+    onError: async (e: Error) => {
+      const insufficientCredits = getInsufficientAiCreditsError(e);
+      if (insufficientCredits) {
+        setIsAiCreditExhausted(true);
+        setAiCreditResetAt(insufficientCredits.nextResetAt ?? null);
+        const refreshed = await refreshAiCredits();
+        const nextResetAt =
+          insufficientCredits.nextResetAt ??
+          refreshed?.next_reset_at ??
+          aiCredits?.next_reset_at;
+        setAiCreditResetAt(nextResetAt ?? null);
+        const resetAt = formatCreditReset(nextResetAt);
+        toast({
+          title: "You're out of AI credits",
+          description: resetAt
+            ? `Your monthly credits reset ${resetAt}.`
+            : "Retry the credit check to see your next reset time.",
+          variant: "destructive",
+        });
+        return;
+      }
       // apiRequest throws "429: {json}" style messages; surface the server's
       // message plainly (429 limit / 400 all-excluded) and stay put.
       const msg = e.message.replace(/^\d+:\s*/, "");
@@ -756,6 +809,13 @@ export default function ProjectDetailPage({ id }: { id: string }) {
       toast({ title: "Couldn't generate report", description: plain, variant: "destructive" });
     },
   });
+  const hasNoAiCredits =
+    aiCredits !== undefined &&
+    aiCredits.monthly_remaining + aiCredits.purchased_remaining === 0;
+
+  const handleAiGenerateOpenChange = (open: boolean) => {
+    setIsAiGenerateOpen(open);
+  };
 
   const deleteProject = useMutation({
     mutationFn: async () => {
@@ -2864,9 +2924,15 @@ export default function ProjectDetailPage({ id }: { id: string }) {
 
       <AiGenerateDialog
         open={isAiGenerateOpen}
-        onOpenChange={setIsAiGenerateOpen}
+        onOpenChange={handleAiGenerateOpenChange}
         projectMedia={projectMedia}
         isPending={generateAiReport.isPending}
+        credits={aiCredits}
+        isCreditsLoading={areAiCreditsLoading || areAiCreditsFetching}
+        creditsUnavailable={areAiCreditsUnavailable && !areAiCreditsFetching}
+        isOutOfCredits={isAiCreditExhausted || hasNoAiCredits}
+        outOfCreditsResetAt={aiCreditResetAt ?? undefined}
+        onRetryCredits={() => void refreshAiCredits()}
         onGenerate={(params) => generateAiReport.mutate(params)}
       />
 

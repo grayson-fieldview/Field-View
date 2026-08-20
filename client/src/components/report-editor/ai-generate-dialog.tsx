@@ -23,6 +23,7 @@ import {
 import { Loader2, Sparkles } from "lucide-react";
 import { VoiceNoteButton } from "./voice-note-button";
 import type { Media } from "@shared/schema";
+import { formatCreditReset, type AiCredits } from "@/hooks/use-ai-credits";
 
 export type AiReportType = "client_update" | "daily_log" | "progress_recap";
 
@@ -48,6 +49,12 @@ export function AiGenerateDialog({
   projectMedia,
   isPending,
   showReplaceWarning = false,
+  credits,
+  isCreditsLoading = false,
+  creditsUnavailable = false,
+  isOutOfCredits = false,
+  outOfCreditsResetAt,
+  onRetryCredits,
   onGenerate,
 }: {
   open: boolean;
@@ -55,6 +62,12 @@ export function AiGenerateDialog({
   projectMedia: Media[];
   isPending: boolean;
   showReplaceWarning?: boolean;
+  credits?: AiCredits;
+  isCreditsLoading?: boolean;
+  creditsUnavailable?: boolean;
+  isOutOfCredits?: boolean;
+  outOfCreditsResetAt?: string;
+  onRetryCredits?: () => void;
   onGenerate: (params: AiGenerateParams) => void;
 }) {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -87,6 +100,10 @@ export function AiGenerateDialog({
     setSelectedIds((prev) => (prev.size === ids.length ? new Set() : new Set(ids)));
   }
 
+  const creditsRemaining = (credits?.monthly_remaining ?? 0) + (credits?.purchased_remaining ?? 0);
+  const resetAt = formatCreditReset(outOfCreditsResetAt ?? credits?.next_reset_at);
+  const creditsBlockGeneration = isCreditsLoading || creditsUnavailable || isOutOfCredits;
+
   return (
     <Dialog
       open={open}
@@ -104,6 +121,63 @@ export function AiGenerateDialog({
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto -mx-6 px-6 space-y-4">
+          {isCreditsLoading && (
+            <div
+              className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground flex items-center gap-2"
+              data-testid="text-ai-credits-loading"
+            >
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading AI credits...
+            </div>
+          )}
+
+          {creditsUnavailable && (
+            <div
+              className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive flex items-center justify-between gap-3"
+              role="alert"
+              data-testid="text-ai-credits-unavailable"
+            >
+              <span>AI credits are temporarily unavailable.</span>
+              {onRetryCredits && (
+                <Button type="button" variant="outline" size="sm" onClick={onRetryCredits}>
+                  Retry
+                </Button>
+              )}
+            </div>
+          )}
+
+          {credits &&
+            !isCreditsLoading &&
+            !creditsUnavailable &&
+            (!isOutOfCredits || creditsRemaining === 0) && (
+            <div
+              className="rounded-md border bg-muted/40 px-3 py-2 text-sm"
+              data-testid="text-ai-credits-remaining"
+            >
+              <span className="font-medium">
+                {creditsRemaining} AI credit{creditsRemaining === 1 ? "" : "s"} remaining
+              </span>
+              <span className="text-muted-foreground">
+                {" "}({credits.monthly_remaining} monthly, {credits.purchased_remaining} purchased)
+              </span>
+            </div>
+          )}
+
+          {isOutOfCredits && (
+            <div
+              className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+              role="alert"
+              data-testid="text-ai-credits-exhausted"
+            >
+              <p className="font-medium">You&apos;re out of AI credits.</p>
+              <p className="mt-0.5">
+                {resetAt
+                  ? `Your monthly credits reset ${resetAt}.`
+                  : "Retry the credit check to see your next reset time."}
+              </p>
+            </div>
+          )}
+
           {showReplaceWarning && (
             <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive" data-testid="text-ai-replace-warning">
               Generating replaces ALL existing sections in this report. Your cover settings are kept, but the cover description is rewritten.
@@ -216,7 +290,13 @@ export function AiGenerateDialog({
                 reportType,
               })
             }
-            disabled={selectedIds.size === 0 || selectedIds.size > MAX_PHOTOS || isPending || voiceBusy}
+            disabled={
+              selectedIds.size === 0 ||
+              selectedIds.size > MAX_PHOTOS ||
+              isPending ||
+              voiceBusy ||
+              creditsBlockGeneration
+            }
             data-testid="button-confirm-ai"
           >
             {isPending ? (

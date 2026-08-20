@@ -41,6 +41,13 @@ import { DEFAULT_COVER, type CoverConfig, type Section } from "@/components/repo
 import ReportShareDialog from "@/components/report-share-dialog";
 import { AiGenerateDialog, type AiGenerateParams } from "@/components/report-editor/ai-generate-dialog";
 import { getReportBadge } from "@/lib/report-status";
+import {
+  AI_CREDITS_QUERY_KEY,
+  formatCreditReset,
+  getInsufficientAiCreditsError,
+  useAiCredits,
+  type AiCredits,
+} from "@/hooks/use-ai-credits";
 
 type Pane = { kind: "cover" } | { kind: "section"; id: number };
 
@@ -78,6 +85,32 @@ export default function ReportEditPage({ id }: { id: string }) {
 
   // AI generation dialog (shared component owns the selection/note state).
   const [isAiOpen, setIsAiOpen] = useState(false);
+  const [isAiCreditExhausted, setIsAiCreditExhausted] = useState(false);
+  const [aiCreditResetAt, setAiCreditResetAt] = useState<string | null>(null);
+  const {
+    data: aiCredits,
+    isLoading: areAiCreditsLoading,
+    isError: areAiCreditsUnavailable,
+    isFetching: areAiCreditsFetching,
+    refetch: refetchAiCredits,
+  } = useAiCredits();
+
+  const reconcileAiCredits = (snapshot: AiCredits | undefined) => {
+    if (!snapshot) return;
+    const exhausted = snapshot.monthly_remaining + snapshot.purchased_remaining === 0;
+    setIsAiCreditExhausted(exhausted);
+    setAiCreditResetAt(exhausted ? snapshot.next_reset_at : null);
+  };
+
+  const refreshAiCredits = async () => {
+    const refreshed = await refetchAiCredits();
+    if (!refreshed.isSuccess) return undefined;
+    reconcileAiCredits(refreshed.data);
+    return refreshed.data;
+  };
+  const hasNoAiCredits =
+    aiCredits !== undefined &&
+    aiCredits.monthly_remaining + aiCredits.purchased_remaining === 0;
 
   // Initialize draft from server payload exactly once per report id.
   useEffect(() => {
@@ -242,8 +275,11 @@ export default function ReportEditPage({ id }: { id: string }) {
       setIsDirty(false);
       queryClient.invalidateQueries({ queryKey: ["/api/reports", reportId] });
       queryClient.invalidateQueries({ queryKey: ["/api/reports"] });
+      queryClient.invalidateQueries({ queryKey: AI_CREDITS_QUERY_KEY });
       setPane({ kind: "cover" });
       setIsAiOpen(false);
+      setIsAiCreditExhausted(false);
+      setAiCreditResetAt(null);
       const excluded = data?.excludedCount ?? 0;
       toast({
         title: "Report generated",
@@ -253,7 +289,27 @@ export default function ReportEditPage({ id }: { id: string }) {
             : "Sections were created from your photos. Review and edit as needed.",
       });
     },
-    onError: (e: Error) => {
+    onError: async (e: Error) => {
+      const insufficientCredits = getInsufficientAiCreditsError(e);
+      if (insufficientCredits) {
+        setIsAiCreditExhausted(true);
+        setAiCreditResetAt(insufficientCredits.nextResetAt ?? null);
+        const refreshed = await refreshAiCredits();
+        const nextResetAt =
+          insufficientCredits.nextResetAt ??
+          refreshed?.next_reset_at ??
+          aiCredits?.next_reset_at;
+        setAiCreditResetAt(nextResetAt ?? null);
+        const resetAt = formatCreditReset(nextResetAt);
+        toast({
+          title: "You're out of AI credits",
+          description: resetAt
+            ? `Your monthly credits reset ${resetAt}.`
+            : "Retry the credit check to see your next reset time.",
+          variant: "destructive",
+        });
+        return;
+      }
       // apiRequest throws "429: {json}" style messages; surface the server's
       // limit message plainly on 429.
       const msg = e.message.replace(/^\d+:\s*/, "");
@@ -266,6 +322,10 @@ export default function ReportEditPage({ id }: { id: string }) {
       toast({ title: "Couldn't generate report", description: plain, variant: "destructive" });
     },
   });
+
+  const handleAiGenerateOpenChange = (open: boolean) => {
+    setIsAiOpen(open);
+  };
 
   const deleteReport = useMutation({
     mutationFn: async () => {
@@ -628,10 +688,16 @@ export default function ReportEditPage({ id }: { id: string }) {
       {/* AI generation dialog */}
       <AiGenerateDialog
         open={isAiOpen}
-        onOpenChange={setIsAiOpen}
+        onOpenChange={handleAiGenerateOpenChange}
         projectMedia={projectMedia}
         isPending={generateWithAi.isPending}
         showReplaceWarning
+        credits={aiCredits}
+        isCreditsLoading={areAiCreditsLoading || areAiCreditsFetching}
+        creditsUnavailable={areAiCreditsUnavailable && !areAiCreditsFetching}
+        isOutOfCredits={isAiCreditExhausted || hasNoAiCredits}
+        outOfCreditsResetAt={aiCreditResetAt ?? undefined}
+        onRetryCredits={() => void refreshAiCredits()}
         onGenerate={(params) => generateWithAi.mutate(params)}
       />
 

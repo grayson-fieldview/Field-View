@@ -3617,6 +3617,7 @@ export async function registerRoutes(
         return res.status(402).json({
           code: INSUFFICIENT_AI_CREDITS_CODE,
           message: "Insufficient AI credits",
+          next_reset_at: creditResult.snapshot.nextResetAt,
         });
       }
       const creditReservation = creditResult.reservation;
@@ -3874,6 +3875,7 @@ export async function registerRoutes(
         return res.status(402).json({
           code: INSUFFICIENT_AI_CREDITS_CODE,
           message: "Insufficient AI credits",
+          next_reset_at: creditResult.snapshot.nextResetAt,
         });
       }
 
@@ -3969,6 +3971,7 @@ export async function registerRoutes(
         return res.status(402).json({
           code: INSUFFICIENT_AI_CREDITS_CODE,
           message: "Insufficient AI credits",
+          next_reset_at: creditResult.snapshot.nextResetAt,
         });
       }
       const creditReservation = creditResult.reservation;
