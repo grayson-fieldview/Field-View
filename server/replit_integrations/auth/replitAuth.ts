@@ -630,6 +630,7 @@ export async function serializeUserForAuthResponse(user: User, req: any) {
   const { password: _pw, ...safeUser } = user as any;
   const safeUserWithBilling = await overlayAccountBillingOnUser(safeUser, req);
   let isOwner = false;
+  let needsCompanyName = false;
   let accountFirstMobileUploadAt: Date | null = null;
   let accountCreatedAt: Date | null = null;
   let accountPaywallSkippedAt: Date | null = null;
@@ -643,6 +644,7 @@ export async function serializeUserForAuthResponse(user: User, req: any) {
     const [account] = await db
       .select({
         ownerId: accounts.ownerId,
+        name: accounts.name,
         firstMobileUploadAt: accounts.firstMobileUploadAt,
         createdAt: accounts.createdAt,
         paywallSkippedAt: accounts.paywallSkippedAt,
@@ -655,6 +657,7 @@ export async function serializeUserForAuthResponse(user: User, req: any) {
       .where(eq(accounts.id, user.accountId))
       .limit(1);
     isOwner = !!account && account.ownerId === user.id;
+    needsCompanyName = isOwner && !account?.name?.trim();
     accountFirstMobileUploadAt = account?.firstMobileUploadAt ?? null;
     accountCreatedAt = account?.createdAt ?? null;
     accountPaywallSkippedAt = account?.paywallSkippedAt ?? null;
@@ -663,7 +666,7 @@ export async function serializeUserForAuthResponse(user: User, req: any) {
       (hasUsableSubscription(account) || account.billingProvider === "apple");
   }
   return sanitizeUserForViewer(
-    { ...safeUserWithBilling, isOwner, accountFirstMobileUploadAt, accountCreatedAt, accountPaywallSkippedAt, accountHasPaymentOnFile },
+    { ...safeUserWithBilling, isOwner, needsCompanyName, accountFirstMobileUploadAt, accountCreatedAt, accountPaywallSkippedAt, accountHasPaymentOnFile },
     user,
   );
 }
@@ -1288,13 +1291,12 @@ export async function setupAuth(app: Express) {
             console.error("[register] session save failed:", saveErr);
             return res.status(500).json({ message: "Registration succeeded but session save failed. Please sign in." });
           }
-          const { password: _pw, ...safeUser } = user as any;
-          const safeUserWithBilling = await overlayAccountBillingOnUser(safeUser, req);
+          const responseUser = await serializeUserForAuthResponse(user, req);
           // Meta dedup pairing: tell the client whether the server-side CAPI
           // Lead actually fired (self-serve, non-comp), so the browser pixel
           // fires ONLY when it has a server twin with the same event_id.
           return res.status(201).json(
-            metaLeadFired ? { ...safeUserWithBilling, metaLeadFired: true } : safeUserWithBilling,
+            metaLeadFired ? { ...responseUser, metaLeadFired: true } : responseUser,
           );
         });
       });

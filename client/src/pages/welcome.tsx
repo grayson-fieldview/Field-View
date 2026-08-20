@@ -45,6 +45,7 @@ export default function WelcomePage() {
   // admins complete their own profile without being asked to reconfigure the
   // account they joined.
   const isAccountOwner = (user as any)?.isOwner === true;
+  const needsCompanyName = (user as any)?.needsCompanyName === true;
 
   const [firstName, setFirstName] = useState((user as any)?.firstName ?? "");
   const [lastName, setLastName] = useState((user as any)?.lastName ?? "");
@@ -73,8 +74,10 @@ export default function WelcomePage() {
         metaEventId: metaEventIdRef.current,
       };
       body.jobRole = jobRole;
-      if (isAccountOwner) {
+      if (needsCompanyName) {
         body.companyName = companyName.trim();
+      }
+      if (isAccountOwner) {
         body.industry = industry;
         body.companySize = companySize;
         body.heardAboutUs = heardAboutUs;
@@ -142,7 +145,10 @@ export default function WelcomePage() {
       toast({ title: "Profile required", description: "Please enter your phone number and select your role.", variant: "destructive" });
       return;
     }
-    if (isAccountOwner && (!companyName.trim() || !industry || !companySize || !heardAboutUs)) {
+    if (
+      isAccountOwner &&
+      ((needsCompanyName && !companyName.trim()) || !industry || !companySize || !heardAboutUs)
+    ) {
       toast({ title: "Account details required", description: "Please complete all company details.", variant: "destructive" });
       return;
     }
@@ -296,18 +302,20 @@ export default function WelcomePage() {
 
               {isAccountOwner && (
                 <>
-                  <div className="space-y-2">
-                    <Label htmlFor="companyName">Company name</Label>
-                    <Input
-                      id="companyName"
-                      placeholder="Acme Construction LLC"
-                      value={companyName}
-                      onChange={(e) => setCompanyName(e.target.value)}
-                      required
-                      className={FIELD_CLASS}
-                      data-testid="input-company-name"
-                    />
-                  </div>
+                  {needsCompanyName && (
+                    <div className="space-y-2">
+                      <Label htmlFor="companyName">Company name</Label>
+                      <Input
+                        id="companyName"
+                        placeholder="Acme Construction LLC"
+                        value={companyName}
+                        onChange={(e) => setCompanyName(e.target.value)}
+                        required
+                        className={FIELD_CLASS}
+                        data-testid="input-company-name"
+                      />
+                    </div>
+                  )}
 
                   <div className="space-y-2">
                     <Label htmlFor="industry">Industry</Label>

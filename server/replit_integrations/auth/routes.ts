@@ -48,12 +48,13 @@ export function registerAuthRoutes(app: Express): void {
       // admin. This keeps invited admins from changing the company they joined.
       const [account] = existing.accountId
         ? await db
-          .select({ ownerId: accounts.ownerId })
+          .select({ ownerId: accounts.ownerId, name: accounts.name })
           .from(accounts)
           .where(eq(accounts.id, existing.accountId))
           .limit(1)
         : [];
       const isAccountOwner = account?.ownerId === existing.id;
+      const needsCompanyName = isAccountOwner && !account?.name?.trim();
 
       if (isFirstCompletion) {
         if (typeof firstName !== "string" || !firstName.trim()) {
@@ -72,7 +73,7 @@ export function registerAuthRoutes(app: Express): void {
           return res.status(400).json({ message: "SMS consent is required" });
         }
         if (isAccountOwner) {
-          if (typeof companyName !== "string" || !companyName.trim()) {
+          if (needsCompanyName && (typeof companyName !== "string" || !companyName.trim())) {
             return res.status(400).json({ message: "Company name is required" });
           }
           if (typeof industry !== "string" || !industry) {
@@ -145,7 +146,7 @@ export function registerAuthRoutes(app: Express): void {
       // including invited admins, cannot alter the account through a profile
       // PATCH and their values are ignored.
       const accountUpdate: Record<string, any> = {};
-      if (isAccountOwner && companyName !== undefined && companyName !== null && companyName !== "") {
+      if (needsCompanyName && companyName !== undefined && companyName !== null && companyName !== "") {
         if (typeof companyName !== "string" || !companyName.trim()) {
           return res.status(400).json({ message: "Company name must be a non-empty string" });
         }
