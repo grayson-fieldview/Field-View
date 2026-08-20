@@ -66,7 +66,7 @@ export async function addAiCredits(): Promise<void> {
     console.log("[add_ai_credits] 2/8 BACKFILL accounts.credits_anchor_at ...");
     await tx.execute(sql`
       UPDATE accounts
-      SET credits_anchor_at = COALESCE(created_at, now())
+      SET credits_anchor_at = COALESCE(created_at AT TIME ZONE 'UTC', now())
       WHERE credits_anchor_at IS NULL
     `);
 
