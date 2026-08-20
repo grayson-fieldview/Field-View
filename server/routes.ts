@@ -20,7 +20,7 @@ import { resolvePhotoOverlay } from "@shared/photoOverlay";
 import { computeSeatUsage } from "./lib/seats";
 import { resolvePhotoTimeZone, formatPhotoTimestamp } from "./lib/photoTime";
 import { db } from "./db";
-import { eq, sql, and, or, inArray, count, isNull, desc } from "drizzle-orm";
+import { eq, sql, and, or, inArray, notInArray, count, isNull, desc } from "drizzle-orm";
 import { sanitizeUserForViewer, sanitizeTimeEntryForViewer, isManagerRole } from "./lib/userVisibility";
 import { z } from "zod";
 import { getPresignedUrl, isS3Url, extractS3KeyFromUrl, getPresignedPutUrl, getPresignedGetUrl, deleteFromS3, getObjectStream, getObjectSize, getS3Url, inlineContentDisposition } from "./s3";
@@ -1067,12 +1067,16 @@ export async function registerRoutes(
       // committed. This is deliberately outside the write path: concurrent
       // uploads may both emit, and PostHog dedupes them by the stable UUID.
       const firstPhotoCheck = db
-        .select({ value: count() })
+        .select({ id: media.id })
         .from(media)
         .innerJoin(projects, eq(media.projectId, projects.id))
-        .where(eq(projects.accountId, project.accountId!))
+        .where(and(
+          eq(projects.accountId, project.accountId!),
+          notInArray(media.id, created.map((row) => row.id)),
+        ))
+        .limit(1)
         .then(([row]) => {
-          if (Number(row?.value ?? 0) === created.length) {
+          if (!row) {
             capturePostHogEvent({
               event: "first_photo_uploaded",
               userId: req.user.id,
