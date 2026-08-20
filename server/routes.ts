@@ -1023,28 +1023,9 @@ export async function registerRoutes(
         };
       });
 
-      // Single bulk insert wrapped in a transaction that also acquires an
-      // advisory lock so only one concurrent request can be "first" for this
-      // account — no schema changes needed. The lock is released automatically
-      // when the transaction commits.
-      const { created, isFirstMedia } = await db.transaction(async (tx) => {
-        const accountId: string = project.accountId!;
-        // Serialise concurrent first-media checks for this account.
-        const lockKey = `first-media:${accountId}`;
-        await tx.execute(
-          sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`,
-        );
-        // Check whether this account already has any media (via projects join).
-        const [existingRow] = await tx
-          .select({ id: media.id })
-          .from(media)
-          .innerJoin(projects, eq(media.projectId, projects.id))
-          .where(eq(projects.accountId, accountId))
-          .limit(1);
-        const isFirst = !existingRow;
-        const rows = await tx.insert(media).values(mediaRows).returning();
-        return { created: rows, isFirstMedia: isFirst };
-      });
+      // Single bulk insert (one round-trip) instead of N individual inserts,
+      // so a 100-file batch doesn't open N connections against the RDS pool.
+      const created = await storage.createMediaBatch(mediaRows);
 
       // Thumbnail renditions — DEFERRED, never in the request path. A batch
       // can be 40 photos and HEICs take ~1–2s each to decode; registration
@@ -1082,20 +1063,36 @@ export async function registerRoutes(
         }
       } catch {}
 
-      // PostHog: first_photo_uploaded — only for the account's very first
-      // media batch. Concurrency-safe: the advisory lock above ensures exactly
-      // one transaction observes isFirstMedia=true.
-      if (isFirstMedia) {
-        capturePostHogEvent({
-          event: "first_photo_uploaded",
-          userId: req.user.id,
-          accountId: req.user.accountId,
-          properties: {
-            project_id: projectId,
-            batch_size: created.length,
-          },
-          dedupeKey: `first_photo_uploaded:${project.accountId}`,
+      // PostHog: approximate first-photo detection after the bulk insert has
+      // committed. This is deliberately outside the write path: concurrent
+      // uploads may both emit, and PostHog dedupes them by the stable UUID.
+      const firstPhotoCheck = db
+        .select({ value: count() })
+        .from(media)
+        .innerJoin(projects, eq(media.projectId, projects.id))
+        .where(eq(projects.accountId, project.accountId!))
+        .then(([row]) => {
+          if (Number(row?.value ?? 0) === created.length) {
+            capturePostHogEvent({
+              event: "first_photo_uploaded",
+              userId: req.user.id,
+              accountId: req.user.accountId,
+              properties: {
+                project_id: projectId,
+                batch_size: created.length,
+              },
+              dedupeKey: `first_photo_uploaded:${project.accountId}`,
+            });
+          }
+        })
+        .catch((error) => {
+          console.error("[posthog] first-photo check failed (non-fatal):", error);
         });
+      try {
+        waitUntil(firstPhotoCheck);
+      } catch {
+        // Local development has no Vercel request context; the settled promise
+        // remains in flight and cannot affect the upload response.
       }
 
       res.status(201).json(await presignMediaUrls(created));
