@@ -38,6 +38,7 @@ import {
 } from "./appleIapVerify";
 import { writeAccountBillingById } from "./stripeWebhook";
 import { hasUsableSubscription } from "./billing";
+import { capturePostHogEvent } from "./posthog";
 
 // ---------------------------------------------------------------------------
 // productId -> seat count. THE single lookup: fieldview.seats.3 .. .10 → 3..10.
@@ -55,6 +56,32 @@ function trunc(id: unknown): string {
 }
 
 const LOG = "[apple-iap]";
+
+// ---------------------------------------------------------------------------
+// PostHog billing capture — synchronous, non-fatal. Called immediately (no
+// void) so the SDK's waitUntil-backed flush registers before the serverless
+// handler returns. userId is the account owner (account.ownerId); callers skip
+// the call when it is null. Never throws.
+// ---------------------------------------------------------------------------
+function captureAppleBillingPostHogEvent(opts: {
+  event: "trial_ended" | "subscribed";
+  userId: string;
+  accountId: string;
+  dedupeKey: string;
+  properties?: Record<string, unknown>;
+}): void {
+  try {
+    capturePostHogEvent({
+      event: opts.event,
+      userId: opts.userId,
+      accountId: opts.accountId,
+      properties: opts.properties,
+      dedupeKey: opts.dedupeKey,
+    });
+  } catch (err: any) {
+    console.error(`${LOG} [posthog] ${opts.event} capture failed (non-fatal):`, err?.message || err);
+  }
+}
 
 export interface AppleNotificationResult {
   status: number;
@@ -78,6 +105,9 @@ export interface AppleResolvedAccount {
   id: string;
   billingProvider: string | null;
   subscriptionLapsedAt: Date | null;
+  // Account owner userId — used as the PostHog capture identity (skip capture
+  // if null). Carried on the resolved account so no extra lookup is needed.
+  ownerId: string | null;
 }
 
 export type AppleAccountResolution =
@@ -106,6 +136,7 @@ export async function resolveAppleAccountByTransaction(opts: {
       id: accounts.id,
       billingProvider: accounts.billingProvider,
       subscriptionLapsedAt: accounts.subscriptionLapsedAt,
+      ownerId: accounts.ownerId,
     })
     .from(accounts)
     .where(eq(accounts.appleOriginalTransactionId, originalTransactionId))
@@ -134,6 +165,7 @@ export async function resolveAppleAccountByTransaction(opts: {
       stripeCustomerId: accounts.stripeCustomerId,
       stripeSubscriptionId: accounts.stripeSubscriptionId,
       subscriptionStatus: accounts.subscriptionStatus,
+      ownerId: accounts.ownerId,
     })
     .from(accounts)
     .where(eq(accounts.id, claimAccountId))
@@ -179,6 +211,7 @@ export async function resolveAppleAccountByTransaction(opts: {
       id: candidate.id,
       billingProvider: "apple",
       subscriptionLapsedAt: candidate.subscriptionLapsedAt,
+      ownerId: candidate.ownerId,
     },
   };
 }
@@ -362,6 +395,18 @@ export async function processAppleNotification(signedPayload: string): Promise<A
     fields.subscriptionStatus = "canceled";
   }
 
+  // Read prior subscriptionStatus BEFORE the billing write so PostHog can
+  // detect genuine state transitions (trialing→non-trialing, inactive→active).
+  let priorAccountStatus: string | null = null;
+  try {
+    const [priorAcct] = await db
+      .select({ subscriptionStatus: accounts.subscriptionStatus })
+      .from(accounts)
+      .where(eq(accounts.id, account.id))
+      .limit(1);
+    priorAccountStatus = priorAcct?.subscriptionStatus ?? null;
+  } catch {}
+
   const written = await writeAccountBillingById(eventLabel, account.id, "apple", fields);
   if (!written) {
     // Provider gate rejected (e.g. account still 'stripe' on a non-initial
@@ -371,9 +416,46 @@ export async function processAppleNotification(signedPayload: string): Promise<A
     return ok("provider-gate-skip");
   }
 
-  // <-- Side-effect hook point (later pass): GHL billing_event, Slack, Meta
-  // CAPI (eventId from notificationUUID) would fire here, after the billing
-  // write, mirroring the Stripe handlers' sendGhlBillingEvent placement.
+  // PostHog billing events — after successful billing write. Owner identity
+  // (account.ownerId) is required; skip capture entirely when it is null.
+  // trial_ended: prior status was trialing, new status is not trialing.
+  //   Dedupe on originalTransactionId (stable per-subscription) so concurrent /
+  //   out-of-order duplicate transition observations collapse.
+  // subscribed: SUBSCRIBED or DID_RENEW writing active, prior status was not
+  //   active. Dedupe on originalTransactionId — covers overlapping ASSN +
+  //   mobile purchase paths for the same subscription.
+  const newStatus = fields.subscriptionStatus;
+  if (account.ownerId) {
+    if (priorAccountStatus === "trialing" && newStatus !== "trialing") {
+      captureAppleBillingPostHogEvent({
+        event: "trial_ended",
+        userId: account.ownerId,
+        accountId: account.id,
+        dedupeKey: `trial_ended:apple:${originalTransactionId}`,
+        properties: {
+          provider: "apple",
+          apple_original_transaction_id: originalTransactionId,
+          notification_uuid: notificationUUID,
+          notification_type: notificationType,
+          new_status: newStatus,
+        },
+      });
+    }
+    if (newStatus === "active" && priorAccountStatus !== "active") {
+      captureAppleBillingPostHogEvent({
+        event: "subscribed",
+        userId: account.ownerId,
+        accountId: account.id,
+        dedupeKey: `subscribed:apple:${originalTransactionId}`,
+        properties: {
+          provider: "apple",
+          apple_original_transaction_id: originalTransactionId,
+          notification_uuid: notificationUUID,
+          notification_type: notificationType,
+        },
+      });
+    }
+  }
 
   console.log(
     `${LOG} ${eventLabel} (${environment}) account ${account.id}: wrote ${Object.keys(fields).join(",")}`,
@@ -508,6 +590,17 @@ export async function processApplePurchase(
     };
   }
 
+  // Read prior subscriptionStatus BEFORE the billing write.
+  let priorAccountStatus: string | null = null;
+  try {
+    const [priorAcct] = await db
+      .select({ subscriptionStatus: accounts.subscriptionStatus })
+      .from(accounts)
+      .where(eq(accounts.id, account.id))
+      .limit(1);
+    priorAccountStatus = priorAcct?.subscriptionStatus ?? null;
+  } catch {}
+
   // Same field mapping as a SUBSCRIBED/DID_RENEW notification.
   const fields: { subscriptionStatus: string; seatCount: number; subscriptionLapsedAt?: Date | null } = {
     subscriptionStatus: "active",
@@ -519,6 +612,43 @@ export async function processApplePurchase(
   if (!written) {
     // Provider gate rejected — logged inside writeAccountBillingById.
     return { status: 409, body: { error: "provider_conflict", message: "Account billing is owned by another provider." } };
+  }
+
+  // PostHog billing events — after successful billing write. Owner identity
+  // (account.ownerId) is required; skip capture entirely when it is null.
+  // trial_ended: prior status trialing → new status (always "active" on this
+  //   path) not trialing. Dedupe on originalTransactionId covers overlapping
+  //   ASSN + purchase paths.
+  // subscribed: inactive/non-active → active initial subscription.
+  const newStatus = fields.subscriptionStatus;
+  if (account.ownerId) {
+    if (priorAccountStatus === "trialing" && newStatus !== "trialing") {
+      captureAppleBillingPostHogEvent({
+        event: "trial_ended",
+        userId: account.ownerId,
+        accountId: account.id,
+        dedupeKey: `trial_ended:apple:${originalTransactionId}`,
+        properties: {
+          provider: "apple",
+          apple_original_transaction_id: originalTransactionId,
+          product_id: productId,
+          new_status: newStatus,
+        },
+      });
+    }
+    if (priorAccountStatus !== "active") {
+      captureAppleBillingPostHogEvent({
+        event: "subscribed",
+        userId: account.ownerId,
+        accountId: account.id,
+        dedupeKey: `subscribed:apple:${originalTransactionId}`,
+        properties: {
+          provider: "apple",
+          apple_original_transaction_id: originalTransactionId,
+          product_id: productId,
+        },
+      });
+    }
   }
 
   console.log(`${LOG} ${eventLabel} account ${account.id}: wrote ${Object.keys(fields).join(",")}`);

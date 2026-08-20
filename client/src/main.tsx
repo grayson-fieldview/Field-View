@@ -4,6 +4,7 @@ import "./index.css";
 import { initSentry, Sentry } from "./lib/sentry";
 import { initMetaPixel } from "./lib/meta-pixel";
 import { initGoogleAnalytics } from "./lib/google-analytics";
+import { initPostHog } from "./lib/posthog";
 import { captureAttribution } from "./lib/attribution";
 
 // Non-essential third-party init must NEVER prevent the app (especially the
@@ -23,6 +24,11 @@ try {
   initGoogleAnalytics();
 } catch (e) {
   console.warn("[boot] GA init failed (non-fatal)", e);
+}
+try {
+  initPostHog();
+} catch (e) {
+  console.warn("[boot] PostHog init failed (non-fatal)", e);
 }
 try {
   captureAttribution();

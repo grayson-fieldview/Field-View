@@ -48,6 +48,7 @@ import {
 } from "../../lib/apple-auth";
 import { touchLastActive } from "../../middleware/touch-last-active";
 import { attributionCapture } from "../../middleware/attribution";
+import { capturePostHogEvent } from "../../lib/posthog";
 
 // Slack "team member joined" alert for invite acceptances. Fully
 // fire-and-forget: the account-name lookup and the Slack post both run
@@ -386,6 +387,29 @@ async function findOrCreateOAuthUser(opts: {
   // (invitation stays pending — admin can cancel/resend or re-invite).
   if (invitationForAssignment) {
     await applyInvitationAcceptance(invitationForAssignment, created.id);
+  }
+
+  // PostHog signup_completed — single choke point for ALL shared OAuth
+  // creation paths (web Google/Microsoft/Apple + mobile Google/Apple). This
+  // block is reached ONLY when a brand-new user+account row was just
+  // committed above (returning users and email-link sign-ins returned
+  // earlier with isNewSignup=false), so it fires exactly once per real
+  // signup and never for logins. Capturing here — instead of at each of the
+  // four call sites — is what prevents duplicate captures without leaning on
+  // PostHog's uuid dedupe. Fire-and-forget: capturePostHogEvent swallows all
+  // errors and returns void, so it can never affect auth/session behavior.
+  // Skip safely if accountId is somehow empty (never pass account_id:"").
+  if (created.accountId) {
+    capturePostHogEvent({
+      event: "signup_completed",
+      userId: created.id,
+      accountId: created.accountId,
+      properties: {
+        signup_method: opts.provider,
+        invited: !isNewAccount,
+      },
+      dedupeKey: `signup_completed:${created.id}`,
+    });
   }
 
   return { user: created, isNewSignup: true, isNewAccount, newAccountName };
@@ -802,6 +826,8 @@ export async function setupAuth(app: Express) {
             if (isNewSignup) {
               await persistSignupAttribution(req, user.id);
             }
+            // PostHog signup_completed fires inside findOrCreateOAuthUser (the
+            // single choke point for all OAuth creation paths), not here.
             // S46 GHL partial_signup — only on first-time ACCOUNT creation
             // (isNewAccount), never on sign-ins or OAuth invite acceptances.
             if (isNewAccount && !isCompAccount(user.email)) {
@@ -886,6 +912,8 @@ export async function setupAuth(app: Express) {
             if (isNewSignup) {
               await persistSignupAttribution(req, user.id);
             }
+            // PostHog signup_completed fires inside findOrCreateOAuthUser (the
+            // single choke point for all OAuth creation paths), not here.
             // S46 GHL partial_signup — only on first-time ACCOUNT creation
             // (isNewAccount), never on sign-ins or OAuth invite acceptances.
             if (isNewAccount && !isCompAccount(user.email)) {
@@ -1151,6 +1179,22 @@ export async function setupAuth(app: Express) {
       // S41: invite acceptance writer — atomic invitation status flip + project_assignments seed.
       if (invitationForAssignment) {
         await applyInvitationAcceptance(invitationForAssignment, user.id);
+      }
+
+      // PostHog signup_completed — fire-and-forget, never affects response.
+      // Single capture on this path: user.id and accountId are committed
+      // above. Guarded on a non-empty accountId so account_id is never "".
+      if (user.accountId) {
+        capturePostHogEvent({
+          event: "signup_completed",
+          userId: user.id,
+          accountId: user.accountId,
+          properties: {
+            signup_method: "email",
+            invited: !!inviteToken,
+          },
+          dedupeKey: `signup_completed:${user.id}`,
+        });
       }
 
       // Mirrors the GHL partial_signup gate below: "New signup" only for
@@ -1501,6 +1545,8 @@ export async function setupAuth(app: Express) {
       if (isNewSignup) {
         await persistSignupAttribution(req, user.id);
       }
+      // PostHog signup_completed fires inside findOrCreateOAuthUser (the
+      // single choke point for all OAuth creation paths), not here.
       if (isNewAccount && !isCompAccount(user.email)) {
         const ghlAttr = resolveSignupAttribution(req);
         sendGhlEvent("partial_signup", {
@@ -1649,6 +1695,8 @@ export async function setupAuth(app: Express) {
     if (isNewSignup) {
       await persistSignupAttribution(req, user.id);
     }
+    // PostHog signup_completed fires inside findOrCreateOAuthUser (the single
+    // choke point for all OAuth creation paths, web + mobile), not here.
     if (isNewAccount && !isCompAccount(user.email)) {
       const ghlAttr = resolveSignupAttribution(req);
       sendGhlEvent("partial_signup", {
@@ -2014,6 +2062,22 @@ export async function setupAuth(app: Express) {
 
       if (invitationForAssignment) {
         await applyInvitationAcceptance(invitationForAssignment, user.id);
+      }
+
+      // PostHog signup_completed — fire-and-forget, never affects response.
+      // Single capture on this path; guarded on a non-empty accountId so
+      // account_id is never "".
+      if (user.accountId) {
+        capturePostHogEvent({
+          event: "signup_completed",
+          userId: user.id,
+          accountId: user.accountId,
+          properties: {
+            signup_method: "email_mobile",
+            invited: !!inviteToken,
+          },
+          dedupeKey: `signup_completed:${user.id}`,
+        });
       }
 
       // Side effects — identical gating to /api/register's branches.

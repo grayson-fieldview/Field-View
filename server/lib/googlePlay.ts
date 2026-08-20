@@ -29,6 +29,7 @@ import { seatCountFromProductId } from "./appleIap";
 import { hasUsableSubscription } from "./billing";
 import { writeAccountBillingById } from "./stripeWebhook";
 import { Sentry } from "./sentry";
+import { capturePostHogEvent } from "./posthog";
 
 // Re-export so future Google-path callers import the single parser from
 // here without a second appleIap dependency (do NOT duplicate the parser).
@@ -36,6 +37,32 @@ export { seatCountFromProductId };
 
 const LOG = "[google-play]";
 const API_BASE = "https://androidpublisher.googleapis.com/androidpublisher/v3";
+
+// ---------------------------------------------------------------------------
+// PostHog billing capture — synchronous, non-fatal. Called immediately (no
+// void) so the SDK's waitUntil-backed flush registers before the serverless
+// handler returns. userId is the account owner (account.ownerId); callers skip
+// the call when it is null. Never throws.
+// ---------------------------------------------------------------------------
+function captureGoogleBillingPostHogEvent(opts: {
+  event: "trial_ended" | "subscribed";
+  userId: string;
+  accountId: string;
+  dedupeKey: string;
+  properties?: Record<string, unknown>;
+}): void {
+  try {
+    capturePostHogEvent({
+      event: opts.event,
+      userId: opts.userId,
+      accountId: opts.accountId,
+      properties: opts.properties,
+      dedupeKey: opts.dedupeKey,
+    });
+  } catch (err: any) {
+    console.error(`${LOG} [posthog] ${opts.event} capture failed (non-fatal):`, err?.message || err);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Module-scope cached JWT client.
@@ -305,6 +332,9 @@ export interface GooglePlayResolvedAccount {
   id: string;
   billingProvider: string | null;
   subscriptionLapsedAt: Date | null;
+  // Account owner userId — used as the PostHog capture identity (skip capture
+  // if null). Carried on the resolved account so no extra lookup is needed.
+  ownerId: string | null;
 }
 
 export type GooglePlayAccountResolution =
@@ -343,6 +373,7 @@ export async function resolveGooglePlayAccountByToken(
       id: accounts.id,
       billingProvider: accounts.billingProvider,
       subscriptionLapsedAt: accounts.subscriptionLapsedAt,
+      ownerId: accounts.ownerId,
     })
     .from(accounts)
     .where(eq(accounts.googlePlayPurchaseToken, purchaseToken))
@@ -365,6 +396,7 @@ export async function resolveGooglePlayAccountByToken(
         id: accounts.id,
         billingProvider: accounts.billingProvider,
         subscriptionLapsedAt: accounts.subscriptionLapsedAt,
+        ownerId: accounts.ownerId,
       })
       .from(accounts)
       .where(eq(accounts.googlePlayPurchaseToken, linkedPurchaseToken))
@@ -399,6 +431,7 @@ export async function resolveGooglePlayAccountByToken(
       stripeCustomerId: accounts.stripeCustomerId,
       stripeSubscriptionId: accounts.stripeSubscriptionId,
       subscriptionStatus: accounts.subscriptionStatus,
+      ownerId: accounts.ownerId,
     })
     .from(accounts)
     .where(eq(accounts.id, claimAccountId))
@@ -440,6 +473,7 @@ export async function resolveGooglePlayAccountByToken(
       id: candidate.id,
       billingProvider: "google",
       subscriptionLapsedAt: candidate.subscriptionLapsedAt,
+      ownerId: candidate.ownerId,
     },
   };
 }
@@ -578,6 +612,17 @@ export async function processGooglePlayPurchase(
     await applyGooglePlayTokenMigration(account.id, resolution.pendingMigration);
   }
 
+  // Read prior subscriptionStatus BEFORE the billing write.
+  let priorAccountStatus: string | null = null;
+  try {
+    const [priorAcct] = await db
+      .select({ subscriptionStatus: accounts.subscriptionStatus })
+      .from(accounts)
+      .where(eq(accounts.id, account.id))
+      .limit(1);
+    priorAccountStatus = priorAcct?.subscriptionStatus ?? null;
+  } catch {}
+
   // Same field mapping as the Apple purchase path.
   const fields: { subscriptionStatus: string; seatCount: number; subscriptionLapsedAt?: Date | null } = {
     subscriptionStatus: "active",
@@ -589,6 +634,46 @@ export async function processGooglePlayPurchase(
   if (!written) {
     // Provider gate rejected — logged inside writeAccountBillingById.
     return { status: 409, body: { error: "provider_conflict", message: "Account billing is owned by another provider." } };
+  }
+
+  // PostHog billing events — after successful billing write. Owner identity
+  // (account.ownerId) is required; skip capture entirely when it is null.
+  // trial_ended: prior status trialing → new status (always "active" on this
+  //   path) not trialing. Dedupe on purchaseToken covers overlapping RTDN +
+  //   purchase paths. Raw token NEVER placed in properties (SHA-256-derived to
+  //   a UUID by the shared helper's dedupeKey only).
+  // subscribed: inactive/non-active → active initial subscription.
+  const newPurchaseStatus = fields.subscriptionStatus;
+  if (account.ownerId) {
+    if (priorAccountStatus === "trialing" && newPurchaseStatus !== "trialing") {
+      captureGoogleBillingPostHogEvent({
+        event: "trial_ended",
+        userId: account.ownerId,
+        accountId: account.id,
+        dedupeKey: `trial_ended:google:${purchaseToken}`,
+        properties: {
+          provider: "google",
+          product_id: productId,
+          subscription_state: verified.subscriptionState,
+          latest_order_id: verified.latestOrderId,
+          new_status: newPurchaseStatus,
+        },
+      });
+    }
+    if (priorAccountStatus !== "active") {
+      captureGoogleBillingPostHogEvent({
+        event: "subscribed",
+        userId: account.ownerId,
+        accountId: account.id,
+        dedupeKey: `subscribed:google:${purchaseToken}`,
+        properties: {
+          provider: "google",
+          product_id: productId,
+          subscription_state: verified.subscriptionState,
+          latest_order_id: verified.latestOrderId,
+        },
+      });
+    }
   }
 
   console.log(`${LOG} ${eventLabel} account ${account.id}: wrote ${Object.keys(fields).join(",")}`);
@@ -814,12 +899,64 @@ export async function processGooglePlayNotification(
     fields.subscriptionStatus = "canceled";
   }
 
+  // Read prior subscriptionStatus BEFORE the billing write so PostHog can
+  // detect genuine state transitions.
+  let priorAccountStatus: string | null = null;
+  try {
+    const [priorAcct] = await db
+      .select({ subscriptionStatus: accounts.subscriptionStatus })
+      .from(accounts)
+      .where(eq(accounts.id, account.id))
+      .limit(1);
+    priorAccountStatus = priorAcct?.subscriptionStatus ?? null;
+  } catch {}
+
   const written = await writeAccountBillingById(eventLabel, account.id, "google", fields);
   if (!written) {
     // Provider gate rejected — do NOT mark the messageId processed: if the
     // account is later claimed for google, a replay should land. 200
     // regardless — retrying won't change the gate.
     return ok("provider-gate-skip");
+  }
+
+  // PostHog billing events — after successful billing write. Owner identity
+  // (account.ownerId) is required; skip capture entirely when it is null.
+  // trial_ended: prior status trialing → new status not trialing. Dedupe on
+  //   purchaseToken (stable per-subscription) collapses concurrent/out-of-order
+  //   duplicate transition observations. Raw token NEVER in properties.
+  // subscribed: ACTIVE_TYPES writing active, prior status was not active.
+  //   Dedupe on purchaseToken covers overlapping RTDN + mobile purchase paths.
+  const newStatus = fields.subscriptionStatus;
+  if (account.ownerId) {
+    if (priorAccountStatus === "trialing" && newStatus !== "trialing") {
+      captureGoogleBillingPostHogEvent({
+        event: "trial_ended",
+        userId: account.ownerId,
+        accountId: account.id,
+        dedupeKey: `trial_ended:google:${purchaseToken}`,
+        properties: {
+          provider: "google",
+          notification_type: notificationType,
+          notification_type_name: typeName,
+          pub_sub_message_id: messageId,
+          new_status: newStatus,
+        },
+      });
+    }
+    if (newStatus === "active" && priorAccountStatus !== "active") {
+      captureGoogleBillingPostHogEvent({
+        event: "subscribed",
+        userId: account.ownerId,
+        accountId: account.id,
+        dedupeKey: `subscribed:google:${purchaseToken}`,
+        properties: {
+          provider: "google",
+          notification_type: notificationType,
+          notification_type_name: typeName,
+          pub_sub_message_id: messageId,
+        },
+      });
+    }
   }
 
   console.log(`${LOG} ${eventLabel} account ${account.id}: wrote ${Object.keys(fields).join(",")}`);

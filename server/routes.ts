@@ -70,6 +70,7 @@ import {
   getAffiliateById as rewardfulGetAffiliateById,
   extractReferralCode,
 } from "./lib/rewardful";
+import { capturePostHogEvent } from "./lib/posthog";
 
 async function releaseBillableGeneration(
   accountId: string,
@@ -668,6 +669,19 @@ export async function registerRoutes(
       }
       console.log("[API] POST /api/projects parsed", { latitude: parsed.data.latitude, longitude: parsed.data.longitude });
       const project = await storage.createProject(parsed.data);
+      // PostHog: project_created — fire-and-forget, never delays response.
+      capturePostHogEvent({
+        event: "project_created",
+        userId: req.user.id,
+        accountId: req.user.accountId,
+        properties: {
+          project_id: project.id,
+          project_name: project.name,
+          has_address: !!project.address,
+          has_location: project.latitude != null && project.longitude != null,
+        },
+        dedupeKey: `project_created:${project.id}`,
+      });
       res.status(201).json(project);
     } catch (error) {
       res.status(500).json({ message: "Failed to create project" });
@@ -1009,9 +1023,28 @@ export async function registerRoutes(
         };
       });
 
-      // Single bulk insert (one round-trip) instead of N individual inserts,
-      // so a 100-file batch doesn't open N connections against the RDS pool.
-      const created = await storage.createMediaBatch(mediaRows);
+      // Single bulk insert wrapped in a transaction that also acquires an
+      // advisory lock so only one concurrent request can be "first" for this
+      // account — no schema changes needed. The lock is released automatically
+      // when the transaction commits.
+      const { created, isFirstMedia } = await db.transaction(async (tx) => {
+        const accountId: string = project.accountId!;
+        // Serialise concurrent first-media checks for this account.
+        const lockKey = `first-media:${accountId}`;
+        await tx.execute(
+          sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`,
+        );
+        // Check whether this account already has any media (via projects join).
+        const [existingRow] = await tx
+          .select({ id: media.id })
+          .from(media)
+          .innerJoin(projects, eq(media.projectId, projects.id))
+          .where(eq(projects.accountId, accountId))
+          .limit(1);
+        const isFirst = !existingRow;
+        const rows = await tx.insert(media).values(mediaRows).returning();
+        return { created: rows, isFirstMedia: isFirst };
+      });
 
       // Thumbnail renditions — DEFERRED, never in the request path. A batch
       // can be 40 photos and HEICs take ~1–2s each to decode; registration
@@ -1048,6 +1081,22 @@ export async function registerRoutes(
             console.error("[app-prompt] first_mobile_upload_at update failed (non-fatal):", err));
         }
       } catch {}
+
+      // PostHog: first_photo_uploaded — only for the account's very first
+      // media batch. Concurrency-safe: the advisory lock above ensures exactly
+      // one transaction observes isFirstMedia=true.
+      if (isFirstMedia) {
+        capturePostHogEvent({
+          event: "first_photo_uploaded",
+          userId: req.user.id,
+          accountId: req.user.accountId,
+          properties: {
+            project_id: projectId,
+            batch_size: created.length,
+          },
+          dedupeKey: `first_photo_uploaded:${project.accountId}`,
+        });
+      }
 
       res.status(201).json(await presignMediaUrls(created));
     } catch (error: any) {
@@ -3614,6 +3663,19 @@ export async function registerRoutes(
       }
       if (!creditResult.admitted) {
         await releaseReportGeneration(req.user.accountId, periodMonth);
+        // PostHog: credits_exhausted — dedupe across concurrent/retry denials.
+        capturePostHogEvent({
+          event: "credits_exhausted",
+          userId: req.user.id,
+          accountId: req.user.accountId,
+          properties: {
+            feature: AI_REPORT_FEATURE,
+            report_id: id,
+            cycle_start: creditResult.snapshot.cycleStart.toISOString(),
+            next_reset_at: creditResult.snapshot.nextResetAt.toISOString(),
+          },
+          dedupeKey: `credits_exhausted:${req.user.accountId}:${creditResult.snapshot.cycleStart.toISOString()}`,
+        });
         return res.status(402).json({
           code: INSUFFICIENT_AI_CREDITS_CODE,
           message: "Insufficient AI credits",
@@ -3677,6 +3739,24 @@ export async function registerRoutes(
         await releaseBillableGeneration(req.user.accountId, periodMonth, creditReservation);
         throw err;
       }
+
+      // PostHog: report_generated — regeneration of existing report committed.
+      // Dedupe key is deterministic on report id so retries/double-taps collapse.
+      capturePostHogEvent({
+        event: "report_generated",
+        userId: req.user.id,
+        accountId: req.user.accountId,
+        properties: {
+          report_id: id,
+          project_id: access.projectId,
+          report_type: parsed.data.reportType,
+          section_count: content.sections.length,
+          media_count: parsed.data.mediaIds.length,
+          excluded_count: content.excludedMediaIds.length,
+          generation_path: "regenerate",
+        },
+        dedupeKey: `report_generated:${id}:${creditReservation.operationId}`,
+      });
 
       // 5. Return the regenerated report tree + per-generation exclusion
       // count (exclusions are user feedback only; never persisted).
@@ -3872,6 +3952,19 @@ export async function registerRoutes(
       }
       if (!creditResult.admitted) {
         await releaseReportGeneration(req.user.accountId, periodMonth);
+        // PostHog: credits_exhausted — dedupe across concurrent/retry denials.
+        capturePostHogEvent({
+          event: "credits_exhausted",
+          userId: req.user.id,
+          accountId: req.user.accountId,
+          properties: {
+            feature: AI_REPORT_FEATURE,
+            project_id: projectId,
+            cycle_start: creditResult.snapshot.cycleStart.toISOString(),
+            next_reset_at: creditResult.snapshot.nextResetAt.toISOString(),
+          },
+          dedupeKey: `credits_exhausted:${req.user.accountId}:${creditResult.snapshot.cycleStart.toISOString()}`,
+        });
         return res.status(402).json({
           code: INSUFFICIENT_AI_CREDITS_CODE,
           message: "Insufficient AI credits",
@@ -3897,6 +3990,24 @@ export async function registerRoutes(
         if (err?.statusCode === 400) return res.status(400).json({ message: err.message });
         throw err;
       }
+
+      // PostHog: report_generated — new report persisted successfully.
+      // Dedupe key uses the credit operationId so concurrent/retry taps collapse.
+      capturePostHogEvent({
+        event: "report_generated",
+        userId: req.user.id,
+        accountId: req.user.accountId,
+        properties: {
+          report_id: result.report.id,
+          project_id: projectId,
+          report_type: parsed.data.reportType,
+          section_count: result.content.sections.length,
+          media_count: parsed.data.mediaIds.length,
+          excluded_count: result.content.excludedMediaIds.length,
+          generation_path: "new",
+        },
+        dedupeKey: `report_generated:${result.report.id}:${creditResult.reservation.operationId}`,
+      });
 
       res.status(201).json({ reportId: result.report.id, excludedCount: result.content.excludedMediaIds.length });
     } catch (error) {
@@ -3968,6 +4079,19 @@ export async function registerRoutes(
       }
       if (!creditResult.admitted) {
         await releaseReportGeneration(accountId, periodMonth, "walkthrough_generation");
+        // PostHog: credits_exhausted — dedupe across concurrent/retry denials.
+        capturePostHogEvent({
+          event: "credits_exhausted",
+          userId: req.user.id,
+          accountId: req.user.accountId,
+          properties: {
+            feature: "walkthrough_generation",
+            project_id: projectId,
+            cycle_start: creditResult.snapshot.cycleStart.toISOString(),
+            next_reset_at: creditResult.snapshot.nextResetAt.toISOString(),
+          },
+          dedupeKey: `credits_exhausted:${req.user.accountId}:${creditResult.snapshot.cycleStart.toISOString()}`,
+        });
         return res.status(402).json({
           code: INSUFFICIENT_AI_CREDITS_CODE,
           message: "Insufficient AI credits",
@@ -4054,6 +4178,20 @@ export async function registerRoutes(
           }
           return;
         }
+
+        // PostHog: walkthrough_completed — report persisted and ready.
+        // Dedupe key is deterministic on report id so late retries collapse.
+        capturePostHogEvent({
+          event: "walkthrough_completed",
+          userId,
+          accountId,
+          properties: {
+            report_id: report.id,
+            project_id: projectId,
+            media_count: mediaIds.length,
+          },
+          dedupeKey: `walkthrough_completed:${report.id}:${creditReservation.operationId}`,
+        });
 
         // Report committed — a ready-push failure must NOT trigger the
         // generation-failed handler (the report is fine); log/capture only.

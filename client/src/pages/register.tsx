@@ -10,6 +10,7 @@ import { Eye, EyeOff, Loader2, Users, Star } from "lucide-react";
 import { useGoogleReCaptcha } from "react-google-recaptcha-v3";
 import faviconImg from "@assets/Favicon-01-brand_1778259672.png";
 import { trackEvent } from "@/lib/google-analytics";
+import { captureEvent } from "@/lib/posthog";
 import { SocialAuthButtons } from "@/components/social-auth-buttons";
 
 export default function RegisterPage() {
@@ -189,6 +190,11 @@ export default function RegisterPage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    try {
+      captureEvent("signup_started");
+    } catch {
+      // non-fatal — tracking must never block signup
+    }
     registerMutation.mutate();
   };
 

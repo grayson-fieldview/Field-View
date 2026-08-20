@@ -9,6 +9,7 @@ import { Sentry } from "./sentry";
 import { sendSlackNotification, isCompAccount } from "./slack";
 import { sendGhlEvent, actualMrrFromSeats } from "./ghl";
 import { sendMetaCapiEvent } from "./metaCapi";
+import { capturePostHogEvent } from "./posthog";
 import crypto from "crypto";
 
 // ---------------------------------------------------------------------------
@@ -115,6 +116,43 @@ async function sendGhlBillingEvent(opts: {
     }
   } catch (err: any) {
     console.error("[ghl] billing_event failed (non-fatal):", err?.message || err);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PostHog billing event helpers — non-fatal, after writes.
+// ---------------------------------------------------------------------------
+
+/**
+ * Capture a PostHog billing event after a successful billing write. Called
+ * synchronously (no void) so the SDK's waitUntil-backed flush registers before
+ * the serverless handler returns. All errors are swallowed — never affects
+ * webhook processing or response.
+ *
+ * @param event  "trial_ended" | "subscribed"
+ * @param userId  the verified user identity for this capture
+ * @param accountId  account that was written
+ * @param dedupeKey  deterministic key — prevents double-capture across
+ *   overlapping webhook deliveries / purchase paths for the same subscription
+ * @param properties  additional event properties (provider, subscription id, etc.)
+ */
+function captureStripeBillingPostHogEvent(opts: {
+  event: "trial_ended" | "subscribed";
+  userId: string;
+  accountId: string;
+  dedupeKey: string;
+  properties?: Record<string, unknown>;
+}): void {
+  try {
+    capturePostHogEvent({
+      event: opts.event,
+      userId: opts.userId,
+      accountId: opts.accountId,
+      properties: opts.properties,
+      dedupeKey: opts.dedupeKey,
+    });
+  } catch (err: any) {
+    console.error(`[posthog] ${opts.event} capture failed (non-fatal):`, err?.message || err);
   }
 }
 
@@ -305,12 +343,44 @@ export async function handleSubscriptionEvent(event: any) {
           console.log(
             `User ${user.id} subscription updated to ${appStatus} via checkout`,
           );
+          // Read prior account subscriptionStatus BEFORE the write so PostHog
+          // can detect a genuine inactive → active transition.
+          let priorAccountStatus: string | null = null;
+          if (user.accountId) {
+            try {
+              const [priorAcct] = await db
+                .select({ subscriptionStatus: accounts.subscriptionStatus })
+                .from(accounts)
+                .where(eq(accounts.id, user.accountId))
+                .limit(1);
+              priorAccountStatus = priorAcct?.subscriptionStatus ?? null;
+            } catch {}
+          }
+
           const writtenAccountId = await writeAccountBilling(type, customerId as string, {
             stripeCustomerId: customerId,
             stripeSubscriptionId: subscriptionId as string,
             subscriptionStatus: appStatus,
             seatCount: seatCountFromSub,
           });
+
+          // PostHog: subscribed — only when status transitions to active and
+          // the prior status was NOT active (i.e. a genuinely new subscription,
+          // not a renewal). Dedupe key on Stripe subscription id so overlapping
+          // webhook paths never double-capture.
+          if (writtenAccountId && appStatus === "active" && priorAccountStatus !== "active") {
+            captureStripeBillingPostHogEvent({
+              event: "subscribed",
+              userId: user.id,
+              accountId: writtenAccountId,
+              dedupeKey: `subscribed:stripe:${subscriptionId}`,
+              properties: {
+                provider: "stripe",
+                stripe_subscription_id: subscriptionId,
+                stripe_event_id: event.id,
+              },
+            });
+          }
 
           // S46 GHL billing_event — paid conversion. Fire-and-forget, after
           // the dual-write so seat_count reflects the just-written state.
@@ -416,15 +486,21 @@ export async function handleSubscriptionEvent(event: any) {
         let lapsedAtUpdate: Date | null | undefined = undefined;
         let lapsedAtChange: "set" | "clear" | null = null;
         let lapseAccountId: string | null = null;
+        // Also capture prior subscriptionStatus for PostHog transition detection.
+        let priorAccountStatus: string | null = null;
         if (user.accountId) {
           lapseAccountId = user.accountId;
           try {
             const [acctRow] = await db
-              .select({ subscriptionLapsedAt: accounts.subscriptionLapsedAt })
+              .select({
+                subscriptionLapsedAt: accounts.subscriptionLapsedAt,
+                subscriptionStatus: accounts.subscriptionStatus,
+              })
               .from(accounts)
               .where(eq(accounts.id, user.accountId))
               .limit(1);
             const existingLapsedAt = acctRow?.subscriptionLapsedAt ?? null;
+            priorAccountStatus = acctRow?.subscriptionStatus ?? null;
             if (appStatus === "past_due" && existingLapsedAt == null) {
               lapsedAtUpdate = new Date();
               lapsedAtChange = "set";
@@ -452,6 +528,44 @@ export async function handleSubscriptionEvent(event: any) {
           seatCount: seatCountFromSub,
           subscriptionLapsedAt: lapsedAtUpdate,
         });
+
+        // PostHog billing events — fire-and-forget, after the billing write.
+        // trial_ended: prior status was trialing, new status is not trialing.
+        // subscribed: prior status was not active, new status is active —
+        //   dedupe on Stripe subscription id so renewals never re-fire.
+        if (writtenAccountId) {
+          const effectiveAccountId = writtenAccountId;
+          if (priorAccountStatus === "trialing" && appStatus !== "trialing") {
+            captureStripeBillingPostHogEvent({
+              event: "trial_ended",
+              userId: user.id,
+              accountId: effectiveAccountId,
+              // Stable per-subscription dedupe (no event.id) so concurrent /
+              // out-of-order duplicate transition observations collapse.
+              dedupeKey: `trial_ended:stripe:${data.id}`,
+              properties: {
+                provider: "stripe",
+                stripe_subscription_id: data.id,
+                stripe_event_id: event.id,
+                new_status: appStatus,
+              },
+            });
+          }
+          if (priorAccountStatus !== "active" && appStatus === "active") {
+            captureStripeBillingPostHogEvent({
+              event: "subscribed",
+              userId: user.id,
+              accountId: effectiveAccountId,
+              dedupeKey: `subscribed:stripe:${data.id}`,
+              properties: {
+                provider: "stripe",
+                stripe_subscription_id: data.id,
+                stripe_event_id: event.id,
+                prior_status: priorAccountStatus,
+              },
+            });
+          }
+        }
 
         // S46 GHL billing_event — sent for EVERY subscription.updated (seat
         // changes, renewals, status flips…). GHL branches on payment_status;

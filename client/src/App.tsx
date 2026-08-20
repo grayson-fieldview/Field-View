@@ -25,6 +25,7 @@ import { useEffect, useRef } from "react";
 import { registerTrialExpiredHandler } from "@/lib/queryClient";
 import "@/lib/meta-pixel";
 import { trackPageView } from "@/lib/google-analytics";
+import { capturePageView, identifyUser, resetPostHog } from "@/lib/posthog";
 import NotFound from "@/pages/not-found";
 import LoginPage from "@/pages/login";
 import RegisterPage from "@/pages/register";
@@ -363,6 +364,49 @@ function MetaPixelRouteTracker() {
   return null;
 }
 
+// PostHog SPA $pageview tracker. capture_pageview is disabled in posthog.init,
+// so this component owns ALL $pageview events — initial load and every wouter
+// location change.
+function PostHogRouteTracker() {
+  const [location] = useLocation();
+  useEffect(() => {
+    capturePageView(location);
+  }, [location]);
+  return null;
+}
+
+// PostHog identity tracker. Waits for the auth query to finish loading, then
+// identifies the user (or resets on logout). No-ops are wrapped in the
+// capturePageView/identifyUser/resetPostHog helpers so no error here can
+// break auth. Mounted at App level so it runs unconditionally before any
+// early returns in AppContent.
+function PostHogIdentityTracker() {
+  const { user, isLoading } = useAuth();
+  const prevUserIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (isLoading) return;
+
+    const currentId = (user as any)?.id ? String((user as any).id) : null;
+
+    if (currentId) {
+      if (prevUserIdRef.current && prevUserIdRef.current !== currentId) {
+        resetPostHog();
+      }
+      identifyUser(currentId, {
+        account_id: (user as any)?.accountId ?? (user as any)?.account_id ?? undefined,
+      });
+      prevUserIdRef.current = currentId;
+    } else if (prevUserIdRef.current !== null) {
+      // A previously identified user became null → logout
+      resetPostHog();
+      prevUserIdRef.current = null;
+    }
+  }, [isLoading, user]);
+
+  return null;
+}
+
 function CatchAllRedirect() {
   const search = useSearch();
   const [loc] = useLocation();
@@ -525,6 +569,8 @@ function App() {
           <TrialExpiredToastBridge />
           <GoogleAnalyticsRouteTracker />
           <MetaPixelRouteTracker />
+          <PostHogRouteTracker />
+          <PostHogIdentityTracker />
           <ErrorBoundary>
             <Switch>
               <Route path="/gallery/:token">
