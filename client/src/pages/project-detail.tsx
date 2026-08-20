@@ -1370,7 +1370,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                     >
                       <SelectTrigger
                         aria-label="Project status"
-                        className={`h-7 w-[120px] rounded-full px-2 text-[11px] font-semibold shrink-0 ${currentStatus.className}`}
+                        className={`h-7 w-auto justify-center gap-1 rounded-full px-2 text-[11px] font-semibold shrink-0 ${currentStatus.className}`}
                         data-testid="select-project-status"
                       >
                         <SelectValue />
