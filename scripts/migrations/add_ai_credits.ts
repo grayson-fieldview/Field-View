@@ -60,13 +60,13 @@ export async function addAiCredits(): Promise<void> {
     console.log("[add_ai_credits] 1/8 ADD accounts.credits_anchor_at ...");
     await tx.execute(sql`
       ALTER TABLE accounts
-        ADD COLUMN IF NOT EXISTS credits_anchor_at timestamptz DEFAULT now()
+        ADD COLUMN IF NOT EXISTS credits_anchor_at timestamptz
     `);
 
     console.log("[add_ai_credits] 2/8 BACKFILL accounts.credits_anchor_at ...");
     await tx.execute(sql`
       UPDATE accounts
-      SET credits_anchor_at = COALESCE(created_at AT TIME ZONE 'UTC', now())
+      SET credits_anchor_at = COALESCE(created_at, now())
       WHERE credits_anchor_at IS NULL
     `);
 
