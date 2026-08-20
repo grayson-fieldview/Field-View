@@ -146,7 +146,7 @@ export function registerAuthRoutes(app: Express): void {
       // including invited admins, cannot alter the account through a profile
       // PATCH and their values are ignored.
       const accountUpdate: Record<string, any> = {};
-      if (needsCompanyName && companyName !== undefined && companyName !== null && companyName !== "") {
+      if (isAccountOwner && companyName !== undefined && companyName !== null && companyName !== "") {
         if (typeof companyName !== "string" || !companyName.trim()) {
           return res.status(400).json({ message: "Company name must be a non-empty string" });
         }

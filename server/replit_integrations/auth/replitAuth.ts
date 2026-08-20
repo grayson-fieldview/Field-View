@@ -336,9 +336,8 @@ async function findOrCreateOAuthUser(opts: {
     // a 14-day no-card trial, mirroring the /api/register trial branch.
     initialSubscriptionStatus = "trialing";
     initialTrialEndsAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
-    const accountName = [opts.firstName, opts.lastName].filter(Boolean).join(" ") || normalizedEmail;
     const [account] = await db.insert(accounts).values({
-      name: accountName + "'s Team",
+      name: "",
       subscriptionStatus: initialSubscriptionStatus,
       trialEndsAt: initialTrialEndsAt,
     }).returning();
