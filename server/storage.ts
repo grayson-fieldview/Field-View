@@ -90,7 +90,10 @@ import {
 } from "@shared/schema";
 import { users, accounts, photoAspectRatioEnum, type User } from "@shared/models/auth";
 import { db } from "./db";
+import { forwardGeocode } from "./lib/geocode";
 import { eq, desc, sql, asc, and, inArray, like } from "drizzle-orm";
+
+type ProjectInsertValues = typeof projects.$inferInsert;
 
 // S46: photo_aspect_ratio enum translation. DB ↔ wire format.
 //
@@ -483,7 +486,29 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createProject(project: InsertProject): Promise<Project> {
-    const [created] = await db.insert(projects).values(project).returning();
+    const insertProject = project as ProjectInsertValues;
+    let values = insertProject;
+    const needsGeocoding =
+      typeof insertProject.address === "string" &&
+      insertProject.address.trim().length > 0 &&
+      (insertProject.latitude == null || insertProject.longitude == null);
+
+    if (needsGeocoding) {
+      try {
+        const coordinates = await forwardGeocode(insertProject.address!);
+        if (coordinates) {
+          values = {
+            ...insertProject,
+            ...(insertProject.latitude == null ? { latitude: coordinates.latitude } : {}),
+            ...(insertProject.longitude == null ? { longitude: coordinates.longitude } : {}),
+          };
+        }
+      } catch {
+        // Geocoding is enrichment only; project creation must still succeed.
+      }
+    }
+
+    const [created] = await db.insert(projects).values(values).returning();
     return created;
   }
 

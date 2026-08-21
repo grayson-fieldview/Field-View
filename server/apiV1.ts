@@ -6,6 +6,7 @@ import { media, projects, reports } from "@shared/schema";
 import { users } from "@shared/models/auth";
 import { requireApiKey } from "./middleware/apiKeyAuth";
 import { isS3Url, extractS3KeyFromUrl, getS3Url } from "./s3";
+import { storage } from "./storage";
 
 // ── /api/v1 — external (Zapier) API, authenticated via API key ──────────────
 //
@@ -269,14 +270,11 @@ apiV1Router.post("/projects", async (req, res) => {
       });
     }
 
-    const [created] = await db
-      .insert(projects)
-      .values({
-        ...parsed.data,
-        accountId,
-        createdById: ownerId,
-      })
-      .returning();
+    const created = await storage.createProject({
+      ...parsed.data,
+      accountId,
+      createdById: ownerId,
+    });
 
     res.status(201).json({ data: projectPayload(created) });
   } catch (err) {
