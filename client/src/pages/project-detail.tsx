@@ -1149,7 +1149,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => navigate("/")}
+          onClick={() => navigate("/projects")}
           data-testid="button-back"
         >
           <ChevronLeft className="h-4 w-4 mr-1" />
@@ -1277,7 +1277,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => navigate("/")}
+              onClick={() => navigate("/projects")}
               className="text-white bg-black/30 hover:bg-black/50 backdrop-blur-sm border-0"
               data-testid="button-back"
             >
