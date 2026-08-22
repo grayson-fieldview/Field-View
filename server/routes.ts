@@ -14,7 +14,7 @@ import { insertProjectSchema, insertCommentSchema, insertTaskSchema, insertCheck
 import { executeAutoClockOut } from "./lib/timesheets";
 import { formatLocalTime } from "./lib/geo";
 import { users, invitations, accounts, assignedProjectIdsSchema } from "@shared/models/auth";
-import { MAX_UPLOAD_BATCH } from "@shared/constants";
+import { MAX_MEDIA_DOWNLOAD_BATCH, MAX_UPLOAD_BATCH } from "@shared/constants";
 import { isValidTagColor } from "@shared/tagColors";
 import { resolvePhotoOverlay } from "@shared/photoOverlay";
 import { computeSeatUsage } from "./lib/seats";
@@ -1294,7 +1294,7 @@ export async function registerRoutes(
   });
 
   const downloadMediaSchema = z.object({
-    mediaIds: z.array(z.number().int().positive()).min(1).max(50),
+    mediaIds: z.array(z.number().int().positive()).min(1).max(MAX_MEDIA_DOWNLOAD_BATCH),
   });
 
   app.post("/api/projects/:id/media/download", requireReadAccess, async (req: any, res) => {

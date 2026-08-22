@@ -107,6 +107,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useLocation, Link } from "wouter";
+import { MAX_MEDIA_DOWNLOAD_BATCH } from "@shared/constants";
 import { LayoutTemplate, Sparkles } from "lucide-react";
 import { AiGenerateDialog, type AiGenerateParams } from "@/components/report-editor/ai-generate-dialog";
 import { ChecklistGenerateDialog } from "@/components/checklist-generate-dialog";
@@ -1028,7 +1029,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
   }, [selectedIds, id, toast]);
 
   const downloadSelected = useCallback(async () => {
-    if (selectedIds.size === 0 || selectedIds.size > 50) return;
+    if (selectedIds.size === 0 || selectedIds.size > MAX_MEDIA_DOWNLOAD_BATCH) return;
     setIsDownloading(true);
     toast({ title: "Preparing download…" });
     try {
@@ -1710,12 +1711,12 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                       <Trash2 className="h-4 w-4 mr-2" />
                       Delete
                     </Button>
-                    {selectedIds.size > 30 && selectedIds.size <= 50 && (
+                    {selectedIds.size > 30 && selectedIds.size <= MAX_MEDIA_DOWNLOAD_BATCH && (
                       <span className="text-xs text-muted-foreground" data-testid="text-download-warning">
                         Large downloads may take up to a minute.
                       </span>
                     )}
-                    {selectedIds.size > 50 ? (
+                    {selectedIds.size > MAX_MEDIA_DOWNLOAD_BATCH ? (
                       <TooltipProvider>
                         <Tooltip>
                           <TooltipTrigger asChild>
@@ -1726,7 +1727,7 @@ export default function ProjectDetailPage({ id }: { id: string }) {
                               </Button>
                             </span>
                           </TooltipTrigger>
-                          <TooltipContent>Maximum 50 photos at a time.</TooltipContent>
+                          <TooltipContent>Maximum {MAX_MEDIA_DOWNLOAD_BATCH} photos at a time.</TooltipContent>
                         </Tooltip>
                       </TooltipProvider>
                     ) : (

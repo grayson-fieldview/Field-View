@@ -1,6 +1,7 @@
 export const CURRENT_TERMS_VERSION = "2026-04-23";
 
 export const MAX_UPLOAD_BATCH = 100;
+export const MAX_MEDIA_DOWNLOAD_BATCH = 250;
 
 export const INDUSTRIES = [
   { value: "general_contractor", label: "General Contractor" },
